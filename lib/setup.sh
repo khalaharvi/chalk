@@ -32,7 +32,7 @@ cmd_doctor() {
   doctor_check required "docker daemon"     "start your Docker runtime"           docker info
   doctor_check required "glab"              "brew install glab"                   command -v glab
   doctor_check required "glab signed in"    "run: glab auth login"                glab auth status
-  doctor_check required "agent credentials" "export one of: $CHALK_AUTH_VARS"     agent_auth_present
+  doctor_check required "agent credentials" "export one of: ${CHALK_AUTH_VARS[*]}"     agent_auth_present
   doctor_check optional "claude on host"    "only needed for 'chalk fleet' planning" command -v claude
   doctor_check optional "telemetry database" "starts on first run, or: chalk db up" db_running
   doctor_check optional "sandbox image"     "built on first run, or: chalk sandbox build" docker image inspect "$CHALK_IMAGE"

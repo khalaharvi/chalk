@@ -45,16 +45,14 @@ db_sql() {
 db_record_call() {
   local kind="$1" status="$2" rubric_exit="$3" progressed="$4" model="$5"
   local seconds="$6" lessons="$7" result="$8"
-  local input output cache_read cache_write turns denials
-  read -r input output cache_read cache_write turns denials <<USAGE
-$(agent_usage "$result")
-USAGE
+  local -A usage
+  agent_usage "$result" usage
   db_sql -v repo="$(repo_name)" -v ticket="$RUN_TICKET" -v branch="$RUN_BRANCH" \
     -v loop="$RUN_LOOP" -v kind="$kind" -v status="$status" -v rubric_exit="$rubric_exit" \
     -v progressed="$progressed" -v model="${model:-default}" -v prompts="$RUN_PROMPTS" \
     -v cost="$(agent_cost "$result")" -v budget="$CHALK_BUDGET_USD" -v seconds="$seconds" \
-    -v input="$input" -v output="$output" -v cache_read="$cache_read" \
-    -v cache_write="$cache_write" -v turns="$turns" -v denials="$denials" \
+    -v input="${usage[input]}" -v output="${usage[output]}" -v cache_read="${usage[cache_read]}" \
+    -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
     -v lessons="$lessons" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
                   model, prompts, cost_usd, budget_usd, duration_s, input_tokens,
@@ -138,14 +136,22 @@ UPDATE lessons SET memory_synced_at = now() WHERE id = :'id';
 SQL
 }
 
-# Prints "<loops> <total cost> <human interventions>" for a ticket.
+# db_ticket_summary TICKET VAR [FALLBACK]: fills the associative array VAR
+# with the ticket's loops, total cost and human interventions (fixes). Each
+# is FALLBACK, by default "?", when the database cannot be read.
 db_ticket_summary() {
-  db_sql -F ' ' -v repo="$(repo_name)" -v ticket="$1" <<'SQL'
+  local -n __summary=$2
+  local loops="${3:-?}" cost="${3:-?}" fixes="${3:-?}" row
+  if row="$(db_sql -F ' ' -v repo="$(repo_name)" -v ticket="$1" 2>/dev/null <<'SQL'
 SELECT count(*) FILTER (WHERE loop > 0), coalesce(sum(cost_usd), 0),
        (SELECT count(*) FROM lessons
          WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NOT NULL)
   FROM runs WHERE repo = :'repo' AND ticket = :'ticket';
 SQL
+)" && [[ -n $row ]]; then
+    read -r loops cost fixes <<<"$row"
+  fi
+  __summary=(["loops"]="$loops" ["cost"]="$cost" ["fixes"]="$fixes")
 }
 
 cmd_db() {

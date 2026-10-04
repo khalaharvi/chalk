@@ -1,12 +1,26 @@
 # Calls to Claude inside a sandbox, and the prompts they use. Every call asks
 # for a JSON answer in a fixed shape so the harness never has to parse prose.
 
-CHALK_PROMPTS="system continue retry fix-review spec-check review distill breakdown"
+# The prompts Chalk ships, as share/prompts/NAME.md.
+declare -ga CHALK_PROMPTS=(system continue retry fix-review spec-check review distill breakdown)
 
-CHALK_SCHEMA_LOOP='{"type":"object","required":["status","summary"],"properties":{"status":{"enum":["done","blocked"]},"checkpoint":{"type":"string"},"summary":{"type":"string"},"blocker":{"type":"string"}}}'
-CHALK_SCHEMA_SPEC='{"type":"object","required":["verdict","problems"],"properties":{"verdict":{"enum":["pass","fail"]},"problems":{"type":"array","items":{"type":"object","required":["checkpoint","problem"],"properties":{"checkpoint":{"type":"string"},"problem":{"type":"string"},"suggestion":{"type":"string"}}}}}}'
-CHALK_SCHEMA_REVIEW='{"type":"object","required":["verdict","summary","findings"],"properties":{"verdict":{"enum":["pass","fail"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","required":["severity","issue"],"properties":{"severity":{"enum":["blocker","minor"]},"file":{"type":"string"},"issue":{"type":"string"}}}}}}'
-CHALK_SCHEMA_LESSON='{"type":"object","required":["lesson"],"properties":{"lesson":{"type":"string"}}}'
+# The JSON shape each kind of call must answer in.
+declare -gA CHALK_SCHEMA=(
+  [loop]='{"type":"object","required":["status","summary"],"properties":{"status":{"enum":["done","blocked"]},"checkpoint":{"type":"string"},"summary":{"type":"string"},"blocker":{"type":"string"}}}'
+  [spec]='{"type":"object","required":["verdict","problems"],"properties":{"verdict":{"enum":["pass","fail"]},"problems":{"type":"array","items":{"type":"object","required":["checkpoint","problem"],"properties":{"checkpoint":{"type":"string"},"problem":{"type":"string"},"suggestion":{"type":"string"}}}}}}'
+  [review]='{"type":"object","required":["verdict","summary","findings"],"properties":{"verdict":{"enum":["pass","fail"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","required":["severity","issue"],"properties":{"severity":{"enum":["blocker","minor"]},"file":{"type":"string"},"issue":{"type":"string"}}}}}}'
+  [lesson]='{"type":"object","required":["lesson"],"properties":{"lesson":{"type":"string"}}}'
+  [plan]='{"type":"object","required":["workstreams"],"properties":{"workstreams":{"type":"array","items":{"type":"object","required":["ticket","title","checkpoints"],"properties":{"ticket":{"type":"string"},"title":{"type":"string"},"context":{"type":"string"},"checkpoints":{"type":"array","items":{"type":"string"}}}}}}}'
+)
+
+# prompt_known NAME: true when NAME is one of CHALK_PROMPTS.
+prompt_known() {
+  local name
+  for name in "${CHALK_PROMPTS[@]}"; do
+    [[ $name == "$1" ]] && return 0
+  done
+  return 1
+}
 
 # prompt_file ROOT NAME: a repository can override any shipped prompt by
 # placing a file at .chalk/prompts/NAME.md.
@@ -69,11 +83,19 @@ agent_cost() {
   printf '%s\n' "$cost"
 }
 
-# Prints "input output cache_read cache_write turns denials" for a call.
+# agent_usage FILE VAR: fills the associative array VAR with a call's token
+# counts, turns and permission denials, each 0 when the result is unreadable.
 agent_usage() {
-  jq -r '[.usage.input_tokens, .usage.output_tokens, .usage.cache_read_input_tokens,
-          .usage.cache_creation_input_tokens, .num_turns, (.permission_denials | length?)]
-         | map(. // 0) | join(" ")' "$1" 2>/dev/null || echo "0 0 0 0 0 0"
+  local -n __usage=$2
+  local -a values
+  mapfile -t values < <(jq -r '.usage.input_tokens, .usage.output_tokens,
+      .usage.cache_read_input_tokens, .usage.cache_creation_input_tokens,
+      .num_turns, (.permission_denials | length?) | . // 0' "$1" 2>/dev/null || true)
+  __usage=(
+    ["input"]="${values[0]:-0}"       ["output"]="${values[1]:-0}"
+    ["cache_read"]="${values[2]:-0}"  ["cache_write"]="${values[3]:-0}"
+    ["turns"]="${values[4]:-0}"       ["denials"]="${values[5]:-0}"
+  )
 }
 
 # Prints the CLI's error subtype if the call ended in an error, else nothing.
@@ -87,7 +109,7 @@ cmd_prompts() {
   root="$(repo_root)"
   case "${1:-list}" in
     list)
-      for name in $CHALK_PROMPTS; do
+      for name in "${CHALK_PROMPTS[@]}"; do
         if [ -f "$root/.chalk/prompts/$name.md" ]; then
           printf '%-12s overridden  .chalk/prompts/%s.md\n' "$name" "$name"
         else
@@ -96,10 +118,7 @@ cmd_prompts() {
       done ;;
     eject)
       name="${2:-}"
-      case " $CHALK_PROMPTS " in
-        *" $name "*) ;;
-        *) die "usage: chalk prompts eject NAME   (one of: $CHALK_PROMPTS)" ;;
-      esac
+      prompt_known "$name" || die "usage: chalk prompts eject NAME   (one of: ${CHALK_PROMPTS[*]})"
       [ ! -e "$root/.chalk/prompts/$name.md" ] || die ".chalk/prompts/$name.md already exists"
       mkdir -p "$root/.chalk/prompts"
       cp "$CHALK_HOME/share/prompts/$name.md" "$root/.chalk/prompts/$name.md"

@@ -1,7 +1,5 @@
 # Workstreams: one ticket = one branch (chalk/TICKET) = one worktree = one spec.
 
-CHALK_PLAN_SCHEMA='{"type":"object","required":["workstreams"],"properties":{"workstreams":{"type":"array","items":{"type":"object","required":["ticket","title","checkpoints"],"properties":{"ticket":{"type":"string"},"title":{"type":"string"},"context":{"type":"string"},"checkpoints":{"type":"array","items":{"type":"string"}}}}}}}'
-
 # Creates branch chalk/TICKET in a new sibling worktree and prints its path.
 workstream_create() {
   local ticket="$1" branch="chalk/$1" dir
@@ -45,7 +43,7 @@ fleet_plan() {
   local epic="$1"
   need claude
   { cat "$(prompt_file "$(repo_root)" breakdown)"; printf '\nEpic: %s\n' "$epic"; } |
-    claude -p --output-format json --json-schema "$CHALK_PLAN_SCHEMA" \
+    claude -p --output-format json --json-schema "${CHALK_SCHEMA[plan]}" \
       --max-budget-usd "$CHALK_BUDGET_USD" |
     jq -e '.structured_output'
 }
@@ -83,7 +81,7 @@ cmd_fleet() {
 
   need git docker jq
   load_config "$(repo_root)"
-  agent_auth_present || die "no agent credentials; export one of: $CHALK_AUTH_VARS"
+  agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
 
   # The plan is saved so that re-running the command launches what is left.
   local saved

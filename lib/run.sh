@@ -33,7 +33,7 @@ run_log() { info "[$RUN_TICKET] $*"; }
 run_prompts_version() {
   local name
   {
-    for name in $CHALK_PROMPTS; do cat "$(prompt_file "$RUN_WT" "$name")"; done
+    for name in "${CHALK_PROMPTS[@]}"; do cat "$(prompt_file "$RUN_WT" "$name")"; done
     cat "$RUN_WT/$CHALK_TEXTBOOK" 2>/dev/null || true
   } | git hash-object --stdin | cut -c1-8
 }
@@ -56,7 +56,7 @@ run_teardown() {
 # then claims the run directory for this process.
 run_claim() {
   need docker jq
-  agent_auth_present || die "no agent credentials; export one of: $CHALK_AUTH_VARS"
+  agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
   ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid $(cat "$RUN_DIR/pid"))"
   rm -rf "$RUN_IO"
   mkdir -p "$RUN_IO"
@@ -122,7 +122,7 @@ run_spec_check() {
     printf '<spec_file>specs/%s.md</spec_file>\n\n' "$RUN_TICKET"
     cat "$(prompt_file "$RUN_WT" spec-check)"
   } > "$RUN_IO/spec-check.prompt.md"
-  run_call spec-check "$CHALK_CHEAP_MODEL" "$CHALK_SCHEMA_SPEC" read < "$RUN_IO/spec-check.prompt.md" || true
+  run_call spec-check "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[spec]}" read < "$RUN_IO/spec-check.prompt.md" || true
   sandbox_reset "$RUN_SANDBOX"
 
   verdict="$(agent_field "$result" '.verdict')"
@@ -151,7 +151,7 @@ run_review() {
     printf '<base_ref>origin/%s</base_ref>\n\n' "$CHALK_BASE_BRANCH"
     cat "$(prompt_file "$RUN_WT" review)"
   } > "$RUN_IO/review.prompt.md"
-  run_call review "$CHALK_REVIEW_MODEL" "$CHALK_SCHEMA_REVIEW" read < "$RUN_IO/review.prompt.md" || true
+  run_call review "$CHALK_REVIEW_MODEL" "${CHALK_SCHEMA[review]}" read < "$RUN_IO/review.prompt.md" || true
   sandbox_reset "$RUN_SANDBOX"
 
   verdict="$(agent_field "$result" '.verdict')"
@@ -199,11 +199,10 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
 # --force to open it even when CHALK_AUTO_MR is off.
 # shellcheck disable=SC2120
 run_graduate() {
-  local loops cost fixes review=""
-  read -r loops cost fixes <<SUMMARY
-$(db_ticket_summary "$RUN_TICKET" 2>/dev/null || echo "? ? ?")
-SUMMARY
-  run_log "all checkpoints complete ($loops loops, \$$cost, $fixes human interventions)"
+  local -A summary
+  local review=""
+  db_ticket_summary "$RUN_TICKET" summary
+  run_log "all checkpoints complete (${summary[loops]} loops, \$${summary[cost]}, ${summary[fixes]} human interventions)"
 
   if [ "$CHALK_AUTO_MR" != "true" ] && [ "${1:-}" != "--force" ]; then
     run_log "CHALK_AUTO_MR is off; open the merge request with: chalk submit"
@@ -222,9 +221,9 @@ SUMMARY
     --description "## Chalk execution summary
 
 - Spec: \`specs/$RUN_TICKET.md\`, all checkpoints complete
-- Agent loops: $loops
-- Agent cost: \$$cost
-- Human interventions (office hours): $fixes
+- Agent loops: ${summary[loops]}
+- Agent cost: \$${summary[cost]}
+- Human interventions (office hours): ${summary[fixes]}
 - Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review
 
 This change was written by an agent. Review the diff as you would any other.")
@@ -263,7 +262,8 @@ cmd_run() {
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason
-  local open remaining result agent_status rubric_exit progressed denials
+  local open remaining result agent_status rubric_exit progressed
+  local -A usage
   result="$RUN_IO/loop.json"
   while :; do
     open="$(spec_open_count "$RUN_SPEC")"
@@ -295,7 +295,7 @@ cmd_run() {
 
     run_build_prompt "$mode" "$feedback" "$findings" > "$RUN_IO/prompt.md"
     agent_status="ok"
-    run_call loop "$CHALK_MODEL" "$CHALK_SCHEMA_LOOP" write < "$RUN_IO/prompt.md" || agent_status="error"
+    run_call loop "$CHALK_MODEL" "${CHALK_SCHEMA[loop]}" write < "$RUN_IO/prompt.md" || agent_status="error"
     if [ -n "$(agent_error "$result")" ]; then agent_status="$(agent_error "$result")"; fi
 
     # A reported blocker goes straight to an engineer; retrying cannot fix it.
@@ -328,9 +328,9 @@ cmd_run() {
     db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
       "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result"
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (\$$(agent_cost "$result"), ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
-    denials="$(agent_usage "$result" | cut -d' ' -f6)"
-    if [ "$denials" -gt 0 ]; then
-      run_log "  $denials action(s) were refused by permission checks; see $result"
+    agent_usage "$result" usage
+    if (( usage[denials] > 0 )); then
+      run_log "  ${usage[denials]} action(s) were refused by permission checks; see $result"
     fi
 
     if [ "$progressed" = "true" ]; then
@@ -362,18 +362,17 @@ cmd_check() {
 
 cmd_status() {
   need git
-  local runs dir ticket state loops cost fixes detentions
+  local runs dir ticket state detentions
+  local -A summary
   runs="$(state_dir)/runs"
   printf '%-14s %-8s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
   for dir in "$runs"/*/; do
     ticket="$(basename "$dir")"
     state="idle"
     if run_is_alive "${dir%/}"; then state="running"; fi
-    read -r loops cost fixes <<SUMMARY
-$(db_ticket_summary "$ticket" 2>/dev/null || echo "- - -")
-SUMMARY
+    db_ticket_summary "$ticket" summary -
     detentions="$(git for-each-ref --format='%(refname:short)' "refs/heads/detention/$ticket-*" | wc -l | tr -d ' ')"
-    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "$loops" "$cost" "$fixes" "$detentions"
+    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${summary[cost]}" "${summary[fixes]}" "$detentions"
   done
 }
 

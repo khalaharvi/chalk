@@ -3,11 +3,12 @@
 # only thing that leaves is a git bundle of new commits. The container holds
 # no GitLab credentials and mounts the host repository read-only.
 
-CHALK_AUTH_VARS="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN"
+# Any one of these lets the agent call Claude.
+declare -ga CHALK_AUTH_VARS=(ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN)
 
 agent_auth_present() {
   local var
-  for var in $CHALK_AUTH_VARS; do
+  for var in "${CHALK_AUTH_VARS[@]}"; do
     [ -z "${!var:-}" ] || return 0
   done
   return 1
@@ -31,42 +32,44 @@ sandbox_name() {
   printf 'chalk-sandbox-%s-%s' "$(repo_name)" "$1" | tr -c 'a-zA-Z0-9_.-' '-'
 }
 
-# Fills SANDBOX_OTEL_ARGS with the docker flags that make Claude Code export
-# OpenTelemetry to CHALK_OTEL_ENDPOINT, tagged with the repository and ticket.
-# A collector on this machine is reached through host.docker.internal.
+# sandbox_otel_args VAR TICKET: fills the array VAR with the docker flags
+# that make Claude Code export OpenTelemetry to CHALK_OTEL_ENDPOINT, tagged
+# with the repository and ticket. A collector on this machine is reached
+# through host.docker.internal.
 sandbox_otel_args() {
-  SANDBOX_OTEL_ARGS=()
+  local -n __args=$1
+  local ticket="$2" endpoint signal
+  __args=()
   [ -n "$CHALK_OTEL_ENDPOINT" ] || return 0
-  local endpoint signal
   endpoint="$(printf '%s' "$CHALK_OTEL_ENDPOINT" | sed -E 's#//(localhost|127\.0\.0\.1)#//host.docker.internal#')"
-  SANDBOX_OTEL_ARGS=(
+  __args=(
     --add-host host.docker.internal:host-gateway
     -e CLAUDE_CODE_ENABLE_TELEMETRY=1
     -e "OTEL_EXPORTER_OTLP_ENDPOINT=$endpoint"
     -e "OTEL_EXPORTER_OTLP_PROTOCOL=$CHALK_OTEL_PROTOCOL"
-    -e "OTEL_RESOURCE_ATTRIBUTES=chalk.repo=$(printf '%s' "$(repo_name)" | tr -c 'a-zA-Z0-9_.-' '_'),chalk.ticket=$1"
+    -e "OTEL_RESOURCE_ATTRIBUTES=chalk.repo=$(printf '%s' "$(repo_name)" | tr -c 'a-zA-Z0-9_.-' '_'),chalk.ticket=$ticket"
   )
   for signal in metrics logs traces; do
     case ",$CHALK_OTEL_SIGNALS," in
-      *",$signal,"*) SANDBOX_OTEL_ARGS+=(-e "OTEL_$(printf '%s' "$signal" | tr '[:lower:]' '[:upper:]')_EXPORTER=otlp") ;;
+      *",$signal,"*) __args+=(-e "OTEL_$(printf '%s' "$signal" | tr '[:lower:]' '[:upper:]')_EXPORTER=otlp") ;;
     esac
   done
   case ",$CHALK_OTEL_SIGNALS," in
-    *",traces,"*) SANDBOX_OTEL_ARGS+=(-e CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1) ;;
+    *",traces,"*) __args+=(-e CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1) ;;
   esac
-  if [ -n "${OTEL_EXPORTER_OTLP_HEADERS:-}" ]; then SANDBOX_OTEL_ARGS+=(-e OTEL_EXPORTER_OTLP_HEADERS); fi
+  if [ -n "${OTEL_EXPORTER_OTLP_HEADERS:-}" ]; then __args+=(-e OTEL_EXPORTER_OTLP_HEADERS); fi
 }
 
 # sandbox_start NAME TICKET IO_DIR
 sandbox_start() {
   local name="$1" ticket="$2" io_dir="$3" var
-  local env_args=(-e HOME=/home/chalk)
-  for var in $CHALK_AUTH_VARS ANTHROPIC_BASE_URL; do
+  local -a env_args=(-e HOME=/home/chalk) otel_args
+  for var in "${CHALK_AUTH_VARS[@]}" ANTHROPIC_BASE_URL; do
     # `-e VAR` without a value passes it through without exposing it in `ps`.
     if [ -n "${!var:-}" ]; then env_args+=(-e "$var"); fi
   done
 
-  sandbox_otel_args "$ticket"
+  sandbox_otel_args otel_args "$ticket"
 
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker run -d --name "$name" \
@@ -77,7 +80,7 @@ sandbox_start() {
     --tmpfs "/home/chalk:rw,exec,mode=1777,size=1g" \
     -v "$(git_common_dir):/src.git:ro" \
     -v "$io_dir:/chalk" \
-    "${env_args[@]}" ${SANDBOX_OTEL_ARGS[@]+"${SANDBOX_OTEL_ARGS[@]}"} \
+    "${env_args[@]}" "${otel_args[@]}" \
     "$CHALK_IMAGE" sleep infinity >/dev/null
 }
 
