@@ -13,7 +13,7 @@ make check
 
 That runs ShellCheck (0.11.0 or newer, for bash 5.3 syntax), the convention
 lint, unit tests for each module, and an end-to-end test of the whole
-workflow using fake `docker`, `claude`, `glab` and `curl` (in
+workflow using fake `docker`, `claude`, `gh`, `glab` and `curl` (in
 `tests/fakes/`), so it needs no Docker and spends nothing. To run the same test with the SQL executed
 against a real Postgres:
 

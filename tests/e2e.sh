@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test of the Chalk workflow using fake docker, claude and glab.
+# End-to-end test of the Chalk workflow using fake docker, claude, gh and glab.
 # Exercises the real loop, git plumbing and lifecycle without Docker or API
 # spend. Run with: make test
 set -euo pipefail
@@ -58,6 +58,8 @@ check "loop prompt tags its context" \
 check "spec check ran on the cheap model and passed" \
   sh -c "grep -q -e '--model haiku' '$FAKE_STATE/claude.log' && test -s '$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/spec-check.ok'"
 check "final review ran before the merge request" grep -q "final review: pass" "$tmp/run1.log"
+check "the run summary counts loops, not the spec check or review" \
+  grep -q "all checkpoints complete (2 loops" "$tmp/run1.log"
 check "review summary lands in the merge request" grep -q "Agent review before submission: Looks complete" "$FAKE_STATE/glab.log"
 
 # 2. Failure path: rubric keeps failing, work goes to detention, human fixes.
@@ -188,6 +190,22 @@ check "a run stopped by SIGTERM exits 143" test "$status" -eq 143
 check "a stopped run removes its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-8"
 cd "$tmp/demo"
 
+# 3d'. A detached run shows as running as soon as the command returns.
+chalk new PROJ-30 Detached feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-30"
+git add -A && git commit -q -m "spec"
+rm -f "$FAKE_STATE/slow-started"
+FAKE_CLAUDE_MODE=slow chalk run --detach >/dev/null
+check "a detached run is listed as running straight away" \
+  sh -c 'chalk status | grep -q "^PROJ-30 *running"'
+for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
+check "the detached run gets past its own recorded pid to the agent" \
+  sh -c "test -e '$FAKE_STATE/slow-started' && ! grep -q 'already active' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-30/run.log'"
+read -r pid < "$XDG_STATE_HOME/chalk/demo/runs/PROJ-30/pid"
+kill -TERM "$pid"
+for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+cd "$tmp/demo"
+
 # 3e. A sandbox image whose bash is too old is refused before any agent runs.
 chalk new PROJ-13 Old image >/dev/null
 cd "$tmp/demo.worktrees/PROJ-13"
@@ -226,7 +244,30 @@ check "recalled lessons reach the agent prompt" \
 unset CHALK_MEMORY
 cd "$tmp/demo"
 
-# 5. Guards and cleanup.
+# 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
+# pull request through gh.
+git init -q --bare "$tmp/hub-origin.git"
+git init -q -b main "$tmp/hub"
+cd "$tmp/hub"
+git remote add origin "$tmp/hub-origin.git"
+export CHALK_FORGE=github
+chalk init >/dev/null
+check "init on GitHub adds the Actions workflow, not GitLab CI" \
+  test -f .github/workflows/chalk.yml -a ! -e .gitlab-ci.yml -a ! -e .gitlab
+sed -i.bak 's/^CHALK_TEST_CMD=.*/CHALK_TEST_CMD=test ! -e BROKEN/' .chalk/config && rm .chalk/config.bak
+git add -A && git commit -q -m "init"
+chalk new PROJ-20 Hub feature >/dev/null
+cd "$tmp/hub.worktrees/PROJ-20"
+git add -A && git commit -q -m "spec"
+chalk run > "$tmp/run5.log" 2>&1 || { cat "$tmp/run5.log"; fail "GitHub run"; }
+check "branch pushed to the GitHub origin" git -C "$tmp/hub-origin.git" rev-parse chalk/PROJ-20
+check "pull request opened with gh" grep -q "pr create --head chalk/PROJ-20 --base main" "$FAKE_STATE/gh.log"
+check "the pull request carries the execution summary" grep -q "Chalk execution summary" "$FAKE_STATE/gh.log"
+check "glab is not used for a GitHub repository" sh -c "! grep -q PROJ-20 '$FAKE_STATE/glab.log'"
+unset CHALK_FORGE
+cd "$tmp/demo"
+
+# 6. Guards and cleanup.
 if chalk fleet PROJ-10 --plan /dev/null --yes >/dev/null 2>&1; then fail "empty plan must be rejected"; fi
 pass "invalid plan rejected"
 sleep 0.5

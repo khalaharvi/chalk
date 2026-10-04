@@ -58,7 +58,11 @@ run_teardown() {
 run_claim() {
   need docker jq
   agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
-  ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid ${| run_pid "$RUN_DIR"; })"
+  # A detached run finds its own pid already recorded by the command that started it.
+  local pid
+  pid="${| run_pid "$RUN_DIR"; }"
+  [[ $pid == "$$" ]] || ! run_is_alive "$RUN_DIR" ||
+    die "a run for $RUN_TICKET is already active (pid $pid)"
   rm -rf "$RUN_IO"
   mkdir -p "$RUN_IO"
 }
@@ -219,17 +223,18 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
   run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
 }
 
-# Pushes the finished branch and opens the merge request. chalk submit passes
-# --force to open it even when CHALK_AUTO_MR is off.
+# Pushes the finished branch and opens the pull or merge request. chalk
+# submit passes --force to open it even when CHALK_AUTO_MR is off.
 # shellcheck disable=SC2120
 run_graduate() {
   local -A summary
-  local review=""
+  local review="" request
+  request="${| forge_request; }"
   db_ticket_summary "$RUN_TICKET" summary
   run_log "all checkpoints complete (${summary[loops]} loops, \$${summary[cost]}, ${summary[fixes]} human interventions)"
 
   if [ "$CHALK_AUTO_MR" != "true" ] && [ "${1:-}" != "--force" ]; then
-    run_log "CHALK_AUTO_MR is off; open the merge request with: chalk submit"
+    run_log "CHALK_AUTO_MR is off; open the $request with: chalk submit"
     return 0
   fi
   if [ -n "$RUN_REVIEW_SUMMARY" ]; then
@@ -237,12 +242,10 @@ run_graduate() {
 - Agent review before submission: $RUN_REVIEW_SUMMARY"
   fi
 
-  need glab
+  need "${| forge_cli; }"
   git -C "$RUN_WT" push -q -u origin "$RUN_BRANCH"
-  (cd "$RUN_WT" && glab mr create --yes \
-    --source-branch "$RUN_BRANCH" --target-branch "$CHALK_BASE_BRANCH" \
-    --title "$(spec_title "$RUN_SPEC")" \
-    --description "## Chalk execution summary
+  forge_open_request "$RUN_WT" "$RUN_BRANCH" "$CHALK_BASE_BRANCH" "$(spec_title "$RUN_SPEC")" \
+    "## Chalk execution summary
 
 - Spec: \`specs/$RUN_TICKET.md\`, all checkpoints complete
 - Agent loops: ${summary[loops]}
@@ -250,7 +253,7 @@ run_graduate() {
 - Human interventions (office hours): ${summary[fixes]}
 - Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review
 
-This change was written by an agent. Review the diff as you would any other.")
+This change was written by an agent. Review the diff as you would any other."
   db_event "$RUN_TICKET" submitted 2>/dev/null || true
 }
 
@@ -270,6 +273,8 @@ cmd_run() {
 
   if [ "$detach" -eq 1 ]; then
     nohup "$BASH" "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1 &
+    # Recorded here as well as by the run itself, so `chalk status` sees it at once.
+    echo $! > "$RUN_DIR/pid"
     info "$RUN_TICKET running in background (pid $!). Follow with: chalk logs $RUN_TICKET -f"
     return 0
   fi

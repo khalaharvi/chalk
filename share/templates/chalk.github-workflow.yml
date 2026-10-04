@@ -1,0 +1,75 @@
+# Chalk pull request gates, added by `chalk init` as .github/workflows/chalk.yml.
+#
+# Jobs run only on pull requests from Chalk branches. Make `chalk / spec` and
+# `chalk / rubric` required status checks in a branch protection rule, and
+# require an approving review: these jobs prove the gates passed, the
+# approval records that a human reviewed the change.
+
+name: chalk
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # No unfinished checkpoints may be merged, and governance files must exist.
+  spec:
+    if: startsWith(github.head_ref, 'chalk/') || startsWith(github.head_ref, 'tutoring/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the spec and governance files
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          TICKET=$(echo "$BRANCH" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1)
+          test -f CLAUDE.md
+          test -f .chalk/textbook.md
+          test -f "specs/$TICKET.md"
+          if grep -nE '^[[:space:]]*- \[ \]' "specs/$TICKET.md"; then
+            echo "specs/$TICKET.md has unfinished checkpoints"
+            exit 1
+          fi
+
+  # Re-runs the rubric outside the agent's sandbox. Set the repository
+  # variable CHALK_CI_IMAGE to an image with your toolchain.
+  rubric:
+    if: startsWith(github.head_ref, 'chalk/') || startsWith(github.head_ref, 'tutoring/')
+    runs-on: ubuntu-latest
+    container: ${{ vars.CHALK_CI_IMAGE || 'node:22' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the rubric
+        run: |
+          SETUP_CMD=$(sed -n 's/^CHALK_SETUP_CMD=//p' .chalk/config)
+          TEST_CMD=$(sed -n 's/^CHALK_TEST_CMD=//p' .chalk/config)
+          test -n "$TEST_CMD"
+          if [ -n "$SETUP_CMD" ]; then sh -c "$SETUP_CMD"; fi
+          sh -c "$TEST_CMD"
+
+  # Records that the gates passed. Runs only when the CHALK_AUDIT_DB_URL
+  # secret is set. Table definition: share/ci-audit-schema.sql.
+  audit:
+    needs: [spec, rubric]
+    runs-on: ubuntu-latest
+    container: postgres:16-alpine
+    env:
+      CHALK_AUDIT_DB_URL: ${{ secrets.CHALK_AUDIT_DB_URL }}
+      BRANCH: ${{ github.head_ref }}
+      PROJECT: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+      RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Record the gates in the audit table
+        if: env.CHALK_AUDIT_DB_URL != ''
+        run: |
+          TICKET=$(echo "$BRANCH" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1)
+          psql "$CHALK_AUDIT_DB_URL" -X -v ON_ERROR_STOP=1 \
+            -v project="$PROJECT" -v ticket="$TICKET" \
+            -v mr="$PR" -v sha="$SHA" -v pipeline="$RUN_ID" <<'SQL'
+          INSERT INTO chalk_audit (project, ticket, merge_request, commit_sha, pipeline_id, status)
+          VALUES (:'project', :'ticket', :'mr', :'sha', :'pipeline', 'gates_passed');
+          SQL

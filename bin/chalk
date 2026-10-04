@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# chalk: sandboxed, budget-capped Claude Code agent harness for GitLab repos.
+# chalk: sandboxed, budget-capped Claude Code agent harness for GitHub and GitLab repos.
 set -euo pipefail
 
 CHALK_VERSION="0.4.1"
@@ -28,7 +28,7 @@ for module in log runtime jobs; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
-for module in repo state config db memory sandbox agent \
+for module in repo forge state config db memory sandbox agent \
               run fleet lifecycle dashboard setup; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib" "$module.sh"
@@ -59,7 +59,7 @@ Work
 Failure lifecycle
   chalk office-hours -m NOTE [--detach]
                                Record your fix on a detention branch and resume
-  chalk submit                 Push the current branch and open the merge request
+  chalk submit                 Push the current branch and open the pull/merge request
   chalk cleanup [--all]        Stop runs, remove sandboxes, worktrees, merged branches
 USAGE
 }

@@ -6,6 +6,7 @@ CHALK_DEFAULT_IMAGE="chalk-sandbox:local"
 # Settings a repository may put in .chalk/config, with their defaults.
 declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_BASE_BRANCH]=main
+  [CHALK_FORGE]=auto
   [CHALK_IMAGE]="$CHALK_DEFAULT_IMAGE"
   [CHALK_SETUP_CMD]=""
   [CHALK_TEST_CMD]=""
@@ -70,6 +71,10 @@ load_config() {
   esac
   case "$CHALK_PERMISSION_MODE:$CHALK_MODEL" in
     auto:*haiku*) die "auto mode does not support Haiku; choose another CHALK_MODEL" ;;
+  esac
+  case "$CHALK_FORGE" in
+    auto|github|gitlab) ;;
+    *) die "CHALK_FORGE must be 'auto', 'github' or 'gitlab' (got '$CHALK_FORGE')" ;;
   esac
   case "$CHALK_MEMORY" in
     builtin|hindsight) ;;

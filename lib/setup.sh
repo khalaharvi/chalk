@@ -30,8 +30,11 @@ cmd_doctor() {
   doctor_check required "openssl"           "install openssl"                     command -v openssl
   doctor_check required "docker CLI"        "install Docker Desktop, OrbStack or Colima" command -v docker
   doctor_check required "docker daemon"     "start your Docker runtime"           docker info
-  doctor_check required "glab"              "brew install glab"                   command -v glab
-  doctor_check required "glab signed in"    "run: glab auth login"                glab auth status
+  local forge cli
+  forge="${| forge_kind; }"
+  cli="${CHALK_FORGE_CLI[$forge]}"
+  doctor_check required "$cli ($forge)"     "${CHALK_FORGE_INSTALL[$forge]}"      command -v "$cli"
+  doctor_check required "$cli signed in"    "run: $cli auth login"                forge_signed_in
   doctor_check required "agent credentials" "export one of: ${CHALK_AUTH_VARS[*]}"     agent_auth_present
   doctor_check optional "claude on host"    "only needed for 'chalk fleet' planning" command -v claude
   doctor_check optional "telemetry database" "starts on first run, or: chalk db up" db_running
@@ -58,23 +61,8 @@ init_copy() {
   fi
 }
 
-cmd_init() {
-  need git
-  local root
-  root="${| repo_root; }"
-  cd "$root" || die "cannot enter $root"
-
-  init_copy config               .chalk/config
-  init_copy textbook.md          .chalk/textbook.md
-  init_copy chalk.gitlab-ci.yml  .gitlab/chalk.gitlab-ci.yml
-  mkdir -p specs
-  [ -e specs/.gitkeep ] || : > specs/.gitkeep
-
-  if ! grep -q 'Chalk agent rules' CLAUDE.md 2>/dev/null; then
-    cat "$CHALK_HOME/share/templates/CLAUDE.section.md" >> CLAUDE.md
-    info "  updated  CLAUDE.md"
-  fi
-
+init_gitlab_ci() {
+  init_copy chalk.gitlab-ci.yml .gitlab/chalk.gitlab-ci.yml
   if [ ! -e .gitlab-ci.yml ]; then
     printf 'include:\n  - local: .gitlab/chalk.gitlab-ci.yml\n' > .gitlab-ci.yml
     info "  created  .gitlab-ci.yml"
@@ -83,6 +71,28 @@ cmd_init() {
     info "             include:"
     info "               - local: .gitlab/chalk.gitlab-ci.yml"
   fi
+}
+
+cmd_init() {
+  need git
+  local root
+  root="${| repo_root; }"
+  cd "$root" || die "cannot enter $root"
+
+  init_copy config               .chalk/config
+  init_copy textbook.md          .chalk/textbook.md
+  mkdir -p specs
+  [ -e specs/.gitkeep ] || : > specs/.gitkeep
+
+  if ! grep -q 'Chalk agent rules' CLAUDE.md 2>/dev/null; then
+    cat "$CHALK_HOME/share/templates/CLAUDE.section.md" >> CLAUDE.md
+    info "  updated  CLAUDE.md"
+  fi
+
+  case "${| forge_kind; }" in
+    github) init_copy chalk.github-workflow.yml .github/workflows/chalk.yml ;;
+    gitlab) init_gitlab_ci ;;
+  esac
 
   info "next: set CHALK_TEST_CMD in .chalk/config, review .chalk/textbook.md, commit, then 'chalk doctor'"
 }

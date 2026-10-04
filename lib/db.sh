@@ -41,12 +41,15 @@ db_sql() {
 }
 
 # db_record_call KIND STATUS RUBRIC_EXIT PROGRESSED MODEL SECONDS LESSONS RESULT_FILE
-# Records one agent call for the current run (RUN_* globals).
+# Records one agent call for the current run (RUN_* globals). The model is the
+# one the result reports; MODEL, the one requested, is the fallback.
 db_record_call() {
   local kind="$1" status="$2" rubric_exit="$3" progressed="$4" model="$5"
-  local seconds="$6" lessons="$7" result="$8"
+  local seconds="$6" lessons="$7" result="$8" ran
   local -A usage
   agent_usage "$result" usage
+  ran="$(agent_model "$result")"
+  model="${ran:-$model}"
   db_sql -v repo="${| repo_name; }" -v ticket="$RUN_TICKET" -v branch="$RUN_BRANCH" \
     -v loop="$RUN_LOOP" -v kind="$kind" -v status="$status" -v rubric_exit="$rubric_exit" \
     -v progressed="$progressed" -v model="${model:-default}" -v prompts="$RUN_PROMPTS" \
@@ -143,7 +146,7 @@ db_ticket_summary() {
   local -n __summary=$2
   local loops="${3:-?}" cost="${3:-?}" fixes="${3:-?}" row
   if row="$(db_sql -F ' ' -v repo="${| repo_name; }" -v ticket="$1" 2>/dev/null <<'SQL'
-SELECT count(*) FILTER (WHERE loop > 0), coalesce(sum(cost_usd), 0),
+SELECT count(*) FILTER (WHERE kind IN ('continue', 'retry', 'fix-review')), coalesce(sum(cost_usd), 0),
        (SELECT count(*) FROM lessons
          WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NOT NULL)
   FROM runs WHERE repo = :'repo' AND ticket = :'ticket';
