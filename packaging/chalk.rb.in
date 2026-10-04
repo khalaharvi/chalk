@@ -7,11 +7,14 @@ class Chalk < Formula
   license "Apache-2.0"
   head "@HOMEPAGE@.git", branch: "main"
 
+  depends_on "bash"
   depends_on "glab"
   depends_on "jq"
 
   def install
     libexec.install "bin", "lib", "share"
+    # Run under Homebrew's bash, never whichever bash comes first on PATH.
+    inreplace libexec/"bin/chalk", %r{\A#!/usr/bin/env bash$}, "#!#{Formula["bash"].opt_bin}/bash"
     (bin/"chalk").write_env_script libexec/"bin/chalk", CHALK_HOME: libexec
   end
 
@@ -26,6 +29,7 @@ class Chalk < Formula
   end
 
   test do
+    assert_equal "#!#{Formula["bash"].opt_bin}/bash", (libexec/"bin/chalk").readlines.first.chomp
     assert_equal version.to_s, shell_output("#{bin}/chalk version").strip
   end
 end

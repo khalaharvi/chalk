@@ -24,6 +24,7 @@ doctor_repo_configured() {
 cmd_doctor() {
   load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   info "chalk $CHALK_VERSION"
+  doctor_check required "bash $BASH_VERSION ($BASH)" "install bash 5.3 or newer" bash_at_least 5 3
   doctor_check required "git"               "install git"                         command -v git
   doctor_check required "jq"                "brew install jq"                     command -v jq
   doctor_check required "openssl"           "install openssl"                     command -v openssl
