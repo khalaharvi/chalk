@@ -85,54 +85,40 @@ sandbox_stop() {
   docker rm -f "$1" >/dev/null 2>&1 || true
 }
 
-# sandbox_sh NAME SCRIPT [ARGS...]: runs a bash script in the cloned repo.
+# sandbox_sh NAME COMMAND [ARGS...]: runs a bash command line in the cloned repo.
 sandbox_sh() {
-  local name="$1" script="$2"
+  local name="$1" command="$2"
   shift 2
-  docker exec -w /work/repo "$name" bash -c "$script" chalk "$@"
+  docker exec -w /work/repo "$name" bash -c "$command" chalk "$@"
 }
 
-# Clones the branch into the RAM disk, borrowing objects from the read-only
-# host store so nothing is copied.
+# sandbox_script NAME SCRIPT [ARGS...]: runs share/sandbox/scripts/SCRIPT.sh
+# in the container. The scripts are written for the sandbox's bash, not ours.
+sandbox_script() {
+  local name="$1" script="$CHALK_HOME/share/sandbox/scripts/$2.sh"
+  shift 2
+  docker exec -w /work "$name" bash -c "$(<"$script")" chalk "$@"
+}
+
 sandbox_clone() {
   local name="$1" branch="$2" author email
   author="$(git config user.name || echo 'Chalk Agent')"
   email="$(git config user.email || echo 'chalk@localhost')"
-  docker exec "$name" bash -c '
-    set -e
-    git config --global --add safe.directory "*"
-    git config --global user.name "$2"
-    git config --global user.email "$3"
-    git clone -q --shared --branch "$1" /src.git /work/repo
-  ' chalk "$branch" "$author" "$email"
+  sandbox_script "$name" clone "$branch" "$author" "$email"
 }
 
 # sandbox_commit NAME MESSAGE [--allow-empty]
 sandbox_commit() {
-  sandbox_sh "$1" '
-    set -e
-    git add -A
-    if [ -n "$2" ] || ! git diff --cached --quiet; then
-      git commit -q $2 -m "$1"
-    fi
-  ' "$2" "${3:-}"
+  sandbox_script "$1" commit "$2" "${3:-}"
 }
 
-# Discards anything a read-only call (spec check, review) left in the tree.
 sandbox_reset() {
-  sandbox_sh "$1" 'git reset -q --hard && git clean -fdq'
+  sandbox_script "$1" reset
 }
 
-# Writes commits made since BASE to /chalk/out.bundle, or removes the file
-# when there are none.
+# sandbox_export NAME BASE
 sandbox_export() {
-  sandbox_sh "$1" '
-    set -e
-    rm -f /chalk/out.bundle
-    if [ "$(git rev-parse HEAD)" != "$1" ]; then
-      git bundle create /chalk/out.bundle "$1..HEAD" >/dev/null 2>&1
-    fi
-  ' "$2"
+  sandbox_script "$1" export "$2"
 }
 
 cmd_sandbox() {

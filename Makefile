@@ -3,7 +3,8 @@
 check: lint test
 
 lint:
-	shellcheck -s bash bin/chalk lib/*.sh scripts/*.sh tests/e2e.sh tests/fakes/*
+	shellcheck -s bash bin/chalk lib/core/*.sh lib/*.sh share/sandbox/scripts/*.sh \
+	  scripts/*.sh tests/e2e.sh tests/fakes/*
 
 test:
 	bash tests/e2e.sh

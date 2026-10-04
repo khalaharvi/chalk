@@ -15,7 +15,11 @@ if [ -z "${CHALK_HOME:-}" ]; then
 fi
 export CHALK_HOME
 
-for module in common config db memory sandbox agent run fleet lifecycle dashboard setup; do
+# Modules load by layer: the shell runtime, then the Chalk domain, then the
+# commands. A module may use anything loaded before it.
+for module in core/log core/runtime \
+              repo state config db memory sandbox agent \
+              run fleet lifecycle dashboard setup; do
   # shellcheck source=/dev/null
   . "$CHALK_HOME/lib/$module.sh"
 done
