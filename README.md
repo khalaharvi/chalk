@@ -275,7 +275,16 @@ starts the `chalk-memory` container on first use, bound to localhost only.
 
 `chalk fleet EPIC` asks Claude Code on your machine to read the epic, so
 your Jira MCP server must be configured and its read tools allowed for
-non-interactive use. To skip that, or to edit a plan, pass your own:
+non-interactive use. For Atlassian's server:
+
+```sh
+claude mcp add --scope user --transport http atlassian https://mcp.atlassian.com/v1/mcp
+```
+
+then sign in once from `/mcp` in an interactive `claude` session. A Jira
+connector added on claude.ai is not enough: while `ANTHROPIC_API_KEY` or
+another API credential is set, Claude Code does not load claude.ai
+connectors. To skip Jira, or to edit a plan, pass your own:
 
 ```sh
 chalk fleet PROJ-900 --plan plan.json
