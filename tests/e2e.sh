@@ -58,6 +58,8 @@ check "loop prompt tags its context" \
 check "spec check ran on the cheap model and passed" \
   sh -c "grep -q -e '--model haiku' '$FAKE_STATE/claude.log' && test -s '$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/spec-check.ok'"
 check "final review ran before the merge request" grep -q "final review: pass" "$tmp/run1.log"
+check "the run summary counts loops, not the spec check or review" \
+  grep -q "all checkpoints complete (2 loops" "$tmp/run1.log"
 check "review summary lands in the merge request" grep -q "Agent review before submission: Looks complete" "$FAKE_STATE/glab.log"
 
 # 2. Failure path: rubric keeps failing, work goes to detention, human fixes.

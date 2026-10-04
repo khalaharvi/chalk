@@ -86,8 +86,8 @@ const KINDS = {
   "review": "Final reviews", "spec-check": "Spec checks", "distill": "Lesson distillation",
 };
 const STATES = {
-  "submitted": "Submitted", "detention": "In detention",
-  "spec_blocked": "Spec not ready", "in progress": "In progress",
+  "submitted": "Submitted", "detention": "In detention", "spec_blocked": "Spec not ready",
+  "ready": "Done, not submitted", "in progress": "In progress",
 };
 
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g,
@@ -96,6 +96,30 @@ const money = (n, digits = 2) => "$" + Number(n || 0).toFixed(digits);
 const share = (part, whole) => (whole > 0 ? part / whole : 0);
 const pct = (ratio) => Math.round(ratio * 100) + "%";
 const count = (n) => Number(n || 0).toLocaleString("en-US");
+// plural(3, "loop") -> "3 loops"; plural(1, "change") -> "1 change".
+const plural = (n, word, many = word + "s") => `${count(n)} ${Number(n) === 1 ? word : many}`;
+// Timestamps arrive in UTC; show them in the reader's time zone.
+const pad2 = (n) => String(n).padStart(2, "0");
+function localDay(iso) {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return String(iso ?? "").slice(0, 10);
+  return `${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`;
+}
+function localTime(iso) {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return String(iso ?? "");
+  return `${localDay(iso)} ${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+}
+// Adds hourly spend up into the reader's local days.
+function byDay(hours) {
+  const days = new Map();
+  for (const h of hours || []) {
+    const day = localDay(h.hour), d = days.get(day) || { day, cost: 0, wasted: 0 };
+    d.cost += Number(h.cost); d.wasted += Number(h.wasted);
+    days.set(day, d);
+  }
+  return [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
+}
 
 // Columns are right-aligned unless their index is listed in `left`.
 function table(head, rows, left = [0]) {
@@ -121,7 +145,7 @@ function marks(d) {
     ["Total spend", money(t.cost)],
     ["Checkpoints finished", count(t.checkpoints)],
     ["Tickets worked on", count(t.tickets)],
-    ["Merge requests opened", count(d.submitted)],
+    ["Pull or merge requests opened", count(d.submitted)],
     ["Detentions", count(d.detentions)],
     ["Loop spend with no progress", pct(share(t.wasted, t.loop_cost))],
     ["Input read from cache", input ? pct(share(t.cache_read_tokens, input)) : "no data"],
@@ -144,7 +168,7 @@ function spendByKind(d) {
 }
 
 function spendByDay(d) {
-  const days = d.by_day;
+  const days = byDay(d.by_hour);
   if (days.length < 2) return "";
   const W = 720, H = 180, pad = 24, peak = Math.max(...days.map((x) => x.cost), 0.01);
   const step = (W - pad) / days.length, bw = Math.max(2, step - 3);
@@ -168,9 +192,11 @@ function spendByDay(d) {
 // Plain rules over the numbers. Each needs enough data to mean something.
 function notes(d) {
   const out = [], t = d.totals, b = d.budget, r = d.review, l = d.lessons;
-  if (t.denials > 0) {
-    out.push(`${count(t.denials)} actions were refused by permission checks. If loops are stalling, check that
-      auto mode is available for your model and account.`);
+  // Refusals in the read-only spec check and review are expected; only a
+  // loop being refused can stall work.
+  if (t.loop_denials > 0) {
+    out.push(`Loops had ${plural(t.loop_denials, "action")} refused by permission checks. If loops are
+      stalling, check that auto mode is available for your model and account.`);
   }
   if (b.loops >= 20 && b.p90 < 0.5 * b.cap) {
     out.push(`Nine loops in ten cost under ${money(b.p90)}, against a cap of ${money(b.cap)}. Lowering
@@ -212,7 +238,7 @@ function notes(d) {
 function strategies(d) {
   const perCheckpoint = (x) => (x.checkpoints ? money(x.cost / x.checkpoints) : "none finished");
   const prompts = d.by_prompts.map((p) => [
-    esc(p.prompts), esc(p.first_seen), count(p.loops), count(p.checkpoints),
+    esc(p.prompts), esc(localDay(p.first_seen)), count(p.loops), count(p.checkpoints),
     pct(share(p.retries, p.loops)), perCheckpoint(p),
   ]);
   const models = d.by_model.map((m) => [
@@ -230,36 +256,40 @@ function strategies(d) {
 function checks(d) {
   const r = d.review, s = d.spec;
   return `<h2>Are the checks earning their cost?</h2>
-    <p>The spec check ran ${count(s.checks)} times for ${money(s.cost)} and stopped ${count(s.failed)}
-       specs before any loop ran.</p>
-    <p>The final review ran ${count(r.reviews)} times for ${money(r.cost)} and failed ${count(r.failed)}
-       changes. Fixing what it found cost a further ${money(r.fix_cost)}.</p>`;
+    <p>The spec check ran ${plural(s.checks, "time")} for ${money(s.cost)} and stopped
+       ${plural(s.failed, "spec")} before any loop ran.</p>
+    <p>The final review ran ${plural(r.reviews, "time")} for ${money(r.cost)} and failed
+       ${plural(r.failed, "change")}. Fixing what it found cost a further ${money(r.fix_cost)}.</p>`;
 }
 
 function budget(d) {
   const b = d.budget;
   if (!b.loops) return "";
   const scale = Math.max(b.cap, b.max) || 1;
+  // Loops may have run under different caps; mark the highest.
+  const capLabel = b.cap_min < b.cap ? "highest cap" : "cap";
   const tick = (value, label, cls = "") =>
     `<b class="${cls}" style="left:${Math.min(100, (value / scale) * 100)}%"><span>${label} ${money(value)}</span></b>`;
   return `<h2>Loop cost against the cap</h2>
-    <div class="range">${tick(b.p50, "half under", "low")}${tick(b.p90, "90% under")}${tick(b.cap, "cap", "cap")}</div>
-    <p class="muted">The most expensive loop cost ${money(b.max)}. ${count(b.near_cap)} of ${count(b.loops)}
-       loops ran into the cap.</p>`;
+    <div class="range">${tick(b.p50, "half under", "low")}${tick(b.p90, "90% under")}${tick(b.cap, capLabel, "cap")}</div>
+    <p class="muted">The most expensive loop cost ${money(b.max)}. ${count(b.near_cap)} of
+       ${plural(b.loops, "loop")} ran into ${b.cap_min < b.cap ? "their" : "the"} cap${b.cap_min < b.cap
+       ? `; caps ranged from ${money(b.cap_min)} to ${money(b.cap)}` : ""}.</p>`;
 }
 
 function tickets(d) {
   const rows = d.tickets.map((t) => [
     esc(t.ticket), esc(t.repo), count(t.loops), money(t.cost), count(t.detentions),
-    `<span class="state-${esc(t.state)}">${esc(STATES[t.state] || t.state)}</span>`, esc(t.last),
+    `<span class="state-${esc(t.state)}">${esc(STATES[t.state] || t.state)}</span>`, esc(localTime(t.last)),
   ]);
-  return `<h2>Tickets</h2><p class="muted">The fifty most recently active.</p>` +
+  return `<h2>Tickets</h2><p class="muted">The fifty most recently active. Loops are first attempts,
+    retries and review fixes; spec checks and reviews are counted in the cost only.</p>` +
     table(["Ticket", "Repository", "Loops", "Cost", "Detentions", "State", "Last activity"], rows, [0, 1, 5]);
 }
 
 function render(d) {
   const head = `<header><h1>Chalk report card</h1>
-    <p>Last ${count(d.days)} days, as of ${esc(d.generated_at)}</p></header>`;
+    <p>Last ${plural(d.days, "day")}, as of ${esc(localTime(d.generated_at))} your time</p></header>`;
   if (!d.totals.calls) {
     return head + `<p class="grade"><span>No agent calls recorded in this period. Run a ticket with
       <code>chalk run</code>, then open this page again.</span></p>`;

@@ -143,7 +143,7 @@ db_ticket_summary() {
   local -n __summary=$2
   local loops="${3:-?}" cost="${3:-?}" fixes="${3:-?}" row
   if row="$(db_sql -F ' ' -v repo="${| repo_name; }" -v ticket="$1" 2>/dev/null <<'SQL'
-SELECT count(*) FILTER (WHERE loop > 0), coalesce(sum(cost_usd), 0),
+SELECT count(*) FILTER (WHERE kind IN ('continue', 'retry', 'fix-review')), coalesce(sum(cost_usd), 0),
        (SELECT count(*) FROM lessons
          WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NOT NULL)
   FROM runs WHERE repo = :'repo' AND ticket = :'ticket';

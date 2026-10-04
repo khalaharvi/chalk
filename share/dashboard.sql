@@ -1,4 +1,7 @@
 -- Everything the dashboard shows, as one JSON document. :'days' is the window.
+-- A loop is an agent call that works on a checkpoint: continue, retry or
+-- fix-review. db_ticket_summary counts loops the same way. Timestamps are
+-- UTC in ISO 8601; the page shows them in the reader's time zone.
 WITH r AS (
   SELECT *, kind IN ('continue', 'retry', 'fix-review') AS is_loop,
          progressed AND kind IN ('continue', 'retry') AS is_checkpoint
@@ -9,7 +12,7 @@ WITH r AS (
    WHERE created_at >= now() - make_interval(days => :'days'::int)
 )
 SELECT json_build_object(
-  'generated_at', to_char(now(), 'YYYY-MM-DD HH24:MI'),
+  'generated_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
   'days', :'days'::int,
   'submitted',  (SELECT count(*) FROM e WHERE kind = 'submitted'),
   'detentions', (SELECT count(*) FROM e WHERE kind = 'detention'),
@@ -25,12 +28,15 @@ SELECT json_build_object(
       'output_tokens', coalesce(sum(output_tokens), 0),
       'cache_read_tokens', coalesce(sum(cache_read_tokens), 0),
       'cache_write_tokens', coalesce(sum(cache_write_tokens), 0),
-      'denials', coalesce(sum(denials), 0))
+      'denials', coalesce(sum(denials), 0),
+      'loop_denials', coalesce(sum(denials) FILTER (WHERE is_loop), 0))
     FROM r),
-  'by_day', (SELECT coalesce(json_agg(d ORDER BY d.day), '[]') FROM (
-      SELECT to_char(created_at, 'YYYY-MM-DD') AS day, sum(cost_usd) AS cost,
+  -- Hourly, so the page can add the hours up into the reader's own days.
+  'by_hour', (SELECT coalesce(json_agg(h ORDER BY h.hour), '[]') FROM (
+      SELECT to_char(date_trunc('hour', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:00:00"Z"') AS hour,
+             sum(cost_usd) AS cost,
              coalesce(sum(cost_usd) FILTER (WHERE is_loop AND NOT progressed), 0) AS wasted
-        FROM r GROUP BY 1) d),
+        FROM r GROUP BY 1) h),
   'by_kind', (SELECT coalesce(json_agg(k ORDER BY k.cost DESC), '[]') FROM (
       SELECT kind, count(*) AS calls, sum(cost_usd) AS cost,
              round(avg(cost_usd), 4) AS avg_cost, round(avg(duration_s)) AS avg_seconds
@@ -40,7 +46,7 @@ SELECT json_build_object(
              count(*) FILTER (WHERE is_checkpoint) AS checkpoints
         FROM r WHERE is_loop GROUP BY model) m),
   'by_prompts', (SELECT coalesce(json_agg(p ORDER BY p.first_seen), '[]') FROM (
-      SELECT prompts, to_char(min(created_at), 'YYYY-MM-DD') AS first_seen,
+      SELECT prompts, to_char(min(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS first_seen,
              count(*) AS loops, sum(cost_usd) AS cost,
              count(*) FILTER (WHERE is_checkpoint) AS checkpoints,
              count(*) FILTER (WHERE kind = 'retry') AS retries
@@ -48,6 +54,7 @@ SELECT json_build_object(
   'budget', (SELECT json_build_object(
       'loops', count(*),
       'cap', max(budget_usd),
+      'cap_min', min(budget_usd),
       'p50', percentile_cont(0.5) WITHIN GROUP (ORDER BY cost_usd),
       'p90', percentile_cont(0.9) WITHIN GROUP (ORDER BY cost_usd),
       'max', max(cost_usd),
@@ -76,10 +83,18 @@ SELECT json_build_object(
              sum(cost_usd) AS cost,
              (SELECT count(*) FROM events ev
                WHERE ev.repo = r.repo AND ev.ticket = r.ticket AND ev.kind = 'detention') AS detentions,
+             -- The latest event, or, before any, whether the last call was a
+             -- passing final review: then the work is done but not submitted.
              coalesce((SELECT ev.kind FROM events ev
                         WHERE ev.repo = r.repo AND ev.ticket = r.ticket
-                        ORDER BY ev.id DESC LIMIT 1), 'in progress') AS state,
-             to_char(max(created_at), 'YYYY-MM-DD HH24:MI') AS last
+                        ORDER BY ev.id DESC LIMIT 1),
+                      (SELECT 'ready' FROM (
+                         SELECT kind, agent_status FROM runs lr
+                          WHERE lr.repo = r.repo AND lr.ticket = r.ticket
+                          ORDER BY lr.id DESC LIMIT 1) last_call
+                        WHERE kind = 'review' AND agent_status = 'pass'),
+                      'in progress') AS state,
+             to_char(max(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last
         FROM r GROUP BY r.repo, r.ticket) recent
        ORDER BY last DESC LIMIT 50) t)
 );
