@@ -19,16 +19,19 @@ cmd_dashboard() {
   : "${output:=${XDG_STATE_HOME:-$HOME/.local/state}/chalk/dashboard.html}"
   mkdir -p "$(dirname "$output")"
 
+  local data line
+  local -a page
+  data="$(db_dashboard "$days")" || die "could not read telemetry for the dashboard"
+  jq -e . >/dev/null 2>&1 <<<"$data" || die "could not read telemetry for the dashboard"
   # "</" is escaped so that no stored text can close the page's script tag.
-  local data="$output.json"
-  db_dashboard "$days" | sed 's|</|<\\/|g' > "$data"
-  jq -e . "$data" >/dev/null 2>&1 || die "could not read telemetry for the dashboard"
+  data="${data//<\//<\\/}"
 
-  awk -v data="$data" '
-    /\/\*CHALK_DATA\*\// { while ((getline line < data) > 0) print line; next }
-    { print }
-  ' "$CHALK_HOME/share/dashboard.html" > "$output"
-  rm -f "$data"
+  # The data replaces the template line holding the /*CHALK_DATA*/ marker.
+  mapfile -t page < "$CHALK_HOME/share/dashboard.html"
+  for line in "${page[@]}"; do
+    if [[ $line == *'/*CHALK_DATA*/'* ]]; then line="$data"; fi
+    printf '%s\n' "$line"
+  done > "$output"
   info "report card for the last $days days: $output"
 
   [ "$open_it" -eq 1 ] || return 0

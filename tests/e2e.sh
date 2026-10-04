@@ -41,6 +41,9 @@ check "branch pushed to origin" git -C "$tmp/origin.git" rev-parse chalk/PROJ-1
 check "merge request opened" grep -q "mr create.*chalk/PROJ-1" "$FAKE_STATE/glab.log"
 check "sandbox removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-1"
 check "run telemetry recorded" grep -q "INSERT INTO runs" "$FAKE_STATE/db.log"
+check "the database and sandbox image start side by side, each with a log" \
+  test -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/io/startup/database.log" \
+    -a -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/io/startup/image.log"
 io="$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/io"
 check "system prompt carries harness rules and the textbook" \
   sh -c "grep -q 'harness commits for you' '$io/system.md' && grep -q '<engineering_rules>' '$io/system.md'"
@@ -70,6 +73,7 @@ check "working branch left untouched" test "$(git rev-list --count main..chalk/P
 check "nothing pushed for the failed run" test -z "$(git -C "$tmp/origin.git" for-each-ref 'refs/heads/detention')"
 check "failure recorded as a lesson" grep -q "INSERT INTO lessons" "$FAKE_STATE/db.log"
 check "failed attempts were retried with the retry prompt" grep -q "(retry)" "$tmp/run2.log"
+check "a detention is not reported as an unexpected failure" sh -c "! grep -q 'unexpected failure' '$tmp/run2.log'"
 
 git switch -q "$detention"
 git rm -q BROKEN && git commit -q -m "remove the blocker"
@@ -98,6 +102,9 @@ done
 check "fleet workstream 1 completed" git -C "$tmp/origin.git" rev-parse chalk/PROJ-11
 check "fleet workstream 2 completed" git -C "$tmp/origin.git" rev-parse chalk/PROJ-12
 check "status lists the runs" sh -c 'chalk status | grep -q PROJ-11'
+touch -t 209901010000 "$XDG_STATE_HOME/chalk/demo/runs/PROJ-1"
+check "status lists the most recently active run first" \
+  test "$(chalk status | sed -n 2p | cut -d' ' -f1)" = PROJ-1
 
 # 3b. Prompts in the loop: blockers, spec check, review, overrides.
 chalk new PROJ-4 Blocked feature >/dev/null
@@ -139,9 +146,23 @@ check "ejected prompt is listed as overridden" sh -c "chalk prompts | grep -q 'c
 rm -rf .chalk/prompts
 
 # 3c. Report card and OpenTelemetry export.
+# Stored text containing "</script>" must not close the page's script tag.
+# The fake database's canned answer carries such text; a real one gets it
+# through a run row.
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  psql "$FAKE_PG_URL" -q -v ON_ERROR_STOP=1 <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons)
+VALUES ('</script>', 'PROJ-99', 'chalk/PROJ-99', 1, 'continue', 'ok', 0, true, 'm',
+        'p', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+SQL
+fi
 chalk dashboard --no-open --days 7 --output "$tmp/report.html" >/dev/null
 check "dashboard page is built with its data embedded" \
   sh -c "grep -q 'Chalk report card' '$tmp/report.html' && grep -q '\"generated_at\"' '$tmp/report.html' && ! grep -q 'CHALK_DATA' '$tmp/report.html'"
+check "stored text cannot close the dashboard's script tag" \
+  sh -c "grep -qF '\"<\\/script>\"' '$tmp/report.html' && ! grep -qF '\"</script>\"' '$tmp/report.html'"
 check "telemetry is off unless an endpoint is set" sh -c "! grep -q OTEL_ '$FAKE_STATE/docker.log'"
 chalk new PROJ-7 Traced feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-7"
@@ -153,6 +174,40 @@ check "traces are tagged with repository and ticket" \
   sh -c "grep -q 'OTEL_TRACES_EXPORTER=otlp' '$FAKE_STATE/docker.log' && grep -q 'chalk.repo=demo,chalk.ticket=PROJ-7' '$FAKE_STATE/docker.log'"
 cd "$tmp/demo"
 
+# 3d. A stopped run exits with the conventional code and still cleans up.
+chalk new PROJ-8 Stopped feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-8"
+git add -A && git commit -q -m "spec"
+FAKE_CLAUDE_MODE=slow chalk run > "$tmp/run9.log" 2>&1 &
+pid=$!
+for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
+kill -TERM "$pid"
+status=0
+wait "$pid" || status=$?
+check "a run stopped by SIGTERM exits 143" test "$status" -eq 143
+check "a stopped run removes its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-8"
+cd "$tmp/demo"
+
+# 3e. A sandbox image whose bash is too old is refused before any agent runs.
+chalk new PROJ-13 Old image >/dev/null
+cd "$tmp/demo.worktrees/PROJ-13"
+git add -A && git commit -q -m "spec"
+if FAKE_SANDBOX_BASH="5 1" chalk run > "$tmp/run10.log" 2>&1; then fail "an image with bash 5.1 must be refused"; fi
+check "an image with bash 5.1 is refused with the reason" \
+  grep -q "has bash 5.1; Chalk needs bash >= 5.2 in the sandbox" "$tmp/run10.log"
+check "the refused sandbox is removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-13"
+check "no agent ran in the refused sandbox" sh -c "! grep -q 'loop 1' '$tmp/run10.log'"
+cd "$tmp/demo"
+
+# 3f. A service that cannot start stops the run and is named.
+chalk new PROJ-14 No database >/dev/null
+cd "$tmp/demo.worktrees/PROJ-14"
+git add -A && git commit -q -m "spec"
+if FAKE_DB_BROKEN=1 chalk run > "$tmp/run11.log" 2>&1; then fail "a run without its database must stop"; fi
+check "a service that fails to start is named" grep -q "could not start: database" "$tmp/run11.log"
+check "no sandbox is started when a service fails" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-14"
+cd "$tmp/demo"
+
 # 4. Hindsight memory: lessons are stored at office hours and recalled into prompts.
 export CHALK_MEMORY=hindsight
 chalk new PROJ-3 Memory feature >/dev/null
@@ -162,6 +217,8 @@ if FAKE_CLAUDE_MODE="break" chalk run >/dev/null 2>&1; then fail "failing run sh
 git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-3-*')"
 git rm -q BROKEN && git commit -q -m "remove the blocker"
 chalk office-hours -m "note" > "$tmp/run4.log" 2>&1 || { cat "$tmp/run4.log"; fail "office hours with memory"; }
+check "lesson memory starts alongside the other services" \
+  test -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-3/io/startup/memory.log"
 check "lesson sent to Hindsight" grep -Eq '"document_id": *"chalk-lesson-[0-9]+"' "$FAKE_STATE/curl.log"
 check "lesson marked as synced" grep -q "UPDATE lessons SET memory_synced_at" "$FAKE_STATE/db.log"
 check "recalled lessons reach the agent prompt" \

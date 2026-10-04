@@ -3,11 +3,19 @@
 # only thing that leaves is a git bundle of new commits. The container holds
 # no GitLab credentials and mounts the host repository read-only.
 
-CHALK_AUTH_VARS="ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN"
+# share/sandbox/scripts are written for this bash, the one Debian 12 (and
+# so the default image) ships. Sandbox images must have it or newer.
+declare -ga CHALK_SANDBOX_BASH_MIN=(5 2)
+
+# Asks a bash for its version as "MAJOR MINOR".
+CHALK_BASH_VERSION_PROBE='echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'
+
+# Any one of these lets the agent call Claude.
+declare -ga CHALK_AUTH_VARS=(ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN)
 
 agent_auth_present() {
   local var
-  for var in $CHALK_AUTH_VARS; do
+  for var in "${CHALK_AUTH_VARS[@]}"; do
     [ -z "${!var:-}" ] || return 0
   done
   return 1
@@ -27,112 +35,135 @@ sandbox_ensure_image() {
   sandbox_build
 }
 
+# sandbox_name TICKET -> REPLY: a container name, with anything docker
+# rejects replaced by "-".
 sandbox_name() {
-  printf 'chalk-sandbox-%s-%s' "$(repo_name)" "$1" | tr -c 'a-zA-Z0-9_.-' '-'
+  repo_name
+  REPLY="chalk-sandbox-$REPLY-$1"
+  REPLY="${REPLY//[^a-zA-Z0-9_.-]/-}"
 }
 
-# Fills SANDBOX_OTEL_ARGS with the docker flags that make Claude Code export
-# OpenTelemetry to CHALK_OTEL_ENDPOINT, tagged with the repository and ticket.
-# A collector on this machine is reached through host.docker.internal.
+# sandbox_otel_args VAR TICKET: fills the array VAR with the docker flags
+# that make Claude Code export OpenTelemetry to CHALK_OTEL_ENDPOINT, tagged
+# with the repository and ticket. A collector on this machine is reached
+# through host.docker.internal.
 sandbox_otel_args() {
-  SANDBOX_OTEL_ARGS=()
+  local -n __args=$1
+  local ticket="$2" loopback='//@(localhost|127.0.0.1)' endpoint repo signal
+  __args=()
   [ -n "$CHALK_OTEL_ENDPOINT" ] || return 0
-  local endpoint signal
-  endpoint="$(printf '%s' "$CHALK_OTEL_ENDPOINT" | sed -E 's#//(localhost|127\.0\.0\.1)#//host.docker.internal#')"
-  SANDBOX_OTEL_ARGS=(
+  endpoint="${CHALK_OTEL_ENDPOINT/$loopback///host.docker.internal}"
+  repo="${| repo_name; }"
+  __args=(
     --add-host host.docker.internal:host-gateway
     -e CLAUDE_CODE_ENABLE_TELEMETRY=1
     -e "OTEL_EXPORTER_OTLP_ENDPOINT=$endpoint"
     -e "OTEL_EXPORTER_OTLP_PROTOCOL=$CHALK_OTEL_PROTOCOL"
-    -e "OTEL_RESOURCE_ATTRIBUTES=chalk.repo=$(printf '%s' "$(repo_name)" | tr -c 'a-zA-Z0-9_.-' '_'),chalk.ticket=$1"
+    -e "OTEL_RESOURCE_ATTRIBUTES=chalk.repo=${repo//[^a-zA-Z0-9_.-]/_},chalk.ticket=$ticket"
   )
   for signal in metrics logs traces; do
     case ",$CHALK_OTEL_SIGNALS," in
-      *",$signal,"*) SANDBOX_OTEL_ARGS+=(-e "OTEL_$(printf '%s' "$signal" | tr '[:lower:]' '[:upper:]')_EXPORTER=otlp") ;;
+      *",$signal,"*) __args+=(-e "OTEL_${signal@U}_EXPORTER=otlp") ;;
     esac
   done
   case ",$CHALK_OTEL_SIGNALS," in
-    *",traces,"*) SANDBOX_OTEL_ARGS+=(-e CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1) ;;
+    *",traces,"*) __args+=(-e CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1) ;;
   esac
-  if [ -n "${OTEL_EXPORTER_OTLP_HEADERS:-}" ]; then SANDBOX_OTEL_ARGS+=(-e OTEL_EXPORTER_OTLP_HEADERS); fi
+  if [ -n "${OTEL_EXPORTER_OTLP_HEADERS:-}" ]; then __args+=(-e OTEL_EXPORTER_OTLP_HEADERS); fi
 }
 
 # sandbox_start NAME TICKET IO_DIR
 sandbox_start() {
   local name="$1" ticket="$2" io_dir="$3" var
-  local env_args=(-e HOME=/home/chalk)
-  for var in $CHALK_AUTH_VARS ANTHROPIC_BASE_URL; do
+  local -a env_args=(-e HOME=/home/chalk) otel_args
+  for var in "${CHALK_AUTH_VARS[@]}" ANTHROPIC_BASE_URL; do
     # `-e VAR` without a value passes it through without exposing it in `ps`.
     if [ -n "${!var:-}" ]; then env_args+=(-e "$var"); fi
   done
 
-  sandbox_otel_args "$ticket"
+  sandbox_otel_args otel_args "$ticket"
 
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker run -d --name "$name" \
-    --label "chalk.repo=$(repo_name)" --label "chalk.ticket=$ticket" \
+    --label "chalk.repo=${| repo_name; }" --label "chalk.ticket=$ticket" \
     --user "$(id -u):$(id -g)" \
     --cap-drop ALL --security-opt no-new-privileges \
     --tmpfs "/work:rw,exec,mode=1777,size=$CHALK_TMPFS_SIZE" \
     --tmpfs "/home/chalk:rw,exec,mode=1777,size=1g" \
-    -v "$(git_common_dir):/src.git:ro" \
+    -v "${| git_common_dir; }:/src.git:ro" \
     -v "$io_dir:/chalk" \
-    "${env_args[@]}" ${SANDBOX_OTEL_ARGS[@]+"${SANDBOX_OTEL_ARGS[@]}"} \
+    "${env_args[@]}" "${otel_args[@]}" \
     "$CHALK_IMAGE" sleep infinity >/dev/null
+  sandbox_check_bash "$name"
+}
+
+# sandbox_bash_version NAME -> REPLY: "MAJOR MINOR" of the container's bash,
+# or empty when it has none or cannot be asked.
+sandbox_bash_version() {
+  REPLY="$(docker exec "$1" bash -c "$CHALK_BASH_VERSION_PROBE" 2>/dev/null)" || REPLY=""
+  [[ $REPLY =~ ^[0-9]+\ [0-9]+$ ]] || REPLY=""
+}
+
+# sandbox_check_bash NAME: removes the container and stops Chalk when its
+# bash is older than the sandbox scripts need.
+sandbox_check_bash() {
+  local name="$1" major="" minor="" found="no bash"
+  read -r major minor <<<"${| sandbox_bash_version "$name"; }" || true
+  if [[ -n $major ]]; then
+    bash_at_least "${CHALK_SANDBOX_BASH_MIN[@]}" "$major" "$minor" && return 0
+    found="bash $major.$minor"
+  fi
+  sandbox_stop "$name"
+  die "sandbox image '$CHALK_IMAGE' has $found;" \
+    "Chalk needs bash >= ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]} in the sandbox"
+}
+
+# True when the configured image's bash is new enough. Needs Docker running.
+sandbox_image_bash_ok() {
+  local version major minor
+  version="$(docker run --rm --entrypoint bash "$CHALK_IMAGE" -c "$CHALK_BASH_VERSION_PROBE" 2>/dev/null)" || return 1
+  read -r major minor <<<"$version" || return 1
+  [[ $major$minor =~ ^[0-9]+$ ]] && bash_at_least "${CHALK_SANDBOX_BASH_MIN[@]}" "$major" "$minor"
 }
 
 sandbox_stop() {
   docker rm -f "$1" >/dev/null 2>&1 || true
 }
 
-# sandbox_sh NAME SCRIPT [ARGS...]: runs a bash script in the cloned repo.
+# sandbox_sh NAME COMMAND [ARGS...]: runs a bash command line in the cloned repo.
 sandbox_sh() {
-  local name="$1" script="$2"
+  local name="$1" command="$2"
   shift 2
-  docker exec -w /work/repo "$name" bash -c "$script" chalk "$@"
+  docker exec -w /work/repo "$name" bash -c "$command" chalk "$@"
 }
 
-# Clones the branch into the RAM disk, borrowing objects from the read-only
-# host store so nothing is copied.
+# sandbox_script NAME SCRIPT [ARGS...]: runs share/sandbox/scripts/SCRIPT.sh
+# in the container. The scripts are written for the sandbox's bash, not ours.
+sandbox_script() {
+  local name="$1" script="$CHALK_HOME/share/sandbox/scripts/$2.sh"
+  shift 2
+  docker exec -w /work "$name" bash -c "$(<"$script")" chalk "$@"
+}
+
 sandbox_clone() {
   local name="$1" branch="$2" author email
   author="$(git config user.name || echo 'Chalk Agent')"
   email="$(git config user.email || echo 'chalk@localhost')"
-  docker exec "$name" bash -c '
-    set -e
-    git config --global --add safe.directory "*"
-    git config --global user.name "$2"
-    git config --global user.email "$3"
-    git clone -q --shared --branch "$1" /src.git /work/repo
-  ' chalk "$branch" "$author" "$email"
+  sandbox_script "$name" clone "$branch" "$author" "$email"
 }
 
 # sandbox_commit NAME MESSAGE [--allow-empty]
 sandbox_commit() {
-  sandbox_sh "$1" '
-    set -e
-    git add -A
-    if [ -n "$2" ] || ! git diff --cached --quiet; then
-      git commit -q $2 -m "$1"
-    fi
-  ' "$2" "${3:-}"
+  sandbox_script "$1" commit "$2" "${3:-}"
 }
 
-# Discards anything a read-only call (spec check, review) left in the tree.
 sandbox_reset() {
-  sandbox_sh "$1" 'git reset -q --hard && git clean -fdq'
+  sandbox_script "$1" reset
 }
 
-# Writes commits made since BASE to /chalk/out.bundle, or removes the file
-# when there are none.
+# sandbox_export NAME BASE
 sandbox_export() {
-  sandbox_sh "$1" '
-    set -e
-    rm -f /chalk/out.bundle
-    if [ "$(git rev-parse HEAD)" != "$1" ]; then
-      git bundle create /chalk/out.bundle "$1..HEAD" >/dev/null 2>&1
-    fi
-  ' "$2"
+  sandbox_script "$1" export "$2"
 }
 
 cmd_sandbox() {

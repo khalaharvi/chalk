@@ -7,7 +7,7 @@ office_hours_distill() {
   local note="$1" io sandbox signature start fix started lesson
   [ "$CHALK_DISTILL" = "true" ] && agent_auth_present || return 0
   io="$RUN_DIR/distill"
-  sandbox="$(sandbox_name "$RUN_TICKET-distill")"
+  sandbox="${| sandbox_name "$RUN_TICKET-distill"; }"
   rm -rf "$io"
   mkdir -p "$io"
 
@@ -24,8 +24,8 @@ office_hours_distill() {
     printf '<failure>\n%s\n</failure>\n' "$signature"
     printf '<engineer_note>\n%s\n</engineer_note>\n' "$note"
     printf '<fix_diff>\n%s\n</fix_diff>\n\n' "$fix"
-    cat "$(prompt_file "$RUN_WT" distill)"
-  } | agent_call "$sandbox" "$io" distill "$CHALK_CHEAP_MODEL" "$CHALK_SCHEMA_LESSON" read || true
+    cat "${| prompt_file "$RUN_WT" distill; }"
+  } | agent_call "$sandbox" "$io" distill "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[lesson]}" read || true
   sandbox_stop "$sandbox"
 
   lesson="$(agent_field "$io/distill.json" '.lesson')"
@@ -59,12 +59,12 @@ cmd_office_hours() {
   if [ -n "$lesson" ]; then info "lesson: $lesson"; fi
   { memory_up && memory_sync; } || warn "lesson saved, but not yet stored in memory; retry with: chalk memory sync"
 
-  RUN_BRANCH="tutoring/$RUN_TICKET-$(date +%s)"
+  RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
   info "lesson recorded; continuing on $RUN_BRANCH"
 
   if [ "$(spec_open_count "$RUN_SPEC")" -gt 0 ]; then
-    cmd_run ${run_args[@]+"${run_args[@]}"}
+    cmd_run "${run_args[@]}"
   else
     run_graduate --force
   fi
@@ -86,24 +86,24 @@ cmd_cleanup() {
   esac
   need git docker
 
-  local root runs dir containers ref kept=0
-  root="$(main_root)"
-  runs="$(state_dir)/runs"
+  local root runs dir ref kept=0
+  local -a containers refs
+  local -a patterns=(refs/heads/chalk refs/heads/tutoring refs/heads/detention)
+  root="${| main_root; }"
+  runs="${| state_dir; }/runs"
 
   for dir in "$runs"/*/; do
-    if run_is_alive "${dir%/}"; then kill "$(cat "$dir/pid")" 2>/dev/null || true; fi
+    if run_is_alive "${dir%/}"; then kill "${| run_pid "$dir"; }" 2>/dev/null || true; fi
   done
-  containers="$(docker ps -aq --filter "label=chalk.repo=$(repo_name)")"
-  if [ -n "$containers" ]; then
-    # shellcheck disable=SC2086
-    docker rm -f $containers >/dev/null
+  mapfile -t containers < <(docker ps -aq --filter "label=chalk.repo=${| repo_name; }")
+  if (( ${#containers[@]} )); then
+    docker rm -f "${containers[@]}" >/dev/null
   fi
   info "stopped runs and removed sandboxes"
 
   # Without --all, git refuses to remove worktrees with uncommitted changes
   # and branches that are neither merged nor pushed, so no work is lost.
   for dir in "$root".worktrees/*/; do
-    [ -d "$dir" ] || continue
     if [ "$all" -eq 1 ]; then
       git -C "$root" worktree remove --force "$dir"
     elif ! git -C "$root" worktree remove "$dir" 2>/dev/null; then
@@ -112,9 +112,8 @@ cmd_cleanup() {
   done
   git -C "$root" worktree prune
 
-  local patterns="refs/heads/chalk refs/heads/tutoring refs/heads/detention"
-  # shellcheck disable=SC2086
-  for ref in $(git -C "$root" for-each-ref --format='%(refname:short)' $patterns); do
+  mapfile -t refs < <(git -C "$root" for-each-ref --format='%(refname:short)' "${patterns[@]}")
+  for ref in "${refs[@]}"; do
     if [ "$all" -eq 1 ]; then
       git -C "$root" branch -q -D "$ref"
     elif ! git -C "$root" branch -q -d "$ref" 2>/dev/null; then
@@ -126,6 +125,6 @@ cmd_cleanup() {
   fi
 
   rm -rf "$runs"
-  if [ "$all" -eq 1 ]; then rm -rf "$(state_dir)"; fi
+  if [ "$all" -eq 1 ]; then rm -rf "${| state_dir; }"; fi
   info "cleanup complete (telemetry database untouched)"
 }

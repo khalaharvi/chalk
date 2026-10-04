@@ -5,20 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+# Chalk requires bash 5.3 on the host (docs/specs/bash-5.3.md). Every job
+# puts it first on PATH with the setup-bash action before running anything.
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make check
+      - uses: ./.github/actions/setup-bash
+      - uses: ./.github/actions/setup-shellcheck
+      - run: make check lint-sandbox
 
-  # Chalk targets the bash 3.2 that ships with macOS.
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: /bin/bash --version
-      - run: PATH="/bin:/usr/bin:$PATH" make test
+      - uses: ./.github/actions/setup-bash
+      - run: make test
 
   # The same test with every SQL statement run against a real Postgres.
   postgres:
@@ -36,6 +39,7 @@ jobs:
           --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bash
       - run: make test-db
         env:
           FAKE_PG_URL: postgresql://chalk:chalk@127.0.0.1:5432/chalk

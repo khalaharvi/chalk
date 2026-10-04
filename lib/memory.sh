@@ -99,7 +99,9 @@ memory_recall() {
 memory_sync() {
   memory_enabled || return 0
   local row id failed=0
-  while IFS= read -r row; do
+  local -a rows
+  mapfile -t rows < <(db_unsynced_lessons)
+  for row in "${rows[@]}"; do
     [ -n "$row" ] || continue
     id="$(jq -r '.id' <<<"$row")"
     if jq '{items: [{
@@ -114,9 +116,7 @@ memory_sync() {
     else
       failed=1
     fi
-  done <<ROWS
-$(db_unsynced_lessons)
-ROWS
+  done
   return "$failed"
 }
 

@@ -1,0 +1,32 @@
+name: Set up bash
+description: >
+  Puts the bash that Chalk requires first on PATH. macOS gets Homebrew's
+  bash; Linux builds it from GNU source with scripts/install-bash.sh and
+  caches the result, keyed on that script so a version bump rebuilds.
+
+runs:
+  using: composite
+  steps:
+    - if: runner.os == 'macOS'
+      shell: sh
+      run: |
+        brew install bash
+        echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+
+    - if: runner.os == 'Linux'
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/chalk-bash
+        key: bash-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-bash.sh') }}
+
+    - if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+      shell: sh
+      run: scripts/install-bash.sh "$HOME/.local/chalk-bash"
+
+    - if: runner.os == 'Linux'
+      shell: sh
+      run: echo "$HOME/.local/chalk-bash/bin" >> "$GITHUB_PATH"
+
+    - shell: bash
+      run: bash --version | head -n 1
