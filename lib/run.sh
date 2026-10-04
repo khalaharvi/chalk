@@ -367,6 +367,8 @@ cmd_status() {
   local runs dir ticket state
   local -A summary
   local -a detentions
+  # The most recently active runs first.
+  local GLOBSORT=-mtime
   runs="${| state_dir; }/runs"
   printf '%-14s %-8s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
   for dir in "$runs"/*/; do

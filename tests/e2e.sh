@@ -99,6 +99,9 @@ done
 check "fleet workstream 1 completed" git -C "$tmp/origin.git" rev-parse chalk/PROJ-11
 check "fleet workstream 2 completed" git -C "$tmp/origin.git" rev-parse chalk/PROJ-12
 check "status lists the runs" sh -c 'chalk status | grep -q PROJ-11'
+touch -t 209901010000 "$XDG_STATE_HOME/chalk/demo/runs/PROJ-1"
+check "status lists the most recently active run first" \
+  test "$(chalk status | sed -n 2p | cut -d' ' -f1)" = PROJ-1
 
 # 3b. Prompts in the loop: blockers, spec check, review, overrides.
 chalk new PROJ-4 Blocked feature >/dev/null
@@ -143,6 +146,8 @@ rm -rf .chalk/prompts
 chalk dashboard --no-open --days 7 --output "$tmp/report.html" >/dev/null
 check "dashboard page is built with its data embedded" \
   sh -c "grep -q 'Chalk report card' '$tmp/report.html' && grep -q '\"generated_at\"' '$tmp/report.html' && ! grep -q 'CHALK_DATA' '$tmp/report.html'"
+check "stored text cannot close the dashboard's script tag" \
+  sh -c "grep -qF '\"note\":\"<\\/script>\"' '$tmp/report.html' && ! grep -qF '\"note\":\"</script>\"' '$tmp/report.html'"
 check "telemetry is off unless an endpoint is set" sh -c "! grep -q OTEL_ '$FAKE_STATE/docker.log'"
 chalk new PROJ-7 Traced feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-7"

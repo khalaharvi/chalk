@@ -22,12 +22,16 @@ export CHALK_HOME
 chalk_guard ${1+"$@"}  # ${1+...}: bash 3.2 treats an empty "$@" as unset under set -u
 
 # Modules load by layer: the shell runtime, then the Chalk domain, then the
-# commands. A module may use anything loaded before it.
-for module in core/log core/runtime \
-              repo state config db memory sandbox agent \
+# commands. A module may use anything loaded before it. `source -p` looks
+# only in the directory given, never on PATH or in the working directory.
+for module in log runtime; do
+  # shellcheck source=/dev/null
+  source -p "$CHALK_HOME/lib/core" "$module.sh"
+done
+for module in repo state config db memory sandbox agent \
               run fleet lifecycle dashboard setup; do
   # shellcheck source=/dev/null
-  . "$CHALK_HOME/lib/$module.sh"
+  source -p "$CHALK_HOME/lib" "$module.sh"
 done
 
 usage() {
