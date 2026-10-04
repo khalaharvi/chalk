@@ -263,6 +263,8 @@ guard, and only then sources anything else. The guard:
 
 - New required check: host bash version.
 - New optional check: sandbox image bash version, once the image exists.
+  When Docker is not running the check warns and moves on; it never fails
+  `doctor` on its own.
 
 ## Sandbox boundary (bash 5.2)
 
@@ -278,10 +280,23 @@ guard, and only then sources anything else. The guard:
 
 | Job | Change |
 | :-- | :-- |
-| `lint-and-test` (Ubuntu) | Install ShellCheck 0.11.0 (pinned) and bash 5.3 via Homebrew on Linux; run `make check` under 5.3. Run `make lint-floors` with the runner's bash 5.2. |
-| `macos` | `brew install bash`; run tests under it. |
+| `lint-and-test` (Ubuntu) | `setup-bash` and `setup-shellcheck` (0.11.0, sha256-pinned); `make check` under 5.3. `make lint-floors` calls `/usr/bin/bash`, which is 5.2 on `ubuntu-latest`. |
+| `macos` | `setup-bash` (Homebrew's bash); `make test` under it. |
 | `macos-guard` (new) | Run `/bin/bash bin/chalk version` with Homebrew bash installed (must re-exec), and with `PATH` and `CHALK_BASH` stripped of any new bash (must print the guard error). |
-| `postgres` | Same bash 5.3 setup as `lint-and-test`. |
+| `postgres` | `setup-bash`; `make test-db` under 5.3. |
+
+Two composite actions keep the workflow short and the setup in one place:
+
+- `.github/actions/setup-bash`: on macOS, `brew install bash`. On Linux,
+  `scripts/install-bash.sh` builds bash 5.3 from the GNU tarball with the
+  official patches (5.3.20 today), both checked against pinned sha256
+  values, and `actions/cache` keeps the result keyed on that script, so
+  only a version bump rebuilds. A source build was chosen over Homebrew on
+  Linux because it pulls in no toolchain and its version cannot drift.
+- `.github/actions/setup-shellcheck`: the pinned ShellCheck release.
+
+`scripts/install-bash.sh PREFIX` also serves contributors without
+Homebrew: build once, then set `CHALK_BASH=PREFIX/bin/bash`.
 
 `make lint-floors` (new) runs `bash -n` under the bash on `PATH` (5.2 in
 CI) over `share/sandbox/scripts/*.sh`, and greps for convention
@@ -318,7 +333,7 @@ Each checkpoint is one reviewable commit (or a small series), proven by a
 test, with `make check` green. The order keeps moves, behaviour changes and
 refactors in separate commits.
 
-- [ ] **1. Toolchain.** CI pins ShellCheck 0.11.0 and runs every job under bash 5.3. Proof: each job prints `bash --version` 5.3.x and passes.
+- [ ] **1. Toolchain.** `setup-bash` and `setup-shellcheck` actions, `scripts/install-bash.sh`; every CI job runs under bash 5.3. Proof: each job prints `bash --version` 5.3.x and passes. (Done locally under 5.3.20; ticks when CI is green.)
 - [ ] **2. Layout, moves only.** Create `lib/core/`, split `lib/common.sh` into `core/log.sh`, `core/runtime.sh`, `repo.sh`, `state.sh`; move sandbox snippets to `share/sandbox/scripts/`. No content changes beyond the moves and the module list. Proof: e2e green; diff is moves only.
 - [ ] **3. Guard.** Add `lib/core/guard.sh` and source it first from `bin/chalk`. Proof: `tests/unit/guard.sh` covers re-exec via `CHALK_BASH`, loop prevention, and the error message; the `macos-guard` job passes.
 - [ ] **4. Formula.** `depends_on "bash"`, shebang pinned, `chalk doctor` reports host bash. Proof: formula `test do` passes in the macOS job.
@@ -342,7 +357,9 @@ refactors in separate commits.
 
 ## Open questions
 
-1. Should `chalk doctor` warn, rather than fail, when the sandbox image
-   cannot be inspected because Docker is not running? (Proposed: warn.)
-2. Is Homebrew on Linux acceptable for getting bash 5.3 in CI, or do you
-   prefer building from the GNU tarball in a cached CI step?
+None. Resolved:
+
+1. `chalk doctor` warns, and does not fail, when the sandbox image's bash
+   cannot be checked because Docker is not running.
+2. Linux CI builds bash 5.3 from the GNU tarball in a cached step (see
+   *Tooling and CI*).
