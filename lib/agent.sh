@@ -73,11 +73,14 @@ agent_field() {
   jq -r "(.structured_output // empty) | $2" "$1" 2>/dev/null || true
 }
 
+# agent_cost FILE: a call's cost in USD to four places, like cost_usd in the
+# database; 0.0000 when the result is unreadable. Rounding hides float noise
+# such as 0.13829080000000002, and jq writes tiny costs as e.g. 1.2e-05.
 agent_cost() {
-  local cost
+  local cost re='^[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$'
   cost="$(jq -r '.total_cost_usd // 0' "$1" 2>/dev/null || echo 0)"
-  case "$cost" in ''|*[!0-9.]*) cost=0 ;; esac
-  printf '%s\n' "$cost"
+  [[ $cost =~ $re ]] || cost=0
+  LC_ALL=C printf '%.4f\n' "$cost"
 }
 
 # agent_model FILE: the model that did most of a call's work (highest cost in

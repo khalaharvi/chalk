@@ -33,6 +33,16 @@ check "agent_model names the model that cost the most" test "$(agent_model "$tmp
 check "agent_model is empty when the result does not say" test -z "$(agent_model "$tmp/partial.json")"
 check "agent_model is empty for an unreadable result" test -z "$(agent_model "$tmp/missing.json")"
 
+# cost_for VALUE: agent_cost for a result whose total_cost_usd is VALUE.
+cost_for() { printf '{"total_cost_usd":%s}\n' "$1" > "$tmp/cost.json"; agent_cost "$tmp/cost.json"; }
+check "agent_cost rounds to four places" test "$(cost_for 0.13829080000000002)" = 0.1383
+check "agent_cost pads to four places" test "$(cost_for 0.25)" = 0.2500
+check "agent_cost writes a decimal point whatever the locale" \
+  test "$(export LC_ALL=de_DE.UTF-8; cost_for 0.25)" = 0.2500
+check "agent_cost reads costs written in exponent form" test "$(cost_for 1.5e-03)" = 0.0015
+check "agent_cost gives 0.0000 for a value that is not a cost" test "$(cost_for '"n/a"')" = 0.0000
+check "agent_cost gives 0.0000 for an unreadable result" test "$(agent_cost "$tmp/missing.json")" = 0.0000
+
 # A caller's variable may share a name with the function's own locals.
 values="untouched"
 declare -A values_usage
