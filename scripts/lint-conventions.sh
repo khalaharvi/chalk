@@ -24,7 +24,7 @@ report '(local|declare)( -[a-zA-Z]+)* -[a-zA-Z]*n[a-zA-Z]* +([^_ -]|_[^_])' \
   'nameref locals start with __ (C3)'
 report '\$\{[|]? +<' \
   'a file read with < inside ${ } returns nothing; use read -r or $(<file) (C2)'
-report '\$\{[|]? [^}]*\bcd\b' \
+report '\$\{[|]?[^}]*[^[:alnum:]_]cd([[:space:];]|$)' \
   'cd inside ${ } changes Chalk'"'"'s own directory; use $( ) or ( ) (C2)'
 
 # Value functions (a "-> REPLY" header comment) must never return non-zero:
@@ -34,7 +34,7 @@ while IFS= read -r line; do
   status=1
 done < <(awk '
   /^#.*-> REPLY/            { value = 1; next }
-  /^[a-z_]+\(\) *\{/ && value { inside = 1; value = 0; next }
+  /^[a-z_]+\(\) *[{]/ && value { inside = 1; value = 0; next }
   /^}/                       { inside = 0 }
   !/^#/                      { if (!inside) value = 0 }
   inside && /return +[1-9]|return +"?\$[a-z?]/ { print FILENAME ":" FNR }
