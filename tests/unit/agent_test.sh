@@ -26,6 +26,13 @@ agent_usage "$tmp/missing.json" usage
 check "agent_usage gives zeros for an unreadable result" \
   test "${usage[input]}${usage[output]}${usage[turns]}${usage[denials]}" = "0000"
 
+cat > "$tmp/models.json" <<'JSON'
+{"modelUsage":{"claude-haiku-x":{"costUSD":0.01},"claude-opus-x":{"costUSD":0.2}}}
+JSON
+check "agent_model names the model that cost the most" test "$(agent_model "$tmp/models.json")" = claude-opus-x
+check "agent_model is empty when the result does not say" test -z "$(agent_model "$tmp/partial.json")"
+check "agent_model is empty for an unreadable result" test -z "$(agent_model "$tmp/missing.json")"
+
 # A caller's variable may share a name with the function's own locals.
 values="untouched"
 declare -A values_usage

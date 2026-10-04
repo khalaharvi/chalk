@@ -11,7 +11,7 @@ set -euo pipefail
 prompt="$(cat)"
 printf '%s\n=====\n' "$*" >> "$FAKE_STATE/claude.log"
 
-answer() { printf '{"is_error":false,"subtype":"success","total_cost_usd":0.25,"num_turns":6,"usage":{"input_tokens":1200,"output_tokens":900,"cache_read_input_tokens":42000,"cache_creation_input_tokens":3000},"structured_output":%s}\n' "$1"; }
+answer() { printf '{"is_error":false,"subtype":"success","total_cost_usd":0.25,"num_turns":6,"usage":{"input_tokens":1200,"output_tokens":900,"cache_read_input_tokens":42000,"cache_creation_input_tokens":3000},"modelUsage":{"claude-fake-1":{"costUSD":0.25}},"structured_output":%s}\n' "$1"; }
 
 case "$prompt" in
   *"<engineer_note>"*)

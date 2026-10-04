@@ -80,6 +80,12 @@ agent_cost() {
   printf '%s\n' "$cost"
 }
 
+# agent_model FILE: the model that did most of a call's work (highest cost in
+# the CLI's modelUsage), or nothing when the result does not say.
+agent_model() {
+  jq -r '.modelUsage // {} | to_entries | max_by(.value.costUSD // 0) | .key // empty' "$1" 2>/dev/null || true
+}
+
 # agent_usage FILE VAR: fills the associative array VAR with a call's token
 # counts, turns and permission denials, each 0 when the result is unreadable.
 agent_usage() {
