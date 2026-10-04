@@ -57,7 +57,7 @@ run_teardown() {
 run_claim() {
   need docker jq
   agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
-  ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid $(cat "$RUN_DIR/pid"))"
+  ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid $(run_pid "$RUN_DIR"))"
   rm -rf "$RUN_IO"
   mkdir -p "$RUN_IO"
 }
@@ -86,7 +86,7 @@ run_build_prompt() {
   printf '<notes_file>specs/%s.notes.md</notes_file>\n' "$RUN_TICKET"
   printf '<rubric_command>%s</rubric_command>\n' "$CHALK_TEST_CMD"
 
-  lessons="$(memory_recall "${feedback:-$(cat "$RUN_SPEC")}")"
+  lessons="$(memory_recall "${feedback:-$(<"$RUN_SPEC")}")"
   RUN_LESSONS="$(printf '%s\n' "$lessons" | grep -c '^- ' || true)"
   if [ -n "$lessons" ]; then printf '<lessons>\n%s\n</lessons>\n' "$lessons"; fi
   if [ -n "$findings" ]; then printf '<review_findings>\n%s\n</review_findings>\n' "$findings"; fi
@@ -114,9 +114,10 @@ run_sync() {
 # Returns non-zero only on an explicit "fail" verdict. A spec that passed is
 # not checked again until its checkpoints change.
 run_spec_check() {
-  local stamp="$RUN_DIR/spec-check.ok" hash verdict result="$RUN_IO/spec-check.json"
+  local stamp="$RUN_DIR/spec-check.ok" hash passed="" verdict result="$RUN_IO/spec-check.json"
   hash="$(sed 's/- \[x\]/- [ ]/' "$RUN_SPEC" | git hash-object --stdin)"
-  if [ "$(cat "$stamp" 2>/dev/null)" = "$hash" ]; then return 0; fi
+  [[ -f $stamp ]] && read -r passed < "$stamp"
+  if [[ $passed == "$hash" ]]; then return 0; fi
 
   {
     printf '<spec_file>specs/%s.md</spec_file>\n\n' "$RUN_TICKET"
@@ -171,7 +172,7 @@ run_review() {
 # branch, logs the failure as an open lesson, and halts this run.
 run_detain() {
   local reason="$1" detail="${2:-}" branch signature
-  branch="detention/$RUN_TICKET-$(date +%s)"
+  branch="detention/$RUN_TICKET-$EPOCHSECONDS"
 
   sandbox_commit "$RUN_SANDBOX" "detention($RUN_TICKET): $reason" --allow-empty
   sandbox_export "$RUN_SANDBOX" "$RUN_BASE"
@@ -191,7 +192,7 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
   run_log "DETENTION: $reason"
   if [ -n "$detail" ]; then printf '%s\n' "$detail"; fi
   run_log "work parked on local branch $branch. To unblock:"
-  run_log "  cd $RUN_WT && git switch $branch"
+  run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
   run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
 }
 
@@ -362,8 +363,9 @@ cmd_check() {
 
 cmd_status() {
   need git
-  local runs dir ticket state detentions
+  local runs dir ticket state
   local -A summary
+  local -a detentions
   runs="$(state_dir)/runs"
   printf '%-14s %-8s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
   for dir in "$runs"/*/; do
@@ -371,8 +373,8 @@ cmd_status() {
     state="idle"
     if run_is_alive "${dir%/}"; then state="running"; fi
     db_ticket_summary "$ticket" summary -
-    detentions="$(git for-each-ref --format='%(refname:short)' "refs/heads/detention/$ticket-*" | wc -l | tr -d ' ')"
-    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${summary[cost]}" "${summary[fixes]}" "$detentions"
+    mapfile -t detentions < <(git for-each-ref --format='%(refname:short)' "refs/heads/detention/$ticket-*")
+    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${summary[cost]}" "${summary[fixes]}" "${#detentions[@]}"
   done
 }
 

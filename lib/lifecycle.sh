@@ -59,7 +59,7 @@ cmd_office_hours() {
   if [ -n "$lesson" ]; then info "lesson: $lesson"; fi
   { memory_up && memory_sync; } || warn "lesson saved, but not yet stored in memory; retry with: chalk memory sync"
 
-  RUN_BRANCH="tutoring/$RUN_TICKET-$(date +%s)"
+  RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
   info "lesson recorded; continuing on $RUN_BRANCH"
 
@@ -93,7 +93,7 @@ cmd_cleanup() {
   runs="$(state_dir)/runs"
 
   for dir in "$runs"/*/; do
-    if run_is_alive "${dir%/}"; then kill "$(cat "$dir/pid")" 2>/dev/null || true; fi
+    if run_is_alive "${dir%/}"; then kill "$(run_pid "$dir")" 2>/dev/null || true; fi
   done
   mapfile -t containers < <(docker ps -aq --filter "label=chalk.repo=$(repo_name)")
   if (( ${#containers[@]} )); then

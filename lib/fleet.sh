@@ -107,8 +107,10 @@ cmd_fleet() {
   fi
 
   local item ticket dir slots
+  local -a items
   slots=$((CHALK_MAX_PARALLEL - $(fleet_running_count)))
-  while IFS= read -r item; do
+  mapfile -t items < <(jq -c '.workstreams[]' "$saved")
+  for item in "${items[@]}"; do
     ticket="$(jq -r '.ticket' <<<"$item")"
     if workstream_exists "$ticket"; then
       info "$ticket: already started, skipping"
@@ -124,7 +126,7 @@ cmd_fleet() {
            + (.checkpoints | map("- [ ] " + .) | join("\n"))' <<<"$item" > "$dir/specs/$ticket.md"
     git -C "$dir" add "specs/$ticket.md"
     git -C "$dir" commit -q -m "chalk($ticket): spec"
-    (cd "$dir" && "$BASH" "$CHALK_HOME/bin/chalk" run --detach) < /dev/null
+    (cd "$dir" && "$BASH" "$CHALK_HOME/bin/chalk" run --detach)
     slots=$((slots - 1))
-  done < <(jq -c '.workstreams[]' "$saved")
+  done
 }

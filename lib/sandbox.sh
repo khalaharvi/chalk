@@ -28,8 +28,11 @@ sandbox_ensure_image() {
   sandbox_build
 }
 
+# sandbox_name TICKET: a container name, with anything docker rejects as "-".
 sandbox_name() {
-  printf 'chalk-sandbox-%s-%s' "$(repo_name)" "$1" | tr -c 'a-zA-Z0-9_.-' '-'
+  local name
+  name="chalk-sandbox-$(repo_name)-$1"
+  printf '%s\n' "${name//[^a-zA-Z0-9_.-]/-}"
 }
 
 # sandbox_otel_args VAR TICKET: fills the array VAR with the docker flags
@@ -38,20 +41,21 @@ sandbox_name() {
 # through host.docker.internal.
 sandbox_otel_args() {
   local -n __args=$1
-  local ticket="$2" endpoint signal
+  local ticket="$2" loopback='//@(localhost|127.0.0.1)' endpoint repo signal
   __args=()
   [ -n "$CHALK_OTEL_ENDPOINT" ] || return 0
-  endpoint="$(printf '%s' "$CHALK_OTEL_ENDPOINT" | sed -E 's#//(localhost|127\.0\.0\.1)#//host.docker.internal#')"
+  endpoint="${CHALK_OTEL_ENDPOINT/$loopback///host.docker.internal}"
+  repo="$(repo_name)"
   __args=(
     --add-host host.docker.internal:host-gateway
     -e CLAUDE_CODE_ENABLE_TELEMETRY=1
     -e "OTEL_EXPORTER_OTLP_ENDPOINT=$endpoint"
     -e "OTEL_EXPORTER_OTLP_PROTOCOL=$CHALK_OTEL_PROTOCOL"
-    -e "OTEL_RESOURCE_ATTRIBUTES=chalk.repo=$(printf '%s' "$(repo_name)" | tr -c 'a-zA-Z0-9_.-' '_'),chalk.ticket=$ticket"
+    -e "OTEL_RESOURCE_ATTRIBUTES=chalk.repo=${repo//[^a-zA-Z0-9_.-]/_},chalk.ticket=$ticket"
   )
   for signal in metrics logs traces; do
     case ",$CHALK_OTEL_SIGNALS," in
-      *",$signal,"*) __args+=(-e "OTEL_$(printf '%s' "$signal" | tr '[:lower:]' '[:upper:]')_EXPORTER=otlp") ;;
+      *",$signal,"*) __args+=(-e "OTEL_${signal@U}_EXPORTER=otlp") ;;
     esac
   done
   case ",$CHALK_OTEL_SIGNALS," in
