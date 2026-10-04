@@ -1,0 +1,59 @@
+name: Release
+
+# Runs when scripts/release.sh (or anyone) pushes a v* tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: version
+        name: Check the tag matches bin/chalk
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -qx "CHALK_VERSION=\"$version\"" bin/chalk \
+            || { echo "::error::bin/chalk does not say $version"; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - run: make check
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-chalk
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+          path: homebrew-chalk
+
+      - name: Update the Homebrew tap
+        run: |
+          git -C homebrew-chalk config user.name "github-actions[bot]"
+          git -C homebrew-chalk config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          scripts/update-tap.sh "${{ steps.version.outputs.version }}" homebrew-chalk
+
+  # Install from the tap the way a user would.
+  verify:
+    needs: publish
+    runs-on: macos-latest
+    steps:
+      - run: brew install "${{ github.repository_owner }}/chalk/chalk"
+      - run: test "$(chalk version)" = "${{ needs.publish.outputs.version }}"
+      - run: brew test chalk

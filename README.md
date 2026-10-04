@@ -304,15 +304,19 @@ The scripts target bash 3.2 so they run on stock macOS.
 
 ## Releasing
 
-The Homebrew tap is [khalaharvi/homebrew-chalk](https://github.com/khalaharvi/homebrew-chalk).
-With a clone of it next to this repository:
-
 ```sh
-scripts/release.sh 0.5.0 ../homebrew-chalk
+scripts/release.sh 0.5.0
 ```
 
-That runs the checks, sets the version, tags and pushes, then writes the
-formula with the release tarball's checksum and pushes the tap.
+That runs the checks, sets the version, then tags and pushes. The pushed tag
+starts the release workflow, which runs the checks again, creates the GitHub
+Release, points the formula in
+[khalaharvi/homebrew-chalk](https://github.com/khalaharvi/homebrew-chalk) at
+the new tarball, and installs it from the tap on macOS to confirm it works.
+
+The workflow pushes to the tap with a deploy key stored in this repository's
+`TAP_DEPLOY_KEY` secret. To update the tap by hand instead, run
+`scripts/update-tap.sh 0.5.0 ../homebrew-chalk` from a clone of it.
 
 ## Contributing and security
 

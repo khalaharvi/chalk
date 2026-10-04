@@ -36,4 +36,4 @@ FAKE_PG_URL=postgresql://user:pass@127.0.0.1:5432/db make test-db
 | `share/prompts/` | Every prompt the agents receive |
 | `share/templates/` | Files `chalk init` adds to a repository |
 | `share/schema.sql`, `share/dashboard.sql` | Telemetry schema and the dashboard query |
-| `packaging/`, `scripts/release.sh` | Homebrew formula template and release script |
+| `packaging/`, `scripts/release.sh`, `scripts/update-tap.sh` | Homebrew formula template and release scripts |
