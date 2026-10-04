@@ -1,0 +1,64 @@
+# Chalk configuration for this repository.
+# Plain KEY=value lines. No quotes, no shell expansion. Environment variables
+# of the same name override these.
+
+# Branch that workstreams start from and merge back into.
+CHALK_BASE_BRANCH=main
+
+# The rubric. Must exit 0 only when the work is acceptable. Runs in the
+# sandbox after every agent loop and again in GitLab CI.
+CHALK_TEST_CMD=
+# Runs once in a fresh sandbox (and in CI) before the rubric, e.g. npm ci
+CHALK_SETUP_CMD=
+# Seconds before a hung rubric is killed.
+CHALK_RUBRIC_TIMEOUT=900
+
+# Spend cap per agent loop, in USD, enforced by Claude Code.
+CHALK_BUDGET_USD=1.00
+# Loops per run before detention. Worst-case spend per run is
+# CHALK_BUDGET_USD x CHALK_MAX_LOOPS.
+CHALK_MAX_LOOPS=20
+# Consecutive failed loops tolerated before detention.
+CHALK_MAX_RETRIES=2
+# Agents `chalk fleet` will run at once on one machine.
+CHALK_MAX_PARALLEL=4
+
+# Sandbox image. Needs bash, git, coreutils and the claude CLI.
+CHALK_IMAGE=chalk-sandbox:local
+# RAM disk size for the working copy and its dependencies.
+CHALK_TMPFS_SIZE=4g
+
+# Global engineering rules appended to the agent's system prompt.
+CHALK_TEXTBOOK=.chalk/textbook.md
+# Push and open the merge request automatically when a run completes.
+CHALK_AUTO_MR=true
+# Before the first loop, a cheap model checks that every checkpoint is small,
+# testable and unambiguous, and stops the run if not.
+CHALK_SPEC_CHECK=true
+# When all checkpoints are done, an independent agent reviews the change for
+# stubs, weakened tests and drift from the spec before the merge request.
+CHALK_REVIEW=true
+# Fix-and-review-again rounds allowed before the work goes to detention.
+CHALK_REVIEW_ROUNDS=1
+# Model for the review (empty: same as the loop).
+CHALK_REVIEW_MODEL=
+# Model for the spec check and lesson distillation.
+CHALK_CHEAP_MODEL=haiku
+# At office hours, turn the engineer's note and fix into a general lesson.
+CHALK_DISTILL=true
+
+# Lesson recall backend: builtin (text similarity, nothing extra to run) or
+# hindsight (a local Hindsight server per machine; needs an LLM key, see README).
+CHALK_MEMORY=builtin
+# Token budget for recalled lessons in each agent prompt.
+CHALK_MEMORY_TOKENS=800
+
+# How loops are permitted to act inside the sandbox:
+#   auto    Claude Code's auto mode: a safety classifier reviews actions.
+#   bypass  --dangerously-skip-permissions. Only where your organisation allows it.
+# The spec check, review and distillation are always read-only.
+CHALK_PERMISSION_MODE=auto
+
+# Optional model override, passed to `claude --model`. Auto mode needs a
+# model that supports it (not Haiku).
+CHALK_MODEL=

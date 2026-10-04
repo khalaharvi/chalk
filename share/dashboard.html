@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chalk report card</title>
+<style>
+  :root {
+    --bg: #eef2ee; --text: #1c342d; --muted: #5c6f66; --rule: rgba(28, 52, 45, .2);
+    --accent: #8a6d00; --waste: #b3402e;
+    --k-continue: #1c342d; --k-retry: #b8860b; --k-fix-review: #2f6f8f;
+    --k-review: #4f7a3a; --k-spec-check: #7a4f8a; --k-distill: #a65f2a;
+    --display: "American Typewriter", "Courier Prime", "Courier New", serif;
+    --body: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c342d; --text: #f1eee3; --muted: #a9b9ae; --rule: rgba(241, 238, 227, .22);
+      --accent: #f0d878; --waste: #eba39b;
+      --k-continue: #f1eee3; --k-retry: #f0d878; --k-fix-review: #9cc4d8;
+      --k-review: #b7d6a3; --k-spec-check: #d7b3e0; --k-distill: #e8b98a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.25rem 4rem; background: var(--bg); color: var(--text);
+    font: 16px/1.5 var(--body); font-variant-numeric: tabular-nums;
+  }
+  main { max-width: 58rem; margin: 0 auto; }
+  header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+           gap: .5rem 2rem; padding-bottom: .75rem; border-bottom: 2px solid var(--text); }
+  h1 { font: 400 1.5rem/1.2 var(--display); margin: 0; }
+  header p { margin: 0; color: var(--muted); }
+  h2 { font: 400 1.25rem/1.3 var(--display); margin: 3rem 0 .75rem; }
+  h3 { font: 600 1rem/1.4 var(--body); margin: 1.75rem 0 .25rem; }
+  p { margin: .5rem 0; max-width: 42rem; }
+  .muted { color: var(--muted); }
+
+  .grade { margin: 2.25rem 0 1.5rem; }
+  .grade strong { display: block; font: 400 clamp(3.5rem, 12vw, 6rem)/1 var(--display); color: var(--accent); }
+  .grade span { font-size: 1.125rem; }
+
+  .marks { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0 2.5rem; }
+  .marks div { display: flex; align-items: baseline; gap: .5rem; padding: .4rem 0; }
+  .marks dt { order: 1; }
+  .marks div::after { content: ""; order: 2; flex: 1; border-bottom: 1px dotted var(--muted); }
+  .marks dd { order: 3; margin: 0; font-weight: 600; }
+
+  .stack { display: flex; height: 1.75rem; margin: 1rem 0 .5rem; border: 1px solid var(--text); }
+  .stack i { display: block; min-width: 2px; }
+  .swatch { display: inline-block; width: .7rem; height: .7rem; margin-right: .5rem; }
+
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: right; padding: .45rem .75rem .45rem 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th { font-weight: 600; border-bottom-color: var(--text); }
+  td.text, th.text { text-align: left; }
+
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--muted); font: 12px var(--body); }
+
+  .notes { margin: 0; padding-left: 1.25rem; max-width: 44rem; }
+  .notes li { margin: .6rem 0; }
+  .notes code, p code { font: inherit; font-weight: 600; }
+
+  .range { position: relative; height: 4.5rem; margin: 1rem 0 0; max-width: 42rem; }
+  .range::before { content: ""; position: absolute; left: 0; right: 0; top: .5rem; border-top: 2px solid var(--text); }
+  .range b { position: absolute; top: 0; width: 2px; height: 1rem; background: var(--text); }
+  .range b span { position: absolute; top: 1.2rem; left: 0; transform: translateX(-50%); font-weight: 400;
+                  white-space: nowrap; color: var(--muted); font-size: .875rem; }
+  .range b.low span { top: 2.5rem; }
+  .range b.cap { background: var(--waste); }
+  .range b.cap span { transform: translateX(-100%); }
+  .state-detention, .state-spec_blocked { color: var(--waste); font-weight: 600; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script>
+const DATA =
+/*CHALK_DATA*/
+;
+
+const KINDS = {
+  "continue": "First attempts", "retry": "Retries", "fix-review": "Review fixes",
+  "review": "Final reviews", "spec-check": "Spec checks", "distill": "Lesson distillation",
+};
+const STATES = {
+  "submitted": "Submitted", "detention": "In detention",
+  "spec_blocked": "Spec not ready", "in progress": "In progress",
+};
+
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const money = (n, digits = 2) => "$" + Number(n || 0).toFixed(digits);
+const share = (part, whole) => (whole > 0 ? part / whole : 0);
+const pct = (ratio) => Math.round(ratio * 100) + "%";
+const count = (n) => Number(n || 0).toLocaleString("en-US");
+
+// Columns are right-aligned unless their index is listed in `left`.
+function table(head, rows, left = [0]) {
+  const cells = (tag, row) =>
+    row.map((c, i) => `<${tag}${left.includes(i) ? ' class="text"' : ""}>${c}</${tag}>`).join("");
+  return `<div class="scroll"><table><thead><tr>${cells("th", head)}</tr></thead>` +
+    `<tbody>${rows.map((r) => `<tr>${cells("td", r)}</tr>`).join("")}</tbody></table></div>`;
+}
+
+function grade(t) {
+  if (!t.checkpoints) {
+    return `<p class="grade"><strong>${money(t.cost)}</strong>
+      <span>spent so far, with no checkpoint finished yet.</span></p>`;
+  }
+  return `<p class="grade"><strong>${money(t.cost / t.checkpoints)}</strong>
+    <span>per finished checkpoint, counting every call Chalk made.</span></p>`;
+}
+
+function marks(d) {
+  const t = d.totals;
+  const input = t.input_tokens + t.cache_read_tokens + t.cache_write_tokens;
+  const rows = [
+    ["Total spend", money(t.cost)],
+    ["Checkpoints finished", count(t.checkpoints)],
+    ["Tickets worked on", count(t.tickets)],
+    ["Merge requests opened", count(d.submitted)],
+    ["Detentions", count(d.detentions)],
+    ["Loop spend with no progress", pct(share(t.wasted, t.loop_cost))],
+    ["Input read from cache", input ? pct(share(t.cache_read_tokens, input)) : "no data"],
+    ["Actions refused by permissions", count(t.denials)],
+  ];
+  return `<dl class="marks">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
+}
+
+function spendByKind(d) {
+  const total = d.totals.cost;
+  const bar = d.by_kind.map((k) =>
+    `<i style="width:${share(k.cost, total) * 100}%;background:var(--k-${esc(k.kind)})"
+        title="${esc(KINDS[k.kind] || k.kind)}: ${money(k.cost)}"></i>`).join("");
+  const rows = d.by_kind.map((k) => [
+    `<span class="swatch" style="background:var(--k-${esc(k.kind)})"></span>${esc(KINDS[k.kind] || k.kind)}`,
+    count(k.calls), money(k.cost), pct(share(k.cost, total)), money(k.avg_cost, 3), count(k.avg_seconds) + " s",
+  ]);
+  return `<h2>Where the money went</h2><div class="stack">${bar}</div>` +
+    table(["Kind of call", "Calls", "Cost", "Share", "Average", "Average time"], rows);
+}
+
+function spendByDay(d) {
+  const days = d.by_day;
+  if (days.length < 2) return "";
+  const W = 720, H = 180, pad = 24, peak = Math.max(...days.map((x) => x.cost), 0.01);
+  const step = (W - pad) / days.length, bw = Math.max(2, step - 3);
+  const y = (v) => (H - pad) * (1 - v / peak);
+  const bars = days.map((x, i) => {
+    const left = pad + i * step;
+    return `<rect x="${left}" y="${y(x.cost)}" width="${bw}" height="${H - pad - y(x.cost)}" fill="var(--text)">` +
+      `<title>${esc(x.day)}: ${money(x.cost)}, ${money(x.wasted)} without progress</title></rect>` +
+      `<rect x="${left}" y="${y(x.wasted)}" width="${bw}" height="${H - pad - y(x.wasted)}" fill="var(--waste)"></rect>`;
+  }).join("");
+  return `<h2>Spend by day</h2>
+    <p class="muted"><span class="swatch" style="background:var(--waste)"></span>Loops that made no progress</p>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily spend, with spend on loops that made no progress marked">
+      ${bars}
+      <text x="0" y="12">${money(peak)}</text>
+      <text x="${pad}" y="${H - 6}">${esc(days[0].day)}</text>
+      <text x="${W}" y="${H - 6}" text-anchor="end">${esc(days[days.length - 1].day)}</text>
+    </svg>`;
+}
+
+// Plain rules over the numbers. Each needs enough data to mean something.
+function notes(d) {
+  const out = [], t = d.totals, b = d.budget, r = d.review, l = d.lessons;
+  if (t.denials > 0) {
+    out.push(`${count(t.denials)} actions were refused by permission checks. If loops are stalling, check that
+      auto mode is available for your model and account.`);
+  }
+  if (b.loops >= 20 && b.p90 < 0.5 * b.cap) {
+    out.push(`Nine loops in ten cost under ${money(b.p90)}, against a cap of ${money(b.cap)}. Lowering
+      <code>CHALK_BUDGET_USD</code> to about ${money(Math.ceil(b.p90 * 150) / 100)} would cut the worst case
+      without touching a typical loop.`);
+  }
+  if (b.loops >= 20 && share(b.near_cap, b.loops) > 0.2) {
+    out.push(`${pct(share(b.near_cap, b.loops))} of loops ran into the spend cap and were cut off. Write
+      smaller checkpoints, or raise <code>CHALK_BUDGET_USD</code>.`);
+  }
+  if (t.loops >= 20 && share(t.wasted, t.loop_cost) > 0.3) {
+    out.push(`${pct(share(t.wasted, t.loop_cost))} of loop spend went to loops that made no progress. The
+      usual causes are vague checkpoints and a slow or flaky rubric; the retry rows below show which prompt set
+      is worst.`);
+  }
+  if (r.reviews >= 20 && share(r.failed, r.reviews) < 0.05) {
+    out.push(`The final review failed ${count(r.failed)} of ${count(r.reviews)} changes and cost ${money(r.cost)}.
+      It is rarely finding anything: try a cheaper <code>CHALK_REVIEW_MODEL</code>, or make its prompt stricter.`);
+  }
+  if (r.reviews >= 10 && share(r.failed, r.reviews) > 0.4) {
+    out.push(`The final review fails ${pct(share(r.failed, r.reviews))} of changes, and fixing them cost
+      ${money(r.fix_cost)}. Read a few findings: if they repeat, put the rule in the Textbook so loops get it
+      right first time.`);
+  }
+  if (l.with >= 10 && l.without >= 10) {
+    const withRate = share(l.with_passed, l.with), withoutRate = share(l.without_passed, l.without);
+    out.push(`Retries that were given a lesson passed ${pct(withRate)} of the time, against ${pct(withoutRate)}
+      without one. ${withRate > withoutRate ? "Office-hours notes are paying off." :
+      "Lessons are not helping yet; check that the notes describe the fix, not just the symptom."}`);
+  }
+  if (!out.length) {
+    out.push(t.loops < 20
+      ? "Too few loops so far to recommend changes. The notes appear once there are about twenty."
+      : "Nothing stands out. Spend, review and retries are all within the usual ranges.");
+  }
+  return `<h2>Notes for next term</h2><ul class="notes">${out.map((n) => `<li>${n}</li>`).join("")}</ul>`;
+}
+
+function strategies(d) {
+  const perCheckpoint = (x) => (x.checkpoints ? money(x.cost / x.checkpoints) : "none finished");
+  const prompts = d.by_prompts.map((p) => [
+    esc(p.prompts), esc(p.first_seen), count(p.loops), count(p.checkpoints),
+    pct(share(p.retries, p.loops)), perCheckpoint(p),
+  ]);
+  const models = d.by_model.map((m) => [
+    esc(m.model), count(m.loops), count(m.checkpoints), money(m.cost), perCheckpoint(m),
+  ]);
+  return `<h2>Comparing strategies</h2>
+    <p>A prompt set is every prompt plus the Textbook. Change any of them and a new row starts, so two
+       rows are a before and after.</p>
+    <h3>By prompt set</h3>
+    ${table(["Prompt set", "First used", "Loops", "Checkpoints", "Retry share", "Loop cost per checkpoint"], prompts)}
+    <h3>By model</h3>
+    ${table(["Model", "Loops", "Checkpoints", "Loop cost", "Loop cost per checkpoint"], models)}`;
+}
+
+function checks(d) {
+  const r = d.review, s = d.spec;
+  return `<h2>Are the checks earning their cost?</h2>
+    <p>The spec check ran ${count(s.checks)} times for ${money(s.cost)} and stopped ${count(s.failed)}
+       specs before any loop ran.</p>
+    <p>The final review ran ${count(r.reviews)} times for ${money(r.cost)} and failed ${count(r.failed)}
+       changes. Fixing what it found cost a further ${money(r.fix_cost)}.</p>`;
+}
+
+function budget(d) {
+  const b = d.budget;
+  if (!b.loops) return "";
+  const scale = Math.max(b.cap, b.max) || 1;
+  const tick = (value, label, cls = "") =>
+    `<b class="${cls}" style="left:${Math.min(100, (value / scale) * 100)}%"><span>${label} ${money(value)}</span></b>`;
+  return `<h2>Loop cost against the cap</h2>
+    <div class="range">${tick(b.p50, "half under", "low")}${tick(b.p90, "90% under")}${tick(b.cap, "cap", "cap")}</div>
+    <p class="muted">The most expensive loop cost ${money(b.max)}. ${count(b.near_cap)} of ${count(b.loops)}
+       loops ran into the cap.</p>`;
+}
+
+function tickets(d) {
+  const rows = d.tickets.map((t) => [
+    esc(t.ticket), esc(t.repo), count(t.loops), money(t.cost), count(t.detentions),
+    `<span class="state-${esc(t.state)}">${esc(STATES[t.state] || t.state)}</span>`, esc(t.last),
+  ]);
+  return `<h2>Tickets</h2><p class="muted">The fifty most recently active.</p>` +
+    table(["Ticket", "Repository", "Loops", "Cost", "Detentions", "State", "Last activity"], rows, [0, 1, 5]);
+}
+
+function render(d) {
+  const head = `<header><h1>Chalk report card</h1>
+    <p>Last ${count(d.days)} days, as of ${esc(d.generated_at)}</p></header>`;
+  if (!d.totals.calls) {
+    return head + `<p class="grade"><span>No agent calls recorded in this period. Run a ticket with
+      <code>chalk run</code>, then open this page again.</span></p>`;
+  }
+  return head + grade(d.totals) + marks(d) + notes(d) + spendByKind(d) + spendByDay(d) +
+    budget(d) + strategies(d) + checks(d) + tickets(d);
+}
+
+document.getElementById("app").innerHTML = render(DATA);
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Fake agent. Works out which Chalk prompt it was given from the tags in it
+# and returns the structured answer that prompt asks for.
+#   FAKE_CLAUDE_MODE=break     loop leaves the tree in a state the rubric rejects
+#   FAKE_CLAUDE_MODE=blocked   loop reports a blocker
+#   FAKE_SPEC=fail             spec check fails
+#   FAKE_REVIEW=fail-once      first review fails, later ones pass
+#   FAKE_REVIEW=fail           every review fails
+set -euo pipefail
+prompt="$(cat)"
+printf '%s\n=====\n' "$*" >> "$FAKE_STATE/claude.log"
+
+answer() { printf '{"is_error":false,"subtype":"success","total_cost_usd":0.25,"num_turns":6,"usage":{"input_tokens":1200,"output_tokens":900,"cache_read_input_tokens":42000,"cache_creation_input_tokens":3000},"structured_output":%s}\n' "$1"; }
+
+case "$prompt" in
+  *"<engineer_note>"*)
+    answer '{"lesson":"Distilled: never commit a BROKEN marker"}' ;;
+  *"<base_ref>"*)
+    mode="${FAKE_REVIEW:-pass}"
+    if [ "$mode" = "fail-once" ]; then
+      if [ -e "$FAKE_STATE/reviewed" ]; then mode="pass"; else touch "$FAKE_STATE/reviewed"; mode="fail"; fi
+    fi
+    if [ "$mode" = "fail" ]; then
+      answer '{"verdict":"fail","summary":"Stub found.","findings":[{"severity":"blocker","file":"work.txt","issue":"feature is a stub"}]}'
+    else
+      answer '{"verdict":"pass","summary":"Looks complete.","findings":[]}'
+    fi ;;
+  *"<review_findings>"*)
+    echo "fixed review findings" >> work.txt
+    answer '{"status":"done","summary":"fixed the stub"}' ;;
+  *"<rubric_command>"*)
+    spec="$(printf '%s\n' "$prompt" | sed -n 's:.*<spec_file>\(.*\)</spec_file>.*:\1:p' | head -n 1)"
+    case "${FAKE_CLAUDE_MODE:-}" in
+      break)   touch BROKEN; answer '{"status":"done","summary":"did the thing"}' ;;
+      blocked) answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}' ;;
+      *)
+        line="$(grep -n -m 1 -e '- \[ \]' "$spec" | cut -d: -f1)"
+        sed -i.bak "${line}s/- \[ \]/- [x]/" "$spec" && rm -f "$spec.bak"
+        echo "work for line $line" >> work.txt
+        answer '{"status":"done","checkpoint":"next","summary":"implemented a checkpoint"}' ;;
+    esac ;;
+  *)
+    if [ "${FAKE_SPEC:-}" = "fail" ]; then
+      answer '{"verdict":"fail","problems":[{"checkpoint":"First checkpoint","problem":"not testable","suggestion":"state the behaviour"}]}'
+    else
+      answer '{"verdict":"pass","problems":[]}'
+    fi ;;
+esac

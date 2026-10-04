@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Fake docker for tests: "containers" are directories under $FAKE_STATE and
+# container paths (/src.git, /work, /chalk) are rewritten into them.
+set -euo pipefail
+cmd="$1"; shift
+
+rewrite() {
+  printf '%s' "$1" | sed -E "s#(^|[ \"'=])/(src\.git|work|chalk)#\1$root/\2#g"
+}
+
+case "$cmd" in
+  info|start|stop|build) exit 0 ;;
+  ps) exit 0 ;;
+  image) exit 0 ;;
+  inspect) echo true ;;
+  rm) rm -rf "${FAKE_STATE:?}/${*: -1}" ;;
+  run)
+    printf '%s\n' "$*" >> "$FAKE_STATE/docker.log"
+    name="" mounts=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --name) name="$2"; shift ;;
+        -v) mounts+=("$2"); shift ;;
+      esac
+      shift
+    done
+    root="$FAKE_STATE/$name"
+    mkdir -p "$root/work" "$root/home"
+    for mount in "${mounts[@]}"; do
+      host="${mount%%:*}"; rest="${mount#*:}"
+      ln -sfn "$host" "$root${rest%%:*}"
+    done
+    echo "fake-$name" ;;
+  exec)
+    workdir=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -i|-it) ;;
+        -w) workdir="$2"; shift ;;
+        *) break ;;
+      esac
+      shift
+    done
+    name="$1"; shift
+    if [ "$name" = "chalk-db" ]; then
+      [ "$1" = "psql" ] || exit 0
+      sql="$(cat)"
+      printf '%s\n---\n%s\n' "$*" "$sql" >> "$FAKE_STATE/db.log"
+      # With FAKE_PG_URL set, the SQL runs against a real Postgres instead of
+      # returning canned answers.
+      if [ -n "${FAKE_PG_URL:-}" ]; then
+        shift
+        args=()
+        while [ $# -gt 0 ]; do
+          case "$1" in -U|-d) shift ;; *) args+=("$1") ;; esac
+          shift
+        done
+        printf '%s\n' "$sql" | psql "$FAKE_PG_URL" "${args[@]}"
+        exit
+      fi
+      case "$sql" in
+        *"FROM runs WHERE"*) echo "2 0.5000 0" ;;
+        *"'generated_at'"*)
+          echo '{"generated_at":"2026-01-01 00:00","days":30,"submitted":0,"detentions":0,"totals":{"calls":0}}' ;;
+        *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;
+        *"memory_synced_at IS NULL"*)
+          echo '{"id":7,"repo":"demo","ticket":"PROJ-3","signature":"rubric failed","resolution":"note"}' ;;
+      esac
+      exit 0
+    fi
+    root="$FAKE_STATE/$name"
+    args=()
+    for arg in "$@"; do args+=("$(rewrite "$arg")"); done
+    if [ -n "$workdir" ]; then cd "$(rewrite "$workdir")"; fi
+    HOME="$root/home" exec "${args[@]}" ;;
+  *) echo "fake docker: unsupported command $cmd" >&2; exit 1 ;;
+esac

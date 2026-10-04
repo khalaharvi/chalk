@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# chalk: sandboxed, budget-capped Claude Code agent harness for GitLab repos.
+set -euo pipefail
+
+CHALK_VERSION="0.4.0"
+
+if [ -z "${CHALK_HOME:-}" ]; then
+  src="${BASH_SOURCE[0]}"
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+  done
+  CHALK_HOME="$(cd -P "$(dirname "$src")/.." && pwd)"
+fi
+export CHALK_HOME
+
+for module in common config db memory sandbox agent run fleet lifecycle dashboard setup; do
+  # shellcheck source=/dev/null
+  . "$CHALK_HOME/lib/$module.sh"
+done
+
+usage() {
+  cat <<USAGE
+chalk $CHALK_VERSION
+
+Setup
+  chalk doctor                 Check tools, auth, database and sandbox image
+  chalk init                   Add Chalk config, textbook and CI gates to this repo
+  chalk db up|down|psql        Manage the local telemetry database
+  chalk sandbox build          Build the default sandbox image
+  chalk memory up|down|sync    Manage the optional Hindsight lesson memory
+  chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
+
+Work
+  chalk new TICKET [title]     Create a worktree, branch and spec for one ticket
+  chalk check                  Check that the current spec is ready for an agent
+  chalk run [--detach]         Run the agent loop for the current worktree
+  chalk fleet EPIC [--plan F] [--yes]
+                               Split an epic into workstreams and run them in parallel
+  chalk status                 Show runs, cost and detentions for this repo
+  chalk logs TICKET [-f]       Show a run log
+  chalk dashboard [--days N]   Open the report card: spend, waste and what to tune
+
+Failure lifecycle
+  chalk office-hours -m NOTE [--detach]
+                               Record your fix on a detention branch and resume
+  chalk submit                 Push the current branch and open the merge request
+  chalk cleanup [--all]        Stop runs, remove sandboxes, worktrees, merged branches
+USAGE
+}
+
+main() {
+  local cmd="${1:-help}"
+  [ $# -gt 0 ] && shift
+  case "$cmd" in
+    doctor)        cmd_doctor "$@" ;;
+    init)          cmd_init "$@" ;;
+    db)            cmd_db "$@" ;;
+    sandbox)       cmd_sandbox "$@" ;;
+    memory)        cmd_memory "$@" ;;
+    prompts)       cmd_prompts "$@" ;;
+    new)           cmd_new "$@" ;;
+    check)         cmd_check "$@" ;;
+    run)           cmd_run "$@" ;;
+    fleet)         cmd_fleet "$@" ;;
+    status)        cmd_status "$@" ;;
+    logs)          cmd_logs "$@" ;;
+    dashboard)     cmd_dashboard "$@" ;;
+    office-hours)  cmd_office_hours "$@" ;;
+    submit)        cmd_submit "$@" ;;
+    cleanup)       cmd_cleanup "$@" ;;
+    version|--version|-v) echo "$CHALK_VERSION" ;;
+    help|--help|-h) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

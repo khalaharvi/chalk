@@ -1,0 +1,65 @@
+# Chalk merge request gates. Include from .gitlab-ci.yml:
+#
+#   include:
+#     - local: .gitlab/chalk.gitlab-ci.yml
+#
+# Jobs run only on merge requests from Chalk branches. They use the built-in
+# `test` and `.post` stages; if you define your own `stages:`, keep `test`.
+#
+# Pair this with GitLab merge request approval rules: these jobs prove the
+# gates passed, the approval records that a human reviewed the change.
+
+variables:
+  # Image with your toolchain for running the rubric.
+  CHALK_CI_IMAGE: node:22
+
+.chalk:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(chalk|tutoring)\//'
+  before_script:
+    - TICKET=$(echo "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1)
+
+# No unfinished checkpoints may be merged, and governance files must exist.
+chalk:spec:
+  extends: .chalk
+  stage: test
+  image: alpine:3.20
+  script:
+    - test -f CLAUDE.md
+    - test -f .chalk/textbook.md
+    - test -f "specs/$TICKET.md"
+    - |
+      if grep -nE '^[[:space:]]*- \[ \]' "specs/$TICKET.md"; then
+        echo "specs/$TICKET.md has unfinished checkpoints"
+        exit 1
+      fi
+
+# Re-runs the rubric outside the agent's sandbox.
+chalk:rubric:
+  extends: .chalk
+  stage: test
+  image: $CHALK_CI_IMAGE
+  script:
+    - SETUP_CMD=$(sed -n 's/^CHALK_SETUP_CMD=//p' .chalk/config)
+    - TEST_CMD=$(sed -n 's/^CHALK_TEST_CMD=//p' .chalk/config)
+    - test -n "$TEST_CMD"
+    - if [ -n "$SETUP_CMD" ]; then sh -c "$SETUP_CMD"; fi
+    - sh -c "$TEST_CMD"
+
+# Records that the gates passed. Runs only when CHALK_AUDIT_DB_URL is set as a
+# masked CI/CD variable. Table definition: share/ci-audit-schema.sql.
+chalk:audit:
+  extends: .chalk
+  stage: .post
+  image: postgres:16-alpine
+  rules:
+    - if: '$CHALK_AUDIT_DB_URL && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(chalk|tutoring)\//'
+  script:
+    - |
+      psql "$CHALK_AUDIT_DB_URL" -X -v ON_ERROR_STOP=1 \
+        -v project="$CI_PROJECT_PATH" -v ticket="$TICKET" \
+        -v mr="$CI_MERGE_REQUEST_IID" -v sha="$CI_COMMIT_SHA" \
+        -v pipeline="$CI_PIPELINE_ID" <<'SQL'
+      INSERT INTO chalk_audit (project, ticket, merge_request, commit_sha, pipeline_id, status)
+      VALUES (:'project', :'ticket', :'mr', :'sha', :'pipeline', 'gates_passed');
+      SQL
