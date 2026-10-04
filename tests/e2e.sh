@@ -190,6 +190,22 @@ check "a run stopped by SIGTERM exits 143" test "$status" -eq 143
 check "a stopped run removes its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-8"
 cd "$tmp/demo"
 
+# 3d'. A detached run shows as running as soon as the command returns.
+chalk new PROJ-30 Detached feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-30"
+git add -A && git commit -q -m "spec"
+rm -f "$FAKE_STATE/slow-started"
+FAKE_CLAUDE_MODE=slow chalk run --detach >/dev/null
+check "a detached run is listed as running straight away" \
+  sh -c 'chalk status | grep -q "^PROJ-30 *running"'
+for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
+check "the detached run gets past its own recorded pid to the agent" \
+  sh -c "test -e '$FAKE_STATE/slow-started' && ! grep -q 'already active' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-30/run.log'"
+read -r pid < "$XDG_STATE_HOME/chalk/demo/runs/PROJ-30/pid"
+kill -TERM "$pid"
+for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+cd "$tmp/demo"
+
 # 3e. A sandbox image whose bash is too old is refused before any agent runs.
 chalk new PROJ-13 Old image >/dev/null
 cd "$tmp/demo.worktrees/PROJ-13"

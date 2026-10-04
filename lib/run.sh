@@ -58,7 +58,11 @@ run_teardown() {
 run_claim() {
   need docker jq
   agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
-  ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid ${| run_pid "$RUN_DIR"; })"
+  # A detached run finds its own pid already recorded by the command that started it.
+  local pid
+  pid="${| run_pid "$RUN_DIR"; }"
+  [[ $pid == "$$" ]] || ! run_is_alive "$RUN_DIR" ||
+    die "a run for $RUN_TICKET is already active (pid $pid)"
   rm -rf "$RUN_IO"
   mkdir -p "$RUN_IO"
 }
@@ -269,6 +273,8 @@ cmd_run() {
 
   if [ "$detach" -eq 1 ]; then
     nohup "$BASH" "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1 &
+    # Recorded here as well as by the run itself, so `chalk status` sees it at once.
+    echo $! > "$RUN_DIR/pid"
     info "$RUN_TICKET running in background (pid $!). Follow with: chalk logs $RUN_TICKET -f"
     return 0
   fi
