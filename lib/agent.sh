@@ -22,21 +22,18 @@ prompt_known() {
   return 1
 }
 
-# prompt_file ROOT NAME: a repository can override any shipped prompt by
-# placing a file at .chalk/prompts/NAME.md.
+# prompt_file ROOT NAME -> REPLY: the prompt to use. A repository can
+# override any shipped prompt by placing a file at .chalk/prompts/NAME.md.
 prompt_file() {
-  if [ -f "$1/.chalk/prompts/$2.md" ]; then
-    printf '%s\n' "$1/.chalk/prompts/$2.md"
-  else
-    printf '%s\n' "$CHALK_HOME/share/prompts/$2.md"
-  fi
+  REPLY="$1/.chalk/prompts/$2.md"
+  [[ -f $REPLY ]] || REPLY="$CHALK_HOME/share/prompts/$2.md"
 }
 
 # agent_write_system IO_DIR ROOT: the system prompt appended to every call is
 # the harness rules followed by the repository's Textbook.
 agent_write_system() {
   local io="$1" root="$2"
-  cat "$(prompt_file "$root" system)" > "$io/system.md"
+  cat "${| prompt_file "$root" system; }" > "$io/system.md"
   if [ -f "$root/$CHALK_TEXTBOOK" ]; then
     {
       printf '\n<engineering_rules>\n'
@@ -106,7 +103,7 @@ agent_error() {
 cmd_prompts() {
   need git
   local root name
-  root="$(repo_root)"
+  root="${| repo_root; }"
   case "${1:-list}" in
     list)
       for name in "${CHALK_PROMPTS[@]}"; do

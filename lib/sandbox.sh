@@ -28,11 +28,12 @@ sandbox_ensure_image() {
   sandbox_build
 }
 
-# sandbox_name TICKET: a container name, with anything docker rejects as "-".
+# sandbox_name TICKET -> REPLY: a container name, with anything docker
+# rejects replaced by "-".
 sandbox_name() {
-  local name
-  name="chalk-sandbox-$(repo_name)-$1"
-  printf '%s\n' "${name//[^a-zA-Z0-9_.-]/-}"
+  repo_name
+  REPLY="chalk-sandbox-$REPLY-$1"
+  REPLY="${REPLY//[^a-zA-Z0-9_.-]/-}"
 }
 
 # sandbox_otel_args VAR TICKET: fills the array VAR with the docker flags
@@ -45,7 +46,7 @@ sandbox_otel_args() {
   __args=()
   [ -n "$CHALK_OTEL_ENDPOINT" ] || return 0
   endpoint="${CHALK_OTEL_ENDPOINT/$loopback///host.docker.internal}"
-  repo="$(repo_name)"
+  repo="${| repo_name; }"
   __args=(
     --add-host host.docker.internal:host-gateway
     -e CLAUDE_CODE_ENABLE_TELEMETRY=1
@@ -77,12 +78,12 @@ sandbox_start() {
 
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker run -d --name "$name" \
-    --label "chalk.repo=$(repo_name)" --label "chalk.ticket=$ticket" \
+    --label "chalk.repo=${| repo_name; }" --label "chalk.ticket=$ticket" \
     --user "$(id -u):$(id -g)" \
     --cap-drop ALL --security-opt no-new-privileges \
     --tmpfs "/work:rw,exec,mode=1777,size=$CHALK_TMPFS_SIZE" \
     --tmpfs "/home/chalk:rw,exec,mode=1777,size=1g" \
-    -v "$(git_common_dir):/src.git:ro" \
+    -v "${| git_common_dir; }:/src.git:ro" \
     -v "$io_dir:/chalk" \
     "${env_args[@]}" "${otel_args[@]}" \
     "$CHALK_IMAGE" sleep infinity >/dev/null

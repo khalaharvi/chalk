@@ -1,31 +1,64 @@
 # The repository Chalk is working in: its location and name, worktrees,
 # ticket keys and specs.
+#
+# Functions marked `-> REPLY` are value functions (docs/bash-style.md):
+# they set REPLY instead of printing, are called as ${| fn ARGS; }, and
+# never return non-zero; "no value" is an empty REPLY.
 
-# Root of the worktree we are standing in.
-repo_root() { git rev-parse --show-toplevel 2>/dev/null || die "not inside a git repository"; }
+# git_common_dir asks git once per working directory. Value functions run
+# in the calling shell, so the answer outlives the call; with $( ) every
+# call paid for a git process.
+declare -gA REPO_COMMON_DIRS=()
 
-# Directory holding the shared object store and refs for all worktrees.
-git_common_dir() { git rev-parse --path-format=absolute --git-common-dir; }
+# repo_root -> REPLY: root of the worktree we are standing in.
+repo_root() {
+  REPLY="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+}
 
-# Root of the primary checkout, even when called from a linked worktree.
-main_root() { dirname "$(git_common_dir)"; }
+# git_common_dir -> REPLY: directory holding the shared object store and
+# refs for all worktrees.
+git_common_dir() {
+  if [[ ! -v REPO_COMMON_DIRS[$PWD] ]]; then
+    REPO_COMMON_DIRS[$PWD]="$(git rev-parse --path-format=absolute --git-common-dir)"
+  fi
+  REPLY="${REPO_COMMON_DIRS[$PWD]}"
+}
 
-repo_name() { basename "$(main_root)"; }
+# main_root -> REPLY: root of the primary checkout, even from a linked worktree.
+main_root() {
+  git_common_dir
+  REPLY="${REPLY%/*}"
+  REPLY="${REPLY:-/}"
+}
 
-current_branch() { git rev-parse --abbrev-ref HEAD; }
+# repo_name -> REPLY
+repo_name() {
+  main_root
+  REPLY="${REPLY##*/}"
+}
 
-worktree_dir() { printf '%s.worktrees/%s\n' "$(main_root)" "$1"; }
+# current_branch -> REPLY
+current_branch() {
+  REPLY="$(git rev-parse --abbrev-ref HEAD)"
+}
 
-# Prints the Jira-style key embedded in a branch name, e.g. chalk/PROJ-12 -> PROJ-12.
+# worktree_dir TICKET -> REPLY: where `chalk new` puts the ticket's worktree.
+worktree_dir() {
+  main_root
+  REPLY="$REPLY.worktrees/$1"
+}
+
+# ticket_from_branch BRANCH -> REPLY: the Jira-style key in a branch name,
+# e.g. chalk/PROJ-12 -> PROJ-12, or empty when there is none.
 ticket_from_branch() {
   local re='([A-Z][A-Z0-9]+-[0-9]+)'
-  [[ "$1" =~ $re ]] || return 1
-  printf '%s\n' "${BASH_REMATCH[1]}"
+  REPLY=""
+  if [[ $1 =~ $re ]]; then REPLY="${BASH_REMATCH[1]}"; fi
 }
 
 is_ticket() {
   local re='^[A-Z][A-Z0-9]+-[0-9]+$'
-  [[ "$1" =~ $re ]]
+  [[ $1 =~ $re ]]
 }
 
 # Number of unchecked "- [ ]" checkpoints in a spec file.

@@ -5,12 +5,13 @@
 # Resolves the run for the current worktree into RUN_* globals.
 run_context() {
   need git
-  RUN_WT="$(repo_root)"
-  RUN_BRANCH="$(current_branch)"
-  RUN_TICKET="$(ticket_from_branch "$RUN_BRANCH")" ||
+  RUN_WT="${| repo_root; }"
+  RUN_BRANCH="${| current_branch; }"
+  RUN_TICKET="${| ticket_from_branch "$RUN_BRANCH"; }"
+  [[ -n $RUN_TICKET ]] ||
     die "branch '$RUN_BRANCH' has no ticket key (expected e.g. chalk/PROJ-123)"
   RUN_SPEC="$RUN_WT/specs/$RUN_TICKET.md"
-  RUN_DIR="$(run_dir "$RUN_TICKET")"
+  RUN_DIR="${| run_dir "$RUN_TICKET"; }"
   RUN_IO="$RUN_DIR/io"
   RUN_SANDBOX=""
   RUN_LOOP=0
@@ -33,7 +34,7 @@ run_log() { info "[$RUN_TICKET] $*"; }
 run_prompts_version() {
   local name
   {
-    for name in "${CHALK_PROMPTS[@]}"; do cat "$(prompt_file "$RUN_WT" "$name")"; done
+    for name in "${CHALK_PROMPTS[@]}"; do cat "${| prompt_file "$RUN_WT" "$name"; }"; done
     cat "$RUN_WT/$CHALK_TEXTBOOK" 2>/dev/null || true
   } | git hash-object --stdin | cut -c1-8
 }
@@ -57,7 +58,7 @@ run_teardown() {
 run_claim() {
   need docker jq
   agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
-  ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid $(run_pid "$RUN_DIR"))"
+  ! run_is_alive "$RUN_DIR" || die "a run for $RUN_TICKET is already active (pid ${| run_pid "$RUN_DIR"; })"
   rm -rf "$RUN_IO"
   mkdir -p "$RUN_IO"
 }
@@ -71,7 +72,7 @@ run_open_sandbox() {
   sandbox_ensure_image
   agent_write_system "$RUN_IO" "$RUN_WT"
 
-  RUN_SANDBOX="$(sandbox_name "$RUN_TICKET")"
+  RUN_SANDBOX="${| sandbox_name "$RUN_TICKET"; }"
   RUN_BASE="$(git -C "$RUN_WT" rev-parse HEAD)"
   run_log "starting sandbox $RUN_SANDBOX on $RUN_BRANCH"
   sandbox_start "$RUN_SANDBOX" "$RUN_TICKET" "$RUN_IO"
@@ -93,7 +94,7 @@ run_build_prompt() {
   if [ -n "$feedback" ]; then printf '<failure>\n%s\n</failure>\n' "$feedback"; fi
 
   printf '\n'
-  cat "$(prompt_file "$RUN_WT" "$mode")"
+  cat "${| prompt_file "$RUN_WT" "$mode"; }"
 }
 
 run_rubric() {
@@ -121,7 +122,7 @@ run_spec_check() {
 
   {
     printf '<spec_file>specs/%s.md</spec_file>\n\n' "$RUN_TICKET"
-    cat "$(prompt_file "$RUN_WT" spec-check)"
+    cat "${| prompt_file "$RUN_WT" spec-check; }"
   } > "$RUN_IO/spec-check.prompt.md"
   run_call spec-check "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[spec]}" read < "$RUN_IO/spec-check.prompt.md" || true
   sandbox_reset "$RUN_SANDBOX"
@@ -150,7 +151,7 @@ run_review() {
   {
     printf '<spec_file>specs/%s.md</spec_file>\n' "$RUN_TICKET"
     printf '<base_ref>origin/%s</base_ref>\n\n' "$CHALK_BASE_BRANCH"
-    cat "$(prompt_file "$RUN_WT" review)"
+    cat "${| prompt_file "$RUN_WT" review; }"
   } > "$RUN_IO/review.prompt.md"
   run_call review "$CHALK_REVIEW_MODEL" "${CHALK_SCHEMA[review]}" read < "$RUN_IO/review.prompt.md" || true
   sandbox_reset "$RUN_SANDBOX"
@@ -366,7 +367,7 @@ cmd_status() {
   local runs dir ticket state
   local -A summary
   local -a detentions
-  runs="$(state_dir)/runs"
+  runs="${| state_dir; }/runs"
   printf '%-14s %-8s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
   for dir in "$runs"/*/; do
     ticket="$(basename "$dir")"
@@ -381,7 +382,7 @@ cmd_status() {
 cmd_logs() {
   local ticket="${1:-}" log
   [ -n "$ticket" ] || die "usage: chalk logs TICKET [-f]"
-  log="$(run_dir "$ticket")/run.log"
+  log="${| run_dir "$ticket"; }/run.log"
   [ -f "$log" ] || die "no background run log for $ticket"
   if [ "${2:-}" = "-f" ]; then exec tail -f "$log"; fi
   cat "$log"

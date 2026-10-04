@@ -47,7 +47,7 @@ db_record_call() {
   local seconds="$6" lessons="$7" result="$8"
   local -A usage
   agent_usage "$result" usage
-  db_sql -v repo="$(repo_name)" -v ticket="$RUN_TICKET" -v branch="$RUN_BRANCH" \
+  db_sql -v repo="${| repo_name; }" -v ticket="$RUN_TICKET" -v branch="$RUN_BRANCH" \
     -v loop="$RUN_LOOP" -v kind="$kind" -v status="$status" -v rubric_exit="$rubric_exit" \
     -v progressed="$progressed" -v model="${model:-default}" -v prompts="$RUN_PROMPTS" \
     -v cost="$(agent_cost "$result")" -v budget="$CHALK_BUDGET_USD" -v seconds="$seconds" \
@@ -65,7 +65,7 @@ SQL
 
 # db_event TICKET KIND: records a ticket milestone.
 db_event() {
-  db_sql -v repo="$(repo_name)" -v ticket="$1" -v kind="$2" <<'SQL'
+  db_sql -v repo="${| repo_name; }" -v ticket="$1" -v kind="$2" <<'SQL'
 INSERT INTO events (repo, ticket, kind) VALUES (:'repo', :'ticket', :'kind');
 SQL
 }
@@ -77,7 +77,7 @@ db_dashboard() {
 
 db_open_lesson() {
   local ticket="$1" signature="$2"
-  db_sql -v repo="$(repo_name)" -v ticket="$ticket" -v signature="$signature" <<'SQL'
+  db_sql -v repo="${| repo_name; }" -v ticket="$ticket" -v signature="$signature" <<'SQL'
 INSERT INTO lessons (repo, ticket, signature) VALUES (:'repo', :'ticket', :'signature');
 SQL
 }
@@ -86,7 +86,7 @@ SQL
 # LESSON is the generalised rule distilled from the note; it may be empty.
 db_resolve_lesson() {
   local ticket="$1" resolution="$2" who="$3" lesson="${4:-}"
-  db_sql -v repo="$(repo_name)" -v ticket="$ticket" -v resolution="$resolution" \
+  db_sql -v repo="${| repo_name; }" -v ticket="$ticket" -v resolution="$resolution" \
     -v who="$who" -v lesson="$lesson" <<'SQL'
 UPDATE lessons
    SET resolution = :'resolution', lesson = nullif(:'lesson', ''),
@@ -99,7 +99,7 @@ SQL
 
 # The failure text of the newest unresolved lesson for a ticket.
 db_pending_signature() {
-  db_sql -v repo="$(repo_name)" -v ticket="$1" <<'SQL'
+  db_sql -v repo="${| repo_name; }" -v ticket="$1" <<'SQL'
 SELECT signature FROM lessons
  WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NULL
  ORDER BY id DESC LIMIT 1;
@@ -142,7 +142,7 @@ SQL
 db_ticket_summary() {
   local -n __summary=$2
   local loops="${3:-?}" cost="${3:-?}" fixes="${3:-?}" row
-  if row="$(db_sql -F ' ' -v repo="$(repo_name)" -v ticket="$1" 2>/dev/null <<'SQL'
+  if row="$(db_sql -F ' ' -v repo="${| repo_name; }" -v ticket="$1" 2>/dev/null <<'SQL'
 SELECT count(*) FILTER (WHERE loop > 0), coalesce(sum(cost_usd), 0),
        (SELECT count(*) FROM lessons
          WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NOT NULL)

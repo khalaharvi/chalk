@@ -7,7 +7,7 @@ office_hours_distill() {
   local note="$1" io sandbox signature start fix started lesson
   [ "$CHALK_DISTILL" = "true" ] && agent_auth_present || return 0
   io="$RUN_DIR/distill"
-  sandbox="$(sandbox_name "$RUN_TICKET-distill")"
+  sandbox="${| sandbox_name "$RUN_TICKET-distill"; }"
   rm -rf "$io"
   mkdir -p "$io"
 
@@ -24,7 +24,7 @@ office_hours_distill() {
     printf '<failure>\n%s\n</failure>\n' "$signature"
     printf '<engineer_note>\n%s\n</engineer_note>\n' "$note"
     printf '<fix_diff>\n%s\n</fix_diff>\n\n' "$fix"
-    cat "$(prompt_file "$RUN_WT" distill)"
+    cat "${| prompt_file "$RUN_WT" distill; }"
   } | agent_call "$sandbox" "$io" distill "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[lesson]}" read || true
   sandbox_stop "$sandbox"
 
@@ -89,13 +89,13 @@ cmd_cleanup() {
   local root runs dir ref kept=0
   local -a containers refs
   local -a patterns=(refs/heads/chalk refs/heads/tutoring refs/heads/detention)
-  root="$(main_root)"
-  runs="$(state_dir)/runs"
+  root="${| main_root; }"
+  runs="${| state_dir; }/runs"
 
   for dir in "$runs"/*/; do
-    if run_is_alive "${dir%/}"; then kill "$(run_pid "$dir")" 2>/dev/null || true; fi
+    if run_is_alive "${dir%/}"; then kill "${| run_pid "$dir"; }" 2>/dev/null || true; fi
   done
-  mapfile -t containers < <(docker ps -aq --filter "label=chalk.repo=$(repo_name)")
+  mapfile -t containers < <(docker ps -aq --filter "label=chalk.repo=${| repo_name; }")
   if (( ${#containers[@]} )); then
     docker rm -f "${containers[@]}" >/dev/null
   fi
@@ -125,6 +125,6 @@ cmd_cleanup() {
   fi
 
   rm -rf "$runs"
-  if [ "$all" -eq 1 ]; then rm -rf "$(state_dir)"; fi
+  if [ "$all" -eq 1 ]; then rm -rf "${| state_dir; }"; fi
   info "cleanup complete (telemetry database untouched)"
 }

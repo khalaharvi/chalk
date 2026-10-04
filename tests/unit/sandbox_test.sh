@@ -5,10 +5,10 @@ set -euo pipefail
 . "$(dirname "$0")/testlib.sh"
 load core/log core/runtime sandbox
 
-repo_name() { echo "my repo/x"; }
+repo_name() { REPLY="my repo/x"; }
 
 check "sandbox names replace characters docker rejects" \
-  test "$(sandbox_name PROJ-1)" = "chalk-sandbox-my-repo-x-PROJ-1"
+  test "${| sandbox_name PROJ-1; }" = "chalk-sandbox-my-repo-x-PROJ-1"
 
 declare -a args
 CHALK_OTEL_ENDPOINT="" CHALK_OTEL_PROTOCOL=grpc CHALK_OTEL_SIGNALS=traces

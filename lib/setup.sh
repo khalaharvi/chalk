@@ -59,7 +59,7 @@ init_copy() {
 cmd_init() {
   need git
   local root
-  root="$(repo_root)"
+  root="${| repo_root; }"
   cd "$root" || die "cannot enter $root"
 
   init_copy config               .chalk/config

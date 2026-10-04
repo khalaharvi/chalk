@@ -35,7 +35,7 @@ check "agent_usage leaves the caller's variables alone" test "$values" = "untouc
 # Stand-ins for the database: db_sql answers with $db_row, or fails when
 # it is empty.
 db_row=""
-repo_name() { echo demo; }
+repo_name() { REPLY=demo; }
 db_sql() { cat >/dev/null; [[ -n $db_row ]] && echo "$db_row"; }
 
 declare -A summary
