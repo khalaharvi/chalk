@@ -2,7 +2,7 @@
 
 | | |
 | :-- | :-- |
-| Status | Draft for review |
+| Status | Implemented on `spec/bash-5.3`; awaiting CI |
 | Target release | 0.5.0 (breaking) |
 | Replaces | The bash 3.2 rule in `CONTRIBUTING.md` |
 
@@ -72,6 +72,24 @@ the system bash 5.2.21 as a control, before this spec was written.
 | `local -n out=$1` called with a variable named `out` | Circular-reference warning; assignment goes to the wrong variable |
 | `shopt -s array_expand_once` vs subscript injection | No difference found in 5.3.0 for the forms Chalk would use, so it is not adopted |
 
+### Found during implementation
+
+Checked against bash 5.3.20 (5.3 with the official patches), which CI builds.
+One precaution is not verified here, since no bash 3.2 was available: the
+guard passes arguments as `${1+"$@"}`, the form that is safe for an empty
+argument list under `set -u` in every bash. The macOS job exercises the
+guard under the real 3.2.
+
+| Fact | Consequence |
+| :-- | :-- |
+| With `inherit_errexit`, a `${\| f; }` whose `f` fails **ends the shell even inside `&&`, `\|\|` or `if`**, and fires the ERR trap. `$(f)` in the same place does neither. | Value functions never return non-zero; "no value" is an empty `REPLY`. Linted. |
+| `BASH_COMMAND` in an ERR trap after a deliberate `return 1` is `return 1`, not the call | The failure report skips `return`, so detentions and failed checks stay quiet |
+| `declare -A` in a file sourced from inside a function creates a local | Module-level tables use `declare -gA` |
+| `source -p DIR NAME` rejects a `NAME` containing `/`, and never falls back to the working directory | One `source -p` loop per layer directory |
+| ShellCheck cannot see a nameref's type, so bare keys in `__ref=([key]=…)` read as arithmetic | Keys assigned through a nameref are quoted |
+| `wait -n -p pid` also returns jobs that finished before the call; background jobs do not run the parent's EXIT trap | `jobs_wait` needs no bookkeeping beyond pid → name |
+| An `exec` inside a loop reading a heredoc on stdin passes that heredoc to the new process as its stdin | The guard reads its candidate list on fd 3 and closes it on `exec` |
+
 ## Target layout
 
 Files are arranged in three layers. A file may use anything from a lower
@@ -82,8 +100,8 @@ bin/chalk                    entry point: resolve CHALK_HOME, run the guard, loa
 
 lib/core/                    layer 1: shell runtime, no Chalk knowledge
   guard.sh                   the ONLY file that must parse under bash 3.2; finds bash >= 5.3 and re-execs
-  runtime.sh                 shell options, ERR and signal traps, `need`
-  log.sh                     info, warn, die, quoting values for display
+  runtime.sh                 shell options, ERR and signal traps, `need`, `bash_at_least`
+  log.sh                     info, warn, die
   jobs.sh                    run named background jobs and collect their results
 
 lib/                         layer 2: Chalk domain
@@ -99,13 +117,18 @@ share/sandbox/               runs INSIDE the container, bash 5.2
   Dockerfile
   scripts/clone.sh  commit.sh  reset.sh  export.sh
 
+scripts/
+  install-bash.sh            builds the pinned, patched bash 5.3 (CI and contributors)
+  lint-conventions.sh        the conventions ShellCheck cannot check
+  check-sandbox-syntax.sh    parses the sandbox scripts with bash 5.2
+
 tests/
   e2e.sh                     unchanged role: the whole workflow against fakes
-  unit/                      new: focused tests for lib/core and lib/repo
+  unit/                      new: one *_test.sh per module, sharing testlib.sh
   fakes/
 
 docs/
-  bash-style.md              the conventions below, for contributors
+  bash-style.md              the conventions, for contributors
   specs/bash-5.3.md          this file
 ```
 
@@ -117,7 +140,7 @@ What moves where:
 | `lib/common.sh` `need` | `lib/core/runtime.sh` |
 | `lib/common.sh` repo, ticket and spec helpers | `lib/repo.sh` |
 | `lib/common.sh` `state_dir` `run_dir` `run_is_alive` | `lib/state.sh` |
-| Inline `bash -c '…'` scripts in `sandbox_clone`, `sandbox_commit`, `sandbox_reset`, `sandbox_export` | `share/sandbox/scripts/*.sh`, run with `docker exec -i … bash -s -- ARGS < script` |
+| Inline `bash -c '…'` scripts in `sandbox_clone`, `sandbox_commit`, `sandbox_reset`, `sandbox_export` | `share/sandbox/scripts/*.sh`, run by `sandbox_script` as `docker exec … bash -c "$(<script)" chalk ARGS` |
 | Module list in `bin/chalk` | Same loop, ordered by layer, using `source -p` |
 
 `lib/common.sh` is removed. The container scripts become real files so they
@@ -126,88 +149,28 @@ boundary is enforced.
 
 ## Conventions
 
-These go into `docs/bash-style.md` word for word. Each rule names the
-feature it governs and its minimum version.
+The conventions live in [`docs/bash-style.md`](../bash-style.md), the
+document contributors use. In summary:
 
-### C1. Functions return values one of three ways
-
-| Kind | How it returns | How it is called | Example |
-| :-- | :-- | :-- | :-- |
-| **Value** | Sets `REPLY`, prints nothing | `x=${\| repo_name; }` (5.3) | `repo_name`, `run_dir`, `prompt_file` |
-| **Fill** | Writes into a caller-named variable through `local -n` (4.3) | `agent_usage "$file" usage` | `agent_usage`, `sandbox_otel_args`, `db_ticket_summary` |
-| **Stream** | Prints to stdout | piped, redirected, or `$( )` | `run_build_prompt`, `db_sql`, anything feeding `jq` |
-
-A value function's header comment ends with `-> REPLY`. A fill function's
-header names the variable type it fills (`-> assoc`, `-> array`).
-
-### C2. `${ … }` and `${| … }` (5.3)
-
-- They run in the current shell. **Never `cd`** inside one; use `$( )` or a
-  `( … )` subshell when a directory change is needed.
-- **Never read a file with `<`** inside one; use `read -r` or `$(<file)`.
-- `$( )` remains correct for external commands. Use the new forms only for
-  calls to Chalk's own functions, where they save a fork.
-
-### C3. Namerefs (4.3)
-
-- A nameref local starts with two underscores: `local -n __out=$1`.
-- No caller variable may start with two underscores. Lint enforces both.
-
-### C4. Collections (4.0+)
-
-- A list of words is an indexed array, never a space-separated string.
-- A lookup table is an associative array with `declare -A`. Membership is
-  tested with `[[ -v table[$key] ]]`.
-- Arrays expand as `"${a[@]}"`. Empty arrays are safe under `set -u` in
-  5.x, so the `${a[@]+"${a[@]}"}` workaround is not used.
-- Lines from a command go into an array with `mapfile -t a < <(cmd)`.
-
-### C5. Strings and time (5.x)
-
-| Use | Not |
+| Rule | Gist |
 | :-- | :-- |
-| `${v@U}`, `${v@L}` | `tr '[:lower:]' '[:upper:]'` |
-| `${v//[^a-zA-Z0-9_.-]/-}` | `tr -c 'a-zA-Z0-9_.-' '-'` |
-| extglob `${v/@(a\|b)/c}` or `[[ =~ ]]` + `BASH_REMATCH` | a `sed` call on a single value |
-| `$EPOCHSECONDS` | `$(date +%s)` |
-| `read -r v < file` for one line | `$(cat file)` |
-| `${v@Q}` when showing a value the user may paste into a shell | bare `$v` |
+| C1 | A function returns a result by setting `REPLY` (value), filling a caller-named variable (fill), or printing (stream). Value functions never return non-zero. |
+| C2 | No `cd` and no `< file` inside `${ … }` or `${\| … }`. |
+| C3 | Nameref locals start with `__`; keys assigned through them are quoted. |
+| C4 | Lists are arrays, tables are `declare -gA`, lines are read with `mapfile`. |
+| C5 | Parameter expansion, `$EPOCHSECONDS` and `read -r` instead of `tr`, `sed`, `date` and `cat`. |
+| C6 | `lib/core/runtime.sh` owns shell options, the failure report and signal exit codes. |
+| C7 | Background work only through `lib/core/jobs.sh`. |
+| C8 | `guard.sh` is bash 3.2, sandbox scripts are bash 5.2, everything else 5.3; first lines say so. |
 
-### C6. Errors and signals (5.3)
-
-- `lib/core/runtime.sh` sets `set -Eeuo pipefail` and
-  `shopt -s inherit_errexit nullglob extglob globskipdots`.
-- One ERR trap prints the failing command and the function stack
-  (`$BASH_COMMAND`, `FUNCNAME`, `BASH_LINENO`).
-- One signal handler exits with `128 + BASH_TRAPSIG`.
-- `die` is the only way a function ends Chalk on purpose.
-
-### C7. Background work (5.1)
-
-Only through `lib/core/jobs.sh`:
-
-```bash
-jobs_spawn db     db_up
-jobs_spawn image  sandbox_ensure_image
-declare -A results
-jobs_wait results || die "start-up failed: ${ jobs_failed results; }"
-```
-
-Each job's output goes to its own log, which is printed only if the job
-fails. `die` inside a job ends only that job; the caller reports it by name.
-
-### C8. Version boundaries
-
-- `lib/core/guard.sh` is bash 3.2 syntax and says so in its first line.
-- `share/sandbox/scripts/*.sh` is bash 5.2 syntax and says so in its first line.
-- Everything else is bash 5.3.
+`scripts/lint-conventions.sh` checks C1 (value functions), C2, C3
+(prefixes) and C8; ShellCheck and the unit tests cover the rest.
 
 ## Feature adoption
 
 | Feature | Min | Where | Replaces |
 | :-- | :-- | :-- | :-- |
 | `${\| fn; }` value substitution | 5.3 | Every value function's callers (C1) | `$(fn)` forks; enables memoizing `repo_name`, which `db_*` and `sandbox_name` call repeatedly |
-| `${ fn; }` substitution | 5.3 | Callers of Chalk functions that print short output | `$(fn)` forks |
 | `$BASH_TRAPSIG` | 5.3 | `lib/core/runtime.sh` signal handler | `trap 'exit 130' INT TERM` (`run.sh:67`), which exits 130 for TERM |
 | `source -p` | 5.3 | Module loading in `bin/chalk` | `. "$CHALK_HOME/lib/$module.sh"` |
 | `GLOBSORT=-mtime` | 5.3 | `chalk status` | Unsorted listing; most recently active runs now come first |
@@ -219,10 +182,10 @@ fails. `die` inside a job ends only that job; the caller reports it by name.
 | `mapfile -t` | 4.0 | `memory_sync`, `cmd_fleet`, `cmd_cleanup`, `cmd_status` | `while read … <<ROWS $(…)`, `wc -l \| tr -d ' '` |
 | `[[ -v name ]]` | 4.2 | `load_config` | `${!key+set}` |
 | `${v@U}` | 5.1 | `sandbox_otel_args` | `tr` |
-| `${v@Q}` | 4.4 | Detention instructions in `run_detain`, error messages that echo paths | Unquoted values in copy-paste commands |
+| `${v@Q}` | 4.4 | Detention instructions in `run_detain` | Unquoted values in copy-paste commands |
 | `$EPOCHSECONDS` | 5.0 | `run_detain`, `cmd_office_hours` | `$(date +%s)` |
 | `wait -n -p` | 5.1 | `lib/core/jobs.sh` | Sequential start-up in `run_open_sandbox` |
-| `patsub_replacement` (default on) | 5.2 | Dashboard data escaping | `sed 's\|</\|<\\/\|g'` + temp file + `awk` splice |
+| `${v//pattern/replacement}` + `mapfile` | 4.0 | Dashboard data escaping and template splice | `sed 's\|</\|<\\/\|g'` + temp file + `awk` splice |
 
 ### Considered and not adopted
 
@@ -234,6 +197,8 @@ fails. `die` inside a job ends only that job; the caller reports it by name.
 | `compgen -V` (5.3) | Chalk has no shell completion. Revisit if `chalk completion` is added. |
 | `EPOCHREALTIME` (5.0) | `runs.duration_s` is `INT`; sub-second timing needs a schema change first. |
 | `coproc` (4.0) | Nothing needs a two-way pipe. |
+| `${ fn; }` (5.3) | Chalk's own functions now set `REPLY` (`${\| }`) or feed external tools, which fork anyway. No caller was left that `${ }` would improve. |
+| `patsub_replacement` (5.2) | On by default, but no replacement Chalk makes uses `&`. |
 
 ## Bootstrap and packaging
 
@@ -242,15 +207,19 @@ fails. `die` inside a job ends only that job; the caller reports it by name.
 `bin/chalk` resolves `CHALK_HOME` (existing 3.2-safe code), sources the
 guard, and only then sources anything else. The guard:
 
-1. Returns immediately if `BASH_VERSINFO` is 5.3 or newer.
+1. Returns if `BASH_VERSINFO` is 5.3 or newer, first unsetting
+   `CHALK_REEXECED` so a Chalk this one starts runs its own guard.
 2. Stops with an error if `CHALK_REEXECED` is already set (prevents loops).
 3. Tries, in order: `$CHALK_BASH`, `/opt/homebrew/bin/bash`,
    `/usr/local/bin/bash`, `/home/linuxbrew/.linuxbrew/bin/bash`, then every
    `bash` on `PATH`. A candidate qualifies if
    `"$c" -c 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'` reports ≥ 5.3.
-4. Runs `CHALK_REEXECED=1 exec "$c" "$0" "$@"` with the first match.
+4. Exports `CHALK_REEXECED=1` and runs `exec "$c" "$0" ${1+"$@"}` with the
+   first match, keeping stdin (the candidate list is read on fd 3).
 5. Otherwise stops with:
-   `chalk needs bash >= 5.3 (this is X.Y). Install it with 'brew install bash', or set CHALK_BASH.`
+   `chalk needs bash >= 5.3 (this is X.Y). Install it with 'brew install bash', or set CHALK_BASH to a bash 5.3 or newer.`
+
+Chalk starts its own background runs with `"$BASH"`, so they skip the search.
 
 ### Homebrew formula (`packaging/chalk.rb.in`)
 
@@ -280,10 +249,15 @@ guard, and only then sources anything else. The guard:
 
 | Job | Change |
 | :-- | :-- |
-| `lint-and-test` (Ubuntu) | `setup-bash` and `setup-shellcheck` (0.11.0, sha256-pinned); `make check` under 5.3. `make lint-floors` calls `/usr/bin/bash`, which is 5.2 on `ubuntu-latest`. |
-| `macos` | `setup-bash` (Homebrew's bash); `make test` under it. |
-| `macos-guard` (new) | Run `/bin/bash bin/chalk version` with Homebrew bash installed (must re-exec), and with `PATH` and `CHALK_BASH` stripped of any new bash (must print the guard error). |
+| `lint-and-test` (Ubuntu) | `setup-bash` and `setup-shellcheck` (0.11.0, sha256-pinned); `make check lint-sandbox` under 5.3. `lint-sandbox` parses the sandbox scripts with `/usr/bin/bash`, which is 5.2 on `ubuntu-latest`. |
+| `macos` | `setup-bash` (Homebrew's bash); `make test` under it. The guard unit tests run here against `/bin/bash` 3.2, the real old bash. |
 | `postgres` | `setup-bash`; `make test-db` under 5.3. |
+| `release` (publish) | `setup-bash` and `setup-shellcheck` before its `make check`. |
+
+A separate `macos-guard` job, as first planned, turned out unnecessary:
+`tests/unit/guard_test.sh` runs the guard under whichever older system bash
+the machine has (3.2 on macOS, 5.2 on Ubuntu), including the real
+`bin/chalk` entry point.
 
 Two composite actions keep the workflow short and the setup in one place:
 
@@ -298,12 +272,10 @@ Two composite actions keep the workflow short and the setup in one place:
 `scripts/install-bash.sh PREFIX` also serves contributors without
 Homebrew: build once, then set `CHALK_BASH=PREFIX/bin/bash`.
 
-`make lint-floors` (new) runs `bash -n` under the bash on `PATH` (5.2 in
-CI) over `share/sandbox/scripts/*.sh`, and greps for convention
-violations a parser cannot see: nameref locals without the `__` prefix,
-`${ <`, and `cd` inside `${ … }` on the same line.
-
-`make test` runs `tests/unit/*.sh` before `tests/e2e.sh`.
+`make lint` runs ShellCheck (now with `-x`, to follow the test helpers)
+and `scripts/lint-conventions.sh`. `make lint-sandbox` runs
+`scripts/check-sandbox-syntax.sh`, which refuses to run with anything but a
+bash 5.2. `make test` runs `tests/unit/*_test.sh` before `tests/e2e.sh`.
 
 ## Behaviour changes
 
@@ -315,7 +287,12 @@ All intentional, all called out in the 0.5.0 release notes:
 4. An unexpected command failure prints the failing command and call stack.
 5. `chalk status` lists the most recently active runs first.
 6. Start-up of the database, sandbox image and lesson memory happens in
-   parallel; a failure names the step that failed.
+   parallel; a failure names the service that failed.
+7. Lesson memory failing to start for any reason, including a missing
+   `curl`, skips memory with a warning; a missing `curl` used to stop the
+   run.
+8. `chalk dashboard` reports a failed database read as "could not read
+   telemetry for the dashboard", like bad data.
 
 ## Risks
 
@@ -333,24 +310,25 @@ Each checkpoint is one reviewable commit (or a small series), proven by a
 test, with `make check` green. The order keeps moves, behaviour changes and
 refactors in separate commits.
 
-- [ ] **1. Toolchain.** `setup-bash` and `setup-shellcheck` actions, `scripts/install-bash.sh`; every CI job runs under bash 5.3. Proof: each job prints `bash --version` 5.3.x and passes. (Done locally under 5.3.20; ticks when CI is green.)
-- [ ] **2. Layout, moves only.** Create `lib/core/`, split `lib/common.sh` into `core/log.sh`, `core/runtime.sh`, `repo.sh`, `state.sh`; move sandbox snippets to `share/sandbox/scripts/`. No content changes beyond the moves and the module list. Proof: e2e green; diff is moves only.
-- [ ] **3. Guard.** Add `lib/core/guard.sh` and source it first from `bin/chalk`. Proof: `tests/unit/guard.sh` covers re-exec via `CHALK_BASH`, loop prevention, and the error message; the `macos-guard` job passes.
-- [ ] **4. Formula.** `depends_on "bash"`, shebang pinned, `chalk doctor` reports host bash. Proof: formula `test do` passes in the macOS job.
-- [ ] **5. Runtime settings.** Shell options, ERR trap, `BASH_TRAPSIG` handler in `core/runtime.sh`; remove now-dead glob guards. Proof: new e2e cases for a TERM'd run exiting 143 and for the ERR trace.
-- [ ] **6. Config table.** `CHALK_CONFIG_DEFAULTS` associative array drives key checks and defaults. Proof: unit tests for unknown-key warning, environment-over-file precedence, every default.
-- [ ] **7. Collections and fill functions.** Arrays for lists, `CHALK_SCHEMA`, namerefs for `agent_usage`, `sandbox_otel_args`, `db_ticket_summary`; drop both `SC2086` disables and the empty-array workarounds. Proof: unit test of `agent_usage` on fixture JSON; e2e green.
-- [ ] **8. Strings and time.** Apply C5 throughout. Proof: unit tests for `sandbox_name` and OTel endpoint rewriting; e2e green.
-- [ ] **9. Value functions.** Convert to `REPLY` + `${| }`, memoize repository identity. Proof: unit test with a counting `git` fake shows `repo_name` runs git once per process.
-- [ ] **10. Sandbox floor.** Version check in `sandbox_start`, `make lint-floors`, docs for custom images. Proof: fake `docker` reporting bash 5.1 makes `chalk run` stop with the documented message.
-- [ ] **11. Smaller 5.3 features.** `source -p` loading, `GLOBSORT` in `chalk status`, dashboard escaping without `sed`/`awk`. Proof: e2e asserts status ordering and dashboard output.
-- [ ] **12. Background jobs.** `lib/core/jobs.sh` and parallel start-up in `run_open_sandbox`. Proof: `tests/unit/jobs.sh` covers success, a named failure and log capture; e2e green.
-- [ ] **13. Docs and release.** `docs/bash-style.md` from *Conventions*; `CONTRIBUTING.md` points to it instead of the 3.2 rule; README install notes; `CHALK_VERSION=0.5.0`; release notes list *Behaviour changes*.
+- [x] **1. Toolchain.** `setup-bash` and `setup-shellcheck` actions, `scripts/install-bash.sh`; every CI job runs under bash 5.3. Proof: each job prints `bash --version` 5.3.x and passes. (Verified locally under 5.3.20 and with actionlint; CI confirms on the pull request.)
+- [x] **2. Layout, moves only.** Create `lib/core/`, split `lib/common.sh` into `core/log.sh`, `core/runtime.sh`, `repo.sh`, `state.sh`; move sandbox snippets to `share/sandbox/scripts/`. No content changes beyond the moves and the module list. Proof: e2e green; diff is moves only.
+- [x] **3. Guard.** Add `lib/core/guard.sh` and source it first from `bin/chalk`. Proof: `tests/unit/guard_test.sh` covers re-exec via `CHALK_BASH`, arguments, stdin, the marker not leaking, the real entry point, loop prevention, and the error message.
+- [x] **4. Formula.** `depends_on "bash"`, shebang pinned, `chalk doctor` reports host bash. Proof: formula `test do` passes in the macOS job.
+- [x] **5. Runtime settings.** Shell options, ERR trap, `BASH_TRAPSIG` handler in `core/runtime.sh`; remove now-dead glob guards. Proof: new e2e cases for a TERM'd run exiting 143 and for the ERR trace.
+- [x] **6. Config table.** `CHALK_CONFIG_DEFAULTS` associative array drives key checks and defaults. Proof: unit tests for unknown-key warning, environment-over-file precedence, every default.
+- [x] **7. Collections and fill functions.** Arrays for lists, `CHALK_SCHEMA`, namerefs for `agent_usage`, `sandbox_otel_args`, `db_ticket_summary`; drop both `SC2086` disables and the empty-array workarounds. Proof: unit test of `agent_usage` on fixture JSON; e2e green.
+- [x] **8. Strings and time.** Apply C5 throughout. Proof: unit tests for `sandbox_name` and OTel endpoint rewriting; e2e green.
+- [x] **9. Value functions.** Convert to `REPLY` + `${| }`, memoize repository identity. Proof: unit test with a counting `git` fake shows `repo_name` runs git once per process.
+- [x] **10. Sandbox floor.** Version check in `sandbox_start`, `make lint-sandbox`, `scripts/lint-conventions.sh`, docs for custom images. Proof: fake `docker` reporting bash 5.1 makes `chalk run` stop with the documented message.
+- [x] **11. Smaller 5.3 features.** `source -p` loading, `GLOBSORT` in `chalk status`, dashboard escaping without `sed`/`awk`. Proof: e2e asserts status ordering and dashboard output.
+- [x] **12. Background jobs.** `lib/core/jobs.sh` and parallel start-up in `run_open_sandbox`. Proof: `tests/unit/jobs_test.sh` covers ordering, output, a named failure and `die` inside a job; e2e covers start-up logs and a broken database.
+- [x] **13. Docs.** `docs/bash-style.md`; `CONTRIBUTING.md` points to it instead of the 3.2 rule; README install notes. The version moves to 0.5.0 when `scripts/release.sh 0.5.0` runs, which sets `CHALK_VERSION` and tags; the release notes list *Behaviour changes*.
 
 ## Definition of done
 
 - All checkpoints ticked, CI green on every job.
-- `grep -rn 'bash 3.2' .` finds only `lib/core/guard.sh` and this spec.
+- `bash 3.2` appears only in `lib/core/guard.sh`, the top of `bin/chalk`
+  that runs before it, the lint rule that checks it, and the docs.
 - No `shellcheck disable` comments were added; the two `SC2086` disables are gone.
 - `docs/bash-style.md` exists and every rule in it is either linted or
   covered by a test.

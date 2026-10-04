@@ -26,8 +26,16 @@ chalk doctor
 ```
 
 You also need a Docker runtime (Docker Desktop, OrbStack or Colima) and
-`glab auth login`. Without Homebrew, clone
-`https://github.com/khalaharvi/chalk` and put `bin/chalk` on your `PATH`.
+`glab auth login`. Homebrew installs the bash 5.3 Chalk runs under.
+
+Without Homebrew, clone `https://github.com/khalaharvi/chalk` and put
+`bin/chalk` on your `PATH`. Chalk needs bash 5.3 or newer; started from an
+older bash it finds a newer one and re-runs itself, or tells you how to
+get one (`scripts/install-bash.sh PREFIX` builds it, then set
+`CHALK_BASH=PREFIX/bin/bash`).
+
+Sandbox images need bash 5.2 or newer. The default image has it; if you
+set `CHALK_IMAGE` to your own, `chalk doctor` checks it.
 
 ## Set up a repository (once)
 
@@ -296,11 +304,12 @@ review practice, including people actually reviewing agent-written diffs.
 ## Developing Chalk
 
 ```sh
-make check    # shellcheck + end-to-end test with fake docker, claude and glab
-make test-db  # the same test with SQL run against a real Postgres (FAKE_PG_URL)
+make check    # shellcheck, convention lint, unit tests, end-to-end test with fakes
+make test-db  # the end-to-end test with SQL run against a real Postgres (FAKE_PG_URL)
 ```
 
-The scripts target bash 3.2 so they run on stock macOS.
+Chalk is written for bash 5.3 on the host and 5.2 in the sandbox; see
+[docs/bash-style.md](docs/bash-style.md).
 
 ## Releasing
 

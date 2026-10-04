@@ -19,7 +19,7 @@ export CHALK_HOME
 # everything below runs under bash 5.3 or newer.
 # shellcheck source=/dev/null
 . "$CHALK_HOME/lib/core/guard.sh"
-chalk_guard ${1+"$@"}  # ${1+...}: bash 3.2 treats an empty "$@" as unset under set -u
+chalk_guard ${1+"$@"}  # ${1+...}: safe for empty arguments under set -u in any bash
 
 # Modules load by layer: the shell runtime, then the Chalk domain, then the
 # commands. A module may use anything loaded before it. `source -p` looks
