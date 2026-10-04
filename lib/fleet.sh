@@ -126,7 +126,7 @@ cmd_fleet() {
            + (.checkpoints | map("- [ ] " + .) | join("\n"))' <<<"$item" > "$dir/specs/$ticket.md"
     git -C "$dir" add "specs/$ticket.md"
     git -C "$dir" commit -q -m "chalk($ticket): spec"
-    (cd "$dir" && "$CHALK_HOME/bin/chalk" run --detach) < /dev/null
+    (cd "$dir" && "$BASH" "$CHALK_HOME/bin/chalk" run --detach) < /dev/null
     slots=$((slots - 1))
   done < <(jq -c '.workstreams[]' "$saved")
 }

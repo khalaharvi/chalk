@@ -247,7 +247,7 @@ cmd_run() {
   run_claim
 
   if [ "$detach" -eq 1 ]; then
-    nohup "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1 &
+    nohup "$BASH" "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1 &
     info "$RUN_TICKET running in background (pid $!). Follow with: chalk logs $RUN_TICKET -f"
     return 0
   fi

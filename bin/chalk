@@ -15,6 +15,12 @@ if [ -z "${CHALK_HOME:-}" ]; then
 fi
 export CHALK_HOME
 
+# Everything above this line must run under bash 3.2; the guard makes sure
+# everything below runs under bash 5.3 or newer.
+# shellcheck source=/dev/null
+. "$CHALK_HOME/lib/core/guard.sh"
+chalk_guard ${1+"$@"}  # ${1+...}: bash 3.2 treats an empty "$@" as unset under set -u
+
 # Modules load by layer: the shell runtime, then the Chalk domain, then the
 # commands. A module may use anything loaded before it.
 for module in core/log core/runtime \
