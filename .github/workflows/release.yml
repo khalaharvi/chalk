@@ -28,6 +28,8 @@ jobs:
             || { echo "::error::bin/chalk does not say $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - uses: ./.github/actions/setup-bash
+      - uses: ./.github/actions/setup-shellcheck
       - run: make check
 
       - name: Create the GitHub Release
