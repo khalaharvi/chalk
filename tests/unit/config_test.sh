@@ -41,5 +41,7 @@ for key in "${!CHALK_CONFIG_DEFAULTS[@]}" "${!CHALK_ENV_DEFAULTS[@]}"; do
 done
 check "without a config file every setting has its default" test "$all_set" -eq 1
 
+check "an invalid forge stops Chalk" \
+  sh -c '! (CHALK_FORGE=bitbucket; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"
 check "an invalid permission mode stops Chalk" \
   sh -c '! (CHALK_PERMISSION_MODE=ask; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"

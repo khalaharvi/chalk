@@ -3,18 +3,21 @@
 A harness that runs Claude Code agents in disposable sandboxes, one small
 checkpoint at a time, with a spend cap per loop, a test gate the harness
 verifies itself, and a human escalation path when an agent gets stuck.
-Finished work arrives as a GitLab merge request.
+Finished work arrives as a GitHub pull request or a GitLab merge request.
 
 ## Status
 
 Early. The whole workflow is covered by an end-to-end test that uses fake
-`docker`, `claude` and `glab`, the SQL is tested against a real Postgres, and
+`docker`, `claude`, `gh` and `glab`, the SQL is tested against a real Postgres, and
 the Homebrew formula is tested with a real install. It has not yet had many
-runs against real Docker, the real Claude CLI and a real GitLab project, so
+runs against real Docker, the real Claude CLI and a real GitHub or GitLab project, so
 expect rough edges and please [report them](https://github.com/khalaharvi/chalk/issues).
 
-Chalk works on repositories hosted on GitLab (merge requests via `glab`,
-gates in GitLab CI). The tool itself is developed on GitHub at
+Chalk works on repositories hosted on GitHub (pull requests via `gh`, gates
+in GitHub Actions) or GitLab (merge requests via `glab`, gates in GitLab CI).
+It picks one from the `origin` remote: github.com means GitHub, anything else
+GitLab. Set `CHALK_FORGE=github` for GitHub Enterprise. The tool itself is
+developed on GitHub at
 [khalaharvi/chalk](https://github.com/khalaharvi/chalk).
 
 ## Install
@@ -26,7 +29,8 @@ chalk doctor
 ```
 
 You also need a Docker runtime (Docker Desktop, OrbStack or Colima) and
-`glab auth login`. Homebrew installs the bash 5.3 Chalk runs under.
+`gh auth login` (GitHub) or `glab auth login` (GitLab). Homebrew installs
+the bash 5.3 Chalk runs under.
 
 Without Homebrew, clone `https://github.com/khalaharvi/chalk` and put
 `bin/chalk` on your `PATH`. Chalk needs bash 5.3 or newer; started from an
@@ -68,7 +72,8 @@ chalk logs PROJ-901 -f
 **What a run does**
 
 1. Starts a container with the repository cloned into a RAM disk. The host
-   repository is mounted read-only. The container has no GitLab credentials.
+   repository is mounted read-only. The container has no GitHub or GitLab
+   credentials.
    Inside it, the agent runs in auto mode (see "Permissions").
 2. Spec check: a cheap model confirms every checkpoint is small, testable and
    unambiguous. If not, the run stops before any money is spent on loops.
@@ -82,7 +87,7 @@ chalk logs PROJ-901 -f
 5. All checkpoints done: an independent agent reviews the change for stubs,
    weakened tests and drift from the spec. Findings get one fix round
    (`CHALK_REVIEW_ROUNDS`) and a second review.
-6. Review passes: the branch is pushed and a merge request is opened with
+6. Review passes: the branch is pushed and a pull or merge request is opened with
    loops, cost, human interventions and the review summary.
 7. A reported blocker, the loop limit, exhausted retries or a review that
    still fails: **detention**.
@@ -113,18 +118,22 @@ chalk cleanup         # stops runs, removes sandboxes and clean worktrees, delet
 chalk cleanup --all   # also deletes unmerged branches, including detention work
 ```
 
-## Merge request gates
+## Pull and merge request gates
 
-`chalk init` adds `.gitlab/chalk.gitlab-ci.yml`. On merge requests from
+`chalk init` adds `.github/workflows/chalk.yml` on GitHub or
+`.gitlab/chalk.gitlab-ci.yml` on GitLab. On pull or merge requests from
 `chalk/*` and `tutoring/*` branches it:
 
 - fails if the spec has unfinished checkpoints or governance files are missing;
 - re-runs the rubric outside the agent's sandbox;
 - optionally writes a row to a central audit table (`CHALK_AUDIT_DB_URL`,
-  schema in `share/ci-audit-schema.sql`).
+  schema in `share/ci-audit-schema.sql`; a secret on GitHub, a masked CI/CD
+  variable on GitLab).
 
-Turn on GitLab approval rules as well. The gates show the checks passed;
-the approval shows a person reviewed the diff.
+On GitHub, make `spec` and `rubric` required status checks and require an
+approving review; set the repository variable `CHALK_CI_IMAGE` to an image
+with your toolchain. On GitLab, turn on approval rules. The gates show the
+checks passed; the approval shows a person reviewed the diff.
 
 ## Configuration
 
@@ -134,13 +143,14 @@ documented in the file. Environment variables override it. The important ones:
 | Key | Default | Meaning |
 | :-- | :-- | :-- |
 | `CHALK_TEST_CMD` | none, required | The rubric |
+| `CHALK_FORGE` | `auto` | `github`, `gitlab`, or `auto` (from the `origin` remote) |
 | `CHALK_SETUP_CMD` | none | Runs once per sandbox, e.g. `npm ci` |
 | `CHALK_BUDGET_USD` | `1.00` | Spend cap per loop |
 | `CHALK_MAX_LOOPS` | `20` | Loops per run; worst-case spend is budget × loops |
 | `CHALK_MAX_RETRIES` | `2` | Consecutive failed loops before detention |
 | `CHALK_MAX_PARALLEL` | `4` | Concurrent agents for `chalk fleet` |
 | `CHALK_SPEC_CHECK` | `true` | Check the spec before the first loop |
-| `CHALK_REVIEW` | `true` | Review the finished change before the merge request |
+| `CHALK_REVIEW` | `true` | Review the finished change before the pull or merge request |
 | `CHALK_CHEAP_MODEL` | `haiku` | Model for the spec check and lesson distillation |
 | `CHALK_IMAGE` | `chalk-sandbox:local` | Sandbox image; the default is Node 22 |
 

@@ -4,9 +4,13 @@
 
 # Branch that workstreams start from and merge back into.
 CHALK_BASE_BRANCH=main
+# Where the repository is hosted: github, gitlab, or auto (GitHub when the
+# origin remote is on github.com, otherwise GitLab). Set github for
+# GitHub Enterprise.
+CHALK_FORGE=auto
 
 # The rubric. Must exit 0 only when the work is acceptable. Runs in the
-# sandbox after every agent loop and again in GitLab CI.
+# sandbox after every agent loop and again in CI.
 CHALK_TEST_CMD=
 # Runs once in a fresh sandbox (and in CI) before the rubric, e.g. npm ci
 CHALK_SETUP_CMD=
@@ -30,7 +34,7 @@ CHALK_TMPFS_SIZE=4g
 
 # Global engineering rules appended to the agent's system prompt.
 CHALK_TEXTBOOK=.chalk/textbook.md
-# Push and open the merge request automatically when a run completes.
+# Push and open the pull or merge request automatically when a run completes.
 CHALK_AUTO_MR=true
 # Before the first loop, a cheap model checks that every checkpoint is small,
 # testable and unambiguous, and stops the run if not.

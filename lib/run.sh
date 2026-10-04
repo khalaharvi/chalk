@@ -219,17 +219,18 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
   run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
 }
 
-# Pushes the finished branch and opens the merge request. chalk submit passes
-# --force to open it even when CHALK_AUTO_MR is off.
+# Pushes the finished branch and opens the pull or merge request. chalk
+# submit passes --force to open it even when CHALK_AUTO_MR is off.
 # shellcheck disable=SC2120
 run_graduate() {
   local -A summary
-  local review=""
+  local review="" request
+  request="${| forge_request; }"
   db_ticket_summary "$RUN_TICKET" summary
   run_log "all checkpoints complete (${summary[loops]} loops, \$${summary[cost]}, ${summary[fixes]} human interventions)"
 
   if [ "$CHALK_AUTO_MR" != "true" ] && [ "${1:-}" != "--force" ]; then
-    run_log "CHALK_AUTO_MR is off; open the merge request with: chalk submit"
+    run_log "CHALK_AUTO_MR is off; open the $request with: chalk submit"
     return 0
   fi
   if [ -n "$RUN_REVIEW_SUMMARY" ]; then
@@ -237,12 +238,10 @@ run_graduate() {
 - Agent review before submission: $RUN_REVIEW_SUMMARY"
   fi
 
-  need glab
+  need "${| forge_cli; }"
   git -C "$RUN_WT" push -q -u origin "$RUN_BRANCH"
-  (cd "$RUN_WT" && glab mr create --yes \
-    --source-branch "$RUN_BRANCH" --target-branch "$CHALK_BASE_BRANCH" \
-    --title "$(spec_title "$RUN_SPEC")" \
-    --description "## Chalk execution summary
+  forge_open_request "$RUN_WT" "$RUN_BRANCH" "$CHALK_BASE_BRANCH" "$(spec_title "$RUN_SPEC")" \
+    "## Chalk execution summary
 
 - Spec: \`specs/$RUN_TICKET.md\`, all checkpoints complete
 - Agent loops: ${summary[loops]}
@@ -250,7 +249,7 @@ run_graduate() {
 - Human interventions (office hours): ${summary[fixes]}
 - Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review
 
-This change was written by an agent. Review the diff as you would any other.")
+This change was written by an agent. Review the diff as you would any other."
   db_event "$RUN_TICKET" submitted 2>/dev/null || true
 }
 

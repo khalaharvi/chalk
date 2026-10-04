@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test of the Chalk workflow using fake docker, claude and glab.
+# End-to-end test of the Chalk workflow using fake docker, claude, gh and glab.
 # Exercises the real loop, git plumbing and lifecycle without Docker or API
 # spend. Run with: make test
 set -euo pipefail
@@ -226,7 +226,30 @@ check "recalled lessons reach the agent prompt" \
 unset CHALK_MEMORY
 cd "$tmp/demo"
 
-# 5. Guards and cleanup.
+# 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
+# pull request through gh.
+git init -q --bare "$tmp/hub-origin.git"
+git init -q -b main "$tmp/hub"
+cd "$tmp/hub"
+git remote add origin "$tmp/hub-origin.git"
+export CHALK_FORGE=github
+chalk init >/dev/null
+check "init on GitHub adds the Actions workflow, not GitLab CI" \
+  test -f .github/workflows/chalk.yml -a ! -e .gitlab-ci.yml -a ! -e .gitlab
+sed -i.bak 's/^CHALK_TEST_CMD=.*/CHALK_TEST_CMD=test ! -e BROKEN/' .chalk/config && rm .chalk/config.bak
+git add -A && git commit -q -m "init"
+chalk new PROJ-20 Hub feature >/dev/null
+cd "$tmp/hub.worktrees/PROJ-20"
+git add -A && git commit -q -m "spec"
+chalk run > "$tmp/run5.log" 2>&1 || { cat "$tmp/run5.log"; fail "GitHub run"; }
+check "branch pushed to the GitHub origin" git -C "$tmp/hub-origin.git" rev-parse chalk/PROJ-20
+check "pull request opened with gh" grep -q "pr create --head chalk/PROJ-20 --base main" "$FAKE_STATE/gh.log"
+check "the pull request carries the execution summary" grep -q "Chalk execution summary" "$FAKE_STATE/gh.log"
+check "glab is not used for a GitHub repository" sh -c "! grep -q PROJ-20 '$FAKE_STATE/glab.log'"
+unset CHALK_FORGE
+cd "$tmp/demo"
+
+# 6. Guards and cleanup.
 if chalk fleet PROJ-10 --plan /dev/null --yes >/dev/null 2>&1; then fail "empty plan must be rejected"; fi
 pass "invalid plan rejected"
 sleep 0.5
