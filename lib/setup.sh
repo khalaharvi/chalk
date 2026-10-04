@@ -36,6 +36,8 @@ cmd_doctor() {
   doctor_check optional "claude on host"    "only needed for 'chalk fleet' planning" command -v claude
   doctor_check optional "telemetry database" "starts on first run, or: chalk db up" db_running
   doctor_check optional "sandbox image"     "built on first run, or: chalk sandbox build" docker image inspect "$CHALK_IMAGE"
+  doctor_check optional "sandbox bash ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]}+" \
+    "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
   if memory_enabled; then
     doctor_check required "curl"            "install curl"                        command -v curl
     doctor_check optional "lesson memory"   "starts on first run, or: chalk memory up" memory_healthy

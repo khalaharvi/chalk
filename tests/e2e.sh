@@ -168,6 +168,17 @@ check "a run stopped by SIGTERM exits 143" test "$status" -eq 143
 check "a stopped run removes its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-8"
 cd "$tmp/demo"
 
+# 3e. A sandbox image whose bash is too old is refused before any agent runs.
+chalk new PROJ-13 Old image >/dev/null
+cd "$tmp/demo.worktrees/PROJ-13"
+git add -A && git commit -q -m "spec"
+if FAKE_SANDBOX_BASH="5 1" chalk run > "$tmp/run10.log" 2>&1; then fail "an image with bash 5.1 must be refused"; fi
+check "an image with bash 5.1 is refused with the reason" \
+  grep -q "has bash 5.1; Chalk needs bash >= 5.2 in the sandbox" "$tmp/run10.log"
+check "the refused sandbox is removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-13"
+check "no agent ran in the refused sandbox" sh -c "! grep -q 'loop 1' '$tmp/run10.log'"
+cd "$tmp/demo"
+
 # 4. Hindsight memory: lessons are stored at office hours and recalled into prompts.
 export CHALK_MEMORY=hindsight
 chalk new PROJ-3 Memory feature >/dev/null

@@ -68,6 +68,11 @@ case "$cmd" in
       esac
       exit 0
     fi
+    # FAKE_SANDBOX_BASH="5 1" makes the sandbox report an older bash.
+    if [ -n "${FAKE_SANDBOX_BASH:-}" ] && [[ "$*" == *BASH_VERSINFO* ]]; then
+      echo "$FAKE_SANDBOX_BASH"
+      exit 0
+    fi
     root="$FAKE_STATE/$name"
     args=()
     for arg in "$@"; do args+=("$(rewrite "$arg")"); done

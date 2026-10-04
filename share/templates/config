@@ -23,7 +23,7 @@ CHALK_MAX_RETRIES=2
 # Agents `chalk fleet` will run at once on one machine.
 CHALK_MAX_PARALLEL=4
 
-# Sandbox image. Needs bash, git, coreutils and the claude CLI.
+# Sandbox image. Needs bash 5.2 or newer, git, coreutils and the claude CLI.
 CHALK_IMAGE=chalk-sandbox:local
 # RAM disk size for the working copy and its dependencies.
 CHALK_TMPFS_SIZE=4g

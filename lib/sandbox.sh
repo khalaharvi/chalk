@@ -3,6 +3,13 @@
 # only thing that leaves is a git bundle of new commits. The container holds
 # no GitLab credentials and mounts the host repository read-only.
 
+# share/sandbox/scripts are written for this bash, the one Debian 12 (and
+# so the default image) ships. Sandbox images must have it or newer.
+declare -ga CHALK_SANDBOX_BASH_MIN=(5 2)
+
+# Asks a bash for its version as "MAJOR MINOR".
+CHALK_BASH_VERSION_PROBE='echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'
+
 # Any one of these lets the agent call Claude.
 declare -ga CHALK_AUTH_VARS=(ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN)
 
@@ -87,6 +94,36 @@ sandbox_start() {
     -v "$io_dir:/chalk" \
     "${env_args[@]}" "${otel_args[@]}" \
     "$CHALK_IMAGE" sleep infinity >/dev/null
+  sandbox_check_bash "$name"
+}
+
+# sandbox_bash_version NAME -> REPLY: "MAJOR MINOR" of the container's bash,
+# or empty when it has none or cannot be asked.
+sandbox_bash_version() {
+  REPLY="$(docker exec "$1" bash -c "$CHALK_BASH_VERSION_PROBE" 2>/dev/null)" || REPLY=""
+  [[ $REPLY =~ ^[0-9]+\ [0-9]+$ ]] || REPLY=""
+}
+
+# sandbox_check_bash NAME: removes the container and stops Chalk when its
+# bash is older than the sandbox scripts need.
+sandbox_check_bash() {
+  local name="$1" major="" minor="" found="no bash"
+  read -r major minor <<<"${| sandbox_bash_version "$name"; }" || true
+  if [[ -n $major ]]; then
+    bash_at_least "${CHALK_SANDBOX_BASH_MIN[@]}" "$major" "$minor" && return 0
+    found="bash $major.$minor"
+  fi
+  sandbox_stop "$name"
+  die "sandbox image '$CHALK_IMAGE' has $found;" \
+    "Chalk needs bash >= ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]} in the sandbox"
+}
+
+# True when the configured image's bash is new enough. Needs Docker running.
+sandbox_image_bash_ok() {
+  local version major minor
+  version="$(docker run --rm --entrypoint bash "$CHALK_IMAGE" -c "$CHALK_BASH_VERSION_PROBE" 2>/dev/null)" || return 1
+  read -r major minor <<<"$version" || return 1
+  [[ $major$minor =~ ^[0-9]+$ ]] && bash_at_least "${CHALK_SANDBOX_BASH_MIN[@]}" "$major" "$minor"
 }
 
 sandbox_stop() {
