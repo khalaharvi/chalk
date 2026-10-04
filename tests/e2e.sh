@@ -146,11 +146,23 @@ check "ejected prompt is listed as overridden" sh -c "chalk prompts | grep -q 'c
 rm -rf .chalk/prompts
 
 # 3c. Report card and OpenTelemetry export.
+# Stored text containing "</script>" must not close the page's script tag.
+# The fake database's canned answer carries such text; a real one gets it
+# through a run row.
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  psql "$FAKE_PG_URL" -q -v ON_ERROR_STOP=1 <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons)
+VALUES ('</script>', 'PROJ-99', 'chalk/PROJ-99', 1, 'continue', 'ok', 0, true, 'm',
+        'p', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+SQL
+fi
 chalk dashboard --no-open --days 7 --output "$tmp/report.html" >/dev/null
 check "dashboard page is built with its data embedded" \
   sh -c "grep -q 'Chalk report card' '$tmp/report.html' && grep -q '\"generated_at\"' '$tmp/report.html' && ! grep -q 'CHALK_DATA' '$tmp/report.html'"
 check "stored text cannot close the dashboard's script tag" \
-  sh -c "grep -qF '\"note\":\"<\\/script>\"' '$tmp/report.html' && ! grep -qF '\"note\":\"</script>\"' '$tmp/report.html'"
+  sh -c "grep -qF '\"<\\/script>\"' '$tmp/report.html' && ! grep -qF '\"</script>\"' '$tmp/report.html'"
 check "telemetry is off unless an endpoint is set" sh -c "! grep -q OTEL_ '$FAKE_STATE/docker.log'"
 chalk new PROJ-7 Traced feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-7"
