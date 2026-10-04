@@ -24,7 +24,7 @@ chalk_guard ${1+"$@"}  # ${1+...}: bash 3.2 treats an empty "$@" as unset under 
 # Modules load by layer: the shell runtime, then the Chalk domain, then the
 # commands. A module may use anything loaded before it. `source -p` looks
 # only in the directory given, never on PATH or in the working directory.
-for module in log runtime; do
+for module in log runtime jobs; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done

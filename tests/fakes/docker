@@ -44,6 +44,8 @@ case "$cmd" in
     name="$1"; shift
     if [ "$name" = "chalk-db" ]; then
       [ "$1" = "psql" ] || exit 0
+      # FAKE_DB_BROKEN=1 makes every query fail.
+      [ -z "${FAKE_DB_BROKEN:-}" ] || exit 1
       sql="$(cat)"
       printf '%s\n---\n%s\n' "$*" "$sql" >> "$FAKE_STATE/db.log"
       # With FAKE_PG_URL set, the SQL runs against a real Postgres instead of

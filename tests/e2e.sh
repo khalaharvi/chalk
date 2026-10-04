@@ -41,6 +41,9 @@ check "branch pushed to origin" git -C "$tmp/origin.git" rev-parse chalk/PROJ-1
 check "merge request opened" grep -q "mr create.*chalk/PROJ-1" "$FAKE_STATE/glab.log"
 check "sandbox removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-1"
 check "run telemetry recorded" grep -q "INSERT INTO runs" "$FAKE_STATE/db.log"
+check "the database and sandbox image start side by side, each with a log" \
+  test -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/io/startup/database.log" \
+    -a -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/io/startup/image.log"
 io="$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/io"
 check "system prompt carries harness rules and the textbook" \
   sh -c "grep -q 'harness commits for you' '$io/system.md' && grep -q '<engineering_rules>' '$io/system.md'"
@@ -184,6 +187,15 @@ check "the refused sandbox is removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo
 check "no agent ran in the refused sandbox" sh -c "! grep -q 'loop 1' '$tmp/run10.log'"
 cd "$tmp/demo"
 
+# 3f. A service that cannot start stops the run and is named.
+chalk new PROJ-14 No database >/dev/null
+cd "$tmp/demo.worktrees/PROJ-14"
+git add -A && git commit -q -m "spec"
+if FAKE_DB_BROKEN=1 chalk run > "$tmp/run11.log" 2>&1; then fail "a run without its database must stop"; fi
+check "a service that fails to start is named" grep -q "could not start: database" "$tmp/run11.log"
+check "no sandbox is started when a service fails" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-14"
+cd "$tmp/demo"
+
 # 4. Hindsight memory: lessons are stored at office hours and recalled into prompts.
 export CHALK_MEMORY=hindsight
 chalk new PROJ-3 Memory feature >/dev/null
@@ -193,6 +205,8 @@ if FAKE_CLAUDE_MODE="break" chalk run >/dev/null 2>&1; then fail "failing run sh
 git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-3-*')"
 git rm -q BROKEN && git commit -q -m "remove the blocker"
 chalk office-hours -m "note" > "$tmp/run4.log" 2>&1 || { cat "$tmp/run4.log"; fail "office hours with memory"; }
+check "lesson memory starts alongside the other services" \
+  test -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-3/io/startup/memory.log"
 check "lesson sent to Hindsight" grep -Eq '"document_id": *"chalk-lesson-[0-9]+"' "$FAKE_STATE/curl.log"
 check "lesson marked as synced" grep -q "UPDATE lessons SET memory_synced_at" "$FAKE_STATE/db.log"
 check "recalled lessons reach the agent prompt" \

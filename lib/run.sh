@@ -63,13 +63,35 @@ run_claim() {
   mkdir -p "$RUN_IO"
 }
 
-# Starts the sandbox for this run with the branch cloned inside it.
+# run_start_services [--memory]: starts the telemetry database, the sandbox
+# image and, with --memory, lesson memory, all at once. Memory is best
+# effort; anything else failing stops the run.
+run_start_services() {
+  local -A started
+  local name failed=""
+  jobs_init "$RUN_IO/startup"
+  jobs_spawn database db_up
+  jobs_spawn image sandbox_ensure_image
+  if [[ ${1:-} == --memory ]] && memory_enabled; then jobs_spawn memory memory_up; fi
+  jobs_wait started && return 0
+
+  if (( ${started[memory]:-0} )); then
+    warn "continuing without lesson memory"
+    unset 'started[memory]'
+  fi
+  for name in "${!started[@]}"; do
+    (( started[$name] == 0 )) || failed+=" $name"
+  done
+  [[ -z $failed ]] || die "could not start:$failed (see $RUN_IO/startup)"
+}
+
+# run_open_sandbox [--memory]: starts the services this run needs, then its
+# sandbox with the branch cloned inside it.
 run_open_sandbox() {
   echo $$ > "$RUN_DIR/pid"
   trap run_teardown EXIT
 
-  db_up
-  sandbox_ensure_image
+  run_start_services "$@"
   agent_write_system "$RUN_IO" "$RUN_WT"
 
   RUN_SANDBOX="${| sandbox_name "$RUN_TICKET"; }"
@@ -252,8 +274,7 @@ cmd_run() {
     return 0
   fi
 
-  memory_up || warn "continuing without lesson memory"
-  run_open_sandbox
+  run_open_sandbox --memory
   if [ -n "$CHALK_SETUP_CMD" ]; then
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
       die "setup command failed in sandbox; see $RUN_IO/setup.log"
