@@ -70,6 +70,7 @@ check "working branch left untouched" test "$(git rev-list --count main..chalk/P
 check "nothing pushed for the failed run" test -z "$(git -C "$tmp/origin.git" for-each-ref 'refs/heads/detention')"
 check "failure recorded as a lesson" grep -q "INSERT INTO lessons" "$FAKE_STATE/db.log"
 check "failed attempts were retried with the retry prompt" grep -q "(retry)" "$tmp/run2.log"
+check "a detention is not reported as an unexpected failure" sh -c "! grep -q 'unexpected failure' '$tmp/run2.log'"
 
 git switch -q "$detention"
 git rm -q BROKEN && git commit -q -m "remove the blocker"
@@ -151,6 +152,20 @@ check "telemetry endpoint is rewritten to reach the host collector" \
   grep -q "OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317" "$FAKE_STATE/docker.log"
 check "traces are tagged with repository and ticket" \
   sh -c "grep -q 'OTEL_TRACES_EXPORTER=otlp' '$FAKE_STATE/docker.log' && grep -q 'chalk.repo=demo,chalk.ticket=PROJ-7' '$FAKE_STATE/docker.log'"
+cd "$tmp/demo"
+
+# 3d. A stopped run exits with the conventional code and still cleans up.
+chalk new PROJ-8 Stopped feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-8"
+git add -A && git commit -q -m "spec"
+FAKE_CLAUDE_MODE=slow chalk run > "$tmp/run9.log" 2>&1 &
+pid=$!
+for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
+kill -TERM "$pid"
+status=0
+wait "$pid" || status=$?
+check "a run stopped by SIGTERM exits 143" test "$status" -eq 143
+check "a stopped run removes its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-8"
 cd "$tmp/demo"
 
 # 4. Hindsight memory: lessons are stored at office hours and recalled into prompts.

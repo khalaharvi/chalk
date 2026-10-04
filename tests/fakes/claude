@@ -3,6 +3,7 @@
 # and returns the structured answer that prompt asks for.
 #   FAKE_CLAUDE_MODE=break     loop leaves the tree in a state the rubric rejects
 #   FAKE_CLAUDE_MODE=blocked   loop reports a blocker
+#   FAKE_CLAUDE_MODE=slow      loop takes a few seconds, so a test can stop the run
 #   FAKE_SPEC=fail             spec check fails
 #   FAKE_REVIEW=fail-once      first review fails, later ones pass
 #   FAKE_REVIEW=fail           every review fails
@@ -33,6 +34,7 @@ case "$prompt" in
     case "${FAKE_CLAUDE_MODE:-}" in
       break)   touch BROKEN; answer '{"status":"done","summary":"did the thing"}' ;;
       blocked) answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}' ;;
+      slow)    touch "$FAKE_STATE/slow-started"; sleep 3; answer '{"status":"done","summary":"slow"}' ;;
       *)
         line="$(grep -n -m 1 -e '- \[ \]' "$spec" | cut -d: -f1)"
         sed -i.bak "${line}s/- \[ \]/- [x]/" "$spec" && rm -f "$spec.bak"

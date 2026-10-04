@@ -66,7 +66,6 @@ run_claim() {
 run_open_sandbox() {
   echo $$ > "$RUN_DIR/pid"
   trap run_teardown EXIT
-  trap 'exit 130' INT TERM
 
   db_up
   sandbox_ensure_image
@@ -366,9 +365,7 @@ cmd_status() {
   local runs dir ticket state loops cost fixes detentions
   runs="$(state_dir)/runs"
   printf '%-14s %-8s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
-  [ -d "$runs" ] || return 0
   for dir in "$runs"/*/; do
-    [ -d "$dir" ] || continue
     ticket="$(basename "$dir")"
     state="idle"
     if run_is_alive "${dir%/}"; then state="running"; fi

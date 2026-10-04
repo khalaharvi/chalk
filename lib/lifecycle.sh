@@ -103,7 +103,6 @@ cmd_cleanup() {
   # Without --all, git refuses to remove worktrees with uncommitted changes
   # and branches that are neither merged nor pushed, so no work is lost.
   for dir in "$root".worktrees/*/; do
-    [ -d "$dir" ] || continue
     if [ "$all" -eq 1 ]; then
       git -C "$root" worktree remove --force "$dir"
     elif ! git -C "$root" worktree remove "$dir" 2>/dev/null; then
