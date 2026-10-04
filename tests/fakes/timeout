@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake timeout: the rubric runs `timeout N cmd` inside the sandbox, which the
+# fake docker runs on the host. Stock macOS has no timeout, so drop N and run.
+shift
+exec "$@"

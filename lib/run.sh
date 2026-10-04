@@ -196,7 +196,9 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
   run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
 }
 
-# Pushes the finished branch and opens the merge request.
+# Pushes the finished branch and opens the merge request. chalk submit passes
+# --force to open it even when CHALK_AUTO_MR is off.
+# shellcheck disable=SC2120
 run_graduate() {
   local loops cost fixes review=""
   read -r loops cost fixes <<SUMMARY
