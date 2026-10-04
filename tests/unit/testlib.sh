@@ -8,6 +8,9 @@ export CHALK_HOME
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# Tests that commit must not depend on the machine's git identity.
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
+
 pass() { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; exit 1; }
 
