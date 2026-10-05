@@ -4,16 +4,31 @@
 #   FAKE_CLAUDE_MODE=break     loop leaves the tree in a state the rubric rejects
 #   FAKE_CLAUDE_MODE=blocked   loop reports a blocker
 #   FAKE_CLAUDE_MODE=slow      loop takes a few seconds, so a test can stop the run
+#   FAKE_CLAUDE_MODE=idle      loop changes nothing and ticks nothing
+#   FAKE_CLAUDE_MODE=refused   like idle, with four actions refused by permission checks
+#   FAKE_CLAUDE_MODE=error     loop stops early on its turn limit
 #   FAKE_SPEC=fail             spec check fails
 #   FAKE_REVIEW=fail-once      first review fails, later ones pass
 #   FAKE_REVIEW=fail           every review fails
+#   FAKE_AUTO_MODE=off         auto mode is unavailable: sessions start in manual mode
+#   FAKE_AUTO_MODE=unknown     the CLI does not answer the SDK's initialize request
 set -euo pipefail
 prompt="$(cat)"
 printf '%s\n=====\n' "$*" >> "$FAKE_STATE/claude.log"
 
-answer() { printf '{"is_error":false,"subtype":"success","total_cost_usd":0.25,"num_turns":6,"usage":{"input_tokens":1200,"output_tokens":900,"cache_read_input_tokens":42000,"cache_creation_input_tokens":3000},"modelUsage":{"claude-fake-1":{"costUSD":0.25}},"structured_output":%s}\n' "$1"; }
+is_error=false subtype=success denials='[]'
+answer() { printf '{"is_error":%s,"subtype":"%s","total_cost_usd":0.25,"num_turns":6,"usage":{"input_tokens":1200,"output_tokens":900,"cache_read_input_tokens":42000,"cache_creation_input_tokens":3000},"modelUsage":{"claude-fake-1":{"costUSD":0.25}},"permission_denials":%s,"structured_output":%s}\n' "$is_error" "$subtype" "$denials" "$1"; }
 
 case "$prompt" in
+  *'"subtype":"initialize"'*)
+    # chalk doctor asks which permission mode a session would start in.
+    case "${FAKE_AUTO_MODE:-on}" in
+      on)  mode=auto ;;
+      off) mode=default ;;
+      *)   echo "error: unknown option '--input-format'" >&2; exit 1 ;;
+    esac
+    printf '{"type":"system","subtype":"status","permissionMode":"%s"}\n' "$mode"
+    printf '{"type":"control_response","response":{"subtype":"success","request_id":"chalk-doctor","response":{"current_permission_mode":"%s"}}}\n' "$mode" ;;
   *"<engineer_note>"*)
     answer '{"lesson":"Distilled: never commit a BROKEN marker"}' ;;
   *"<base_ref>"*)
@@ -35,6 +50,11 @@ case "$prompt" in
       break)   touch BROKEN; answer '{"status":"done","summary":"did the thing"}' ;;
       blocked) answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}' ;;
       slow)    touch "$FAKE_STATE/slow-started"; sleep 3; answer '{"status":"done","summary":"slow"}' ;;
+      idle)    answer '{"status":"done","summary":"nothing to do"}' ;;
+      refused)
+        denials='[{"tool_name":"Edit"},{"tool_name":"Write"},{"tool_name":"Bash"},{"tool_name":"Edit"}]'
+        answer '{"status":"done","summary":"could not edit any file"}' ;;
+      error)   is_error=true subtype=error_max_turns; answer 'null' ;;
       *)
         line="$(grep -n -m 1 -e '- \[ \]' "$spec" | cut -d: -f1)"
         sed -i.bak "${line}s/- \[ \]/- [x]/" "$spec" && rm -f "$spec.bak"

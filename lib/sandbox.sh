@@ -21,6 +21,18 @@ agent_auth_present() {
   return 1
 }
 
+# sandbox_auth_args VAR: fills the array VAR with the docker flags that pass
+# the agent's credentials into a container. `-e VAR` without a value passes
+# it through without exposing it in `ps`.
+sandbox_auth_args() {
+  local -n __auth=$1
+  local var
+  __auth=()
+  for var in "${CHALK_AUTH_VARS[@]}" ANTHROPIC_BASE_URL; do
+    if [ -n "${!var:-}" ]; then __auth+=(-e "$var"); fi
+  done
+}
+
 sandbox_build() {
   docker build -t "$CHALK_DEFAULT_IMAGE" "$CHALK_HOME/share/sandbox"
 }
@@ -74,12 +86,10 @@ sandbox_otel_args() {
 
 # sandbox_start NAME TICKET IO_DIR
 sandbox_start() {
-  local name="$1" ticket="$2" io_dir="$3" var
-  local -a env_args=(-e HOME=/home/chalk) otel_args
-  for var in "${CHALK_AUTH_VARS[@]}" ANTHROPIC_BASE_URL; do
-    # `-e VAR` without a value passes it through without exposing it in `ps`.
-    if [ -n "${!var:-}" ]; then env_args+=(-e "$var"); fi
-  done
+  local name="$1" ticket="$2" io_dir="$3"
+  local -a env_args auth_args otel_args
+  sandbox_auth_args auth_args
+  env_args=(-e HOME=/home/chalk "${auth_args[@]}")
 
   sandbox_otel_args otel_args "$ticket"
 
