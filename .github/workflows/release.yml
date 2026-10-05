@@ -36,8 +36,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exit 0
+          scripts/changelog.sh notes "${{ steps.version.outputs.version }}" > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no section for $GITHUB_REF_NAME"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file notes.md
 
       - uses: actions/checkout@v4
         with:

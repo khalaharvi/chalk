@@ -55,16 +55,45 @@ leave it to CI.
 
 ## Open a pull request
 
-1. Branch from `main`.
+1. Branch from `main`. Commits on your branch can be written any way you
+   like; they are squashed when the pull request merges.
 2. Make `make check` pass.
-3. Write the commit message as one imperative sentence in sentence case,
-   for example "Read go test -json reports". The body says why.
+3. Give the pull request a title that follows the commit title rules
+   below. The `pr-title` check fails until it does.
 4. In the pull request, say:
    - what you tested against real Docker and the real `claude` CLI, and
      what you did not. The fakes cannot catch a wrong CLI flag. If you
      could not run it for real, say so; a maintainer can, and labels the
      issue `real-run`;
    - for a prompt change, what the agent did before and after.
+
+`main` is protected: changes land only through pull requests that pass
+CI, and each one is squash-merged with its title as the commit.
+
+## Commit titles
+
+Pull request titles follow
+[Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/),
+because each one becomes the commit on `main` and a line in
+[CHANGELOG.md](CHANGELOG.md):
+
+```text
+type(scope): description
+```
+
+- **type** is one of `feat`, `fix`, `perf`, `docs`, `refactor`, `test`,
+  `build`, `ci`, `chore` or `revert`. Only `feat`, `fix`, `perf` and `docs`
+  reach the changelog.
+- **scope** is optional and lower case: the module or area, such as
+  `fleet`, `sandbox` or `db`.
+- **description** is imperative and lower case, like the rest of the
+  title: "read epics from GitHub issues", not "Reads" or "Read".
+- A `!` after the type or scope marks a breaking change and puts the line
+  under "Breaking changes", for example `feat(config)!: rename
+  CHALK_CHEAP_MODEL`. A `BREAKING CHANGE:` line in the description does the
+  same.
+
+Check a title locally with `scripts/check-commit-title.sh "fix: …"`.
 
 The [roadmap](docs/roadmap.md) lists planned work. Each roadmap issue links
 to its design notes.

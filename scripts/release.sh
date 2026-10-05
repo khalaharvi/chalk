@@ -3,8 +3,11 @@
 #
 #   scripts/release.sh VERSION
 #
-# VERSION is like 1.2.3. Pushing the v* tag starts .github/workflows/release.yml,
-# which runs the checks, creates the GitHub Release and updates the Homebrew tap.
+# VERSION is like 1.2.3. The script adds the release's section to
+# CHANGELOG.md (scripts/changelog.sh), commits it with the version bump, then
+# tags and pushes. The v* tag starts .github/workflows/release.yml, which runs
+# the checks, creates the GitHub Release from that section and updates the
+# Homebrew tap.
 set -euo pipefail
 
 fail() { echo "error: $*" >&2; exit 1; }
@@ -23,18 +26,25 @@ tag="v$version"
 
 make check
 
-# Set the version the CLI reports, if it is not already this one.
+# Set the version the CLI reports and add the changelog section, unless
+# one was already prepared and edited by hand.
 sed -i.bak "s/^CHALK_VERSION=.*/CHALK_VERSION=\"$version\"/" bin/chalk && rm -f bin/chalk.bak
-if [ -n "$(git status --porcelain)" ]; then
-  git commit -q -am "Release $tag"
+if [ -z "$(scripts/changelog.sh notes "$version")" ]; then
+  scripts/changelog.sh prepend "$version"
 fi
+git add bin/chalk CHANGELOG.md
+git commit -q -m "chore(release): $tag"
 git tag "$tag"
 git push -q origin main "$tag"
 
 slug="$(git remote get-url origin | sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##')"
 cat <<DONE
 
-Pushed $tag. The release workflow now publishes it:
+Pushed $tag with this changelog section:
+
+$(scripts/changelog.sh notes "$version")
+
+The release workflow now publishes it:
 
   https://github.com/$slug/actions/workflows/release.yml
 DONE

@@ -7,7 +7,11 @@ Chalk is a bash 5.3 CLI. Before changing code:
    non-zero, because a failing `${| … }` ends Chalk.
 2. Follow [CONTRIBUTING.md](CONTRIBUTING.md) for setup and pull requests.
    `make check` must pass, with bash 5.3 first on `PATH`.
-3. Every external program the harness calls has a fake in `tests/fakes/`.
+3. Pull request titles are Conventional Commits headers, such as
+   `fix(sandbox): keep the RAM disk on resume`; check one with
+   `scripts/check-commit-title.sh`. The title becomes the squashed commit
+   and a line in `CHANGELOG.md`.
+4. Every external program the harness calls has a fake in `tests/fakes/`.
    The tests never run real Docker, `claude`, `gh` or `glab`, so say in the
    pull request what was and was not tried for real.
 

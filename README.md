@@ -342,11 +342,22 @@ scripts/release.sh 0.7.0
 ```
 
 The script refuses to run off `main`, with uncommitted changes, or when
-the tag already exists. It runs the checks, commits the version bump to
-`main`, then tags and pushes both.
+the tag already exists. It runs the checks, sets the version, and adds a
+section to [CHANGELOG.md](CHANGELOG.md) built from the commit titles since
+the last release (`scripts/changelog.sh`). It commits both to `main` as
+`chore(release): vX.Y.Z`, then tags and pushes.
+
+To reword the section before releasing, generate it with
+`scripts/changelog.sh prepend 0.7.0`, edit `CHANGELOG.md`, and commit it as
+`chore(release): prepare v0.7.0`. The script then keeps your section
+instead of generating a new one.
+
+`main` is protected, but the repository admin may push to it directly,
+which is how this commit lands.
 
 The pushed tag starts the release workflow. It checks that the tag matches
-`CHALK_VERSION`, runs the checks again, creates the GitHub Release, points
+`CHALK_VERSION`, runs the checks again, creates the GitHub Release with the
+changelog section as its notes, points
 the formula in
 [khalaharvi/homebrew-chalk](https://github.com/khalaharvi/homebrew-chalk) at
 the new tarball, and installs it from the tap on macOS to confirm it works.
