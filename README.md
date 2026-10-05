@@ -150,6 +150,7 @@ documented in the file. Environment variables override it. The important ones:
 | `CHALK_MAX_RETRIES` | `2` | Consecutive failed loops before detention |
 | `CHALK_FP_RULES` | `shadow` | Loop verdicts: `shadow` records them, `on` also detains a run that repeats itself, `off` skips them |
 | `CHALK_TEST_REPORT` | none | JUnit XML report the rubric writes, as a path in the repo; names failing tests for the verdicts |
+| `CHALK_FP_FEEDBACK` | `false` | `true` tells a retry the failing tests and first error, plus 20 lines of output, instead of 60 lines |
 | `CHALK_MAX_PARALLEL` | `auto` | Concurrent agents for `chalk fleet`; `auto` sizes it to Docker's CPUs and memory (4 if unknown) |
 | `CHALK_SPEC_CHECK` | `true` | Check the spec before the first loop |
 | `CHALK_REVIEW` | `true` | Review the finished change before the pull or merge request |
@@ -256,29 +257,21 @@ and adjust the prompt where its judgement differs from yours.
 
 ## Lesson memory
 
-Lessons always live in the `lessons` table in Postgres. `CHALK_MEMORY`
-chooses how they are matched to a new failure:
+Lessons live in the `lessons` table in Postgres, and are matched there, so
+there is nothing extra to run. Each loop's prompt gets up to three resolved
+lessons, chosen in this order:
 
-- `builtin` (default): text similarity in Postgres. Nothing extra to run.
-- `hindsight`: a local [Hindsight](https://hindsight.vectorize.io) server on
-  each machine, which adds semantic, keyword, graph and temporal recall.
+1. **The same failure** in this repository: a lesson whose fingerprint (the
+   failing tests and the normalized first error) equals the current one.
+   These always come first.
+2. **Similar errors** from any repository, by text similarity on the first
+   error. Lessons recorded before fingerprints are matched on their stored
+   failure output instead.
+3. **Before the first failure**, lessons whose error appears in the spec.
 
-To use Hindsight, set `CHALK_MEMORY=hindsight` in `.chalk/config`. Chalk
-starts the `chalk-memory` container on first use, bound to localhost only.
-
-- Hindsight calls an LLM to extract facts from each lesson, so it needs an
-  API key. Chalk passes `ANTHROPIC_API_KEY` if set; otherwise export
-  `HINDSIGHT_API_LLM_PROVIDER` and `HINDSIGHT_API_LLM_API_KEY`. A Claude
-  subscription token (`CLAUDE_CODE_OAUTH_TOKEN`) does not work here.
-- The key is stored in the container's configuration. Recreate the container
-  to rotate it: `docker rm -f chalk-memory && chalk memory up`.
-- Expect roughly 2 GB of RAM for the server. Pin a version with
-  `CHALK_MEMORY_IMAGE` rather than tracking `latest`.
-- Memory never blocks work. If the server is down, runs continue without
-  recalled lessons, and lessons recorded meanwhile are sent by
-  `chalk memory sync`. That command also loads lessons recorded before you
-  switched Hindsight on.
-- To move to a shared server later, point `CHALK_MEMORY_URL` at it.
+Hindsight, the optional lesson server, was removed. Old `CHALK_MEMORY=hindsight`
+and `CHALK_MEMORY_*` settings are ignored with a warning. If you ran it,
+remove it with `docker rm -f chalk-memory && docker volume rm chalk-memory-data`.
 
 ## Fleet plans
 
@@ -319,7 +312,6 @@ anything that was waiting for a free slot.
 | Local rules | `CLAUDE.md` |
 | Run logs and plans | `~/.local/state/chalk/<repo>/` |
 | Telemetry and lessons | Postgres in the `chalk-db` container (`chalk db psql`), tables `runs` and `lessons` |
-| Lesson index (optional) | Hindsight in the `chalk-memory` container, bank `chalk` |
 
 ## Compliance note
 

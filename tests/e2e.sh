@@ -125,6 +125,27 @@ check "rules on: the lesson carries the failing loop's fingerprint and first err
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
 cd "$tmp/demo"
 
+# 2c. With CHALK_FP_FEEDBACK=true, a retry is told the failing tests and the
+# first error, normalized, and only the last 20 lines of output. The rubric
+# prints 40 lines before its error, so a 20-line tail starts at line-22.
+chalk new PROJ-17 Feedback feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-17"
+git add -A && git commit -q -m "spec"
+if FAKE_CLAUDE_MODE=break CHALK_FP_FEEDBACK=true CHALK_MAX_RETRIES=1 CHALK_TEST_REPORT=out/report.xml \
+   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$junit' > out/report.xml; seq -f 'line-%g' 1 40; echo 'AssertionError: BROKEN exists at 0x7f3a2b'; exit 1; fi" \
+   chalk run > "$tmp/run13.log" 2>&1; then
+  fail "a failing run with fp feedback should exit non-zero"
+fi
+sed -n '/^<failure>$/,/^<\/failure>$/p' "$XDG_STATE_HOME/chalk/demo/runs/PROJ-17/io/prompt.md" > "$tmp/failure13.txt"
+check "fp feedback: the retry is told the failing tests" grep -qx -- '- demo::no_marker' "$tmp/failure13.txt"
+check "fp feedback: the retry is told the normalized first error" \
+  grep -qx 'first error: AssertionError: BROKEN exists at 0x?' "$tmp/failure13.txt"
+check "fp feedback: the output is cut to its last 20 lines" \
+  sh -c "grep -qx line-22 '$tmp/failure13.txt' && ! grep -qx line-21 '$tmp/failure13.txt'"
+check "fp feedback: a run without it is told the reason and 60 lines, as before" \
+  sh -c "! grep -q '^failing tests:' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-2/io/prompt.md'"
+cd "$tmp/demo"
+
 # 3. Fleet: a plan with two workstreams runs in parallel in the background.
 cd "$tmp/demo"
 cat > "$tmp/plan.json" <<'PLAN'
@@ -419,23 +440,157 @@ check "cleanup removes chalk-db-16 and the legacy volume" \
 check "cleanup keeps the upgraded database" test "$(db_field chalk-db image)" = "pgvector/pgvector:pg17"
 cd "$tmp/demo"
 
-# 4. Hindsight memory: lessons are stored at office hours and recalled into prompts.
-export CHALK_MEMORY=hindsight
+# 4. Lesson memory. Hindsight was removed: its old settings still load, with
+# one warning, and nothing but the database is started for lessons.
 chalk new PROJ-3 Memory feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-3"
 git add -A && git commit -q -m "spec"
-if FAKE_CLAUDE_MODE="break" chalk run >/dev/null 2>&1; then fail "failing run should exit non-zero"; fi
+rm -f "$FAKE_STATE/curl.log"
+if FAKE_CLAUDE_MODE=break CHALK_MEMORY=hindsight CHALK_MEMORY_URL=http://127.0.0.1:18888 \
+   chalk run > "$tmp/run4.log" 2>&1; then
+  fail "failing run should exit non-zero"
+fi
+check "old Hindsight settings: the run goes ahead, with one warning naming them" \
+  sh -c "grep -q 'DETENTION: rubric failed' '$tmp/run4.log' &&
+    test \"\$(grep -c '^warning: ignoring CHALK_MEMORY=hindsight CHALK_MEMORY_URL: Hindsight lesson memory was removed' '$tmp/run4.log')\" -eq 1"
+check "no lesson memory service is started" \
+  sh -c "test ! -e '$XDG_STATE_HOME/chalk/demo/runs/PROJ-3/io/startup/memory.log' &&
+    ! grep -q chalk-memory '$FAKE_STATE/docker.log' && test ! -e '$FAKE_STATE/curl.log'"
 git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-3-*')"
 git rm -q BROKEN && git commit -q -m "remove the blocker"
-chalk office-hours -m "note" > "$tmp/run4.log" 2>&1 || { cat "$tmp/run4.log"; fail "office hours with memory"; }
-check "lesson memory starts alongside the other services" \
-  test -f "$XDG_STATE_HOME/chalk/demo/runs/PROJ-3/io/startup/memory.log"
-check "lesson sent to Hindsight" grep -Eq '"document_id": *"chalk-lesson-[0-9]+"' "$FAKE_STATE/curl.log"
-check "lesson marked as synced" grep -q "UPDATE lessons SET memory_synced_at" "$FAKE_STATE/db.log"
-check "recalled lessons reach the agent prompt" \
-  grep -q "Use the sandbox base URL in tests" "$XDG_STATE_HOME/chalk/demo/runs/PROJ-3/io/prompt.md"
-unset CHALK_MEMORY
+CHALK_MEMORY=hindsight chalk office-hours -m "note" > "$tmp/run4b.log" 2>&1 ||
+  { cat "$tmp/run4b.log"; fail "office hours with old Hindsight settings"; }
+check "office hours resolves the lesson without syncing it anywhere" \
+  sh -c "grep -q 'resolution=note' '$FAKE_STATE/db.log' && ! grep -q 'SET memory_synced_at' '$FAKE_STATE/db.log' &&
+    ! grep -q 'chalk memory sync' '$tmp/run4b.log'"
+chalk memory sync > "$tmp/memory.log" 2>&1 || fail "chalk memory must exit 0"
+check "chalk memory says Hindsight was removed and how to clean it up" \
+  sh -c "grep -q 'Hindsight lesson memory was removed' '$tmp/memory.log' &&
+    grep -qF 'docker rm -f chalk-memory && docker volume rm chalk-memory-data' '$tmp/memory.log'"
 cd "$tmp/demo"
+
+# 4b. Against a real Postgres: a resolved lesson that matches the failure
+# reaches the prompt's <lessons> and is counted in runs.lessons. The runs
+# use a schema of their own, so the seeded lessons are the only ones. Their
+# rubric fails with a known first error (E) and, through a JUnit report, a
+# known failing test (T); the agent leaves BROKEN behind on every loop. With
+# one retry allowed, loop 1 recalls by the spec and loop 2 by the failure.
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  export PGOPTIONS='-c search_path=chalk_recall,public -c client_min_messages=warning'
+  rpg() { psql "$FAKE_PG_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
+  rpg -c 'DROP SCHEMA IF EXISTS chalk_recall CASCADE' -c 'CREATE SCHEMA chalk_recall'
+  rpg -f "$here/../share/schema.sql"
+  error='AssertionError: BROKEN exists'
+  recall_cmd="if [ -e BROKEN ]; then mkdir -p out; echo '$junit' > out/report.xml; echo '$error'; exit 1; fi"
+  # The lesson fingerprint of that failure: sha256 of T and E (fp_compute).
+  if command -v sha256sum >/dev/null; then sha=(sha256sum); else sha=(shasum -a 256); fi
+  fingerprint="$(printf '%s\n\n%s\n' demo::no_marker "$error" | "${sha[@]}" | cut -d' ' -f1)"
+
+  # seed REPO FINGERPRINT FIRST_ERROR SIGNATURE FIX: a resolved lesson. An
+  # empty FINGERPRINT or FIRST_ERROR is stored as NULL, as for old lessons.
+  seed() {
+    rpg -v repo="$1" -v fingerprint="$2" -v first_error="$3" -v signature="$4" -v fix="$5" <<'SQL'
+INSERT INTO lessons (repo, ticket, signature, resolution, lesson, resolved_by, resolved_at,
+                     fingerprint, first_error)
+VALUES (:'repo', 'SEED-1', :'signature', 'note', :'fix', 'e2e', now(),
+        nullif(:'fingerprint', ''), nullif(:'first_error', ''));
+SQL
+  }
+  # recall_run TICKET [ENV=VALUE...]: a run of TICKET whose rubric always
+  # fails, after the given extra line is added to its spec (RECALL_CONTEXT).
+  recall_run() {
+    local ticket="$1"
+    shift
+    cd "$tmp/demo"
+    chalk new "$ticket" Recall feature >/dev/null
+    cd "$tmp/demo.worktrees/$ticket"
+    if [ -n "${RECALL_CONTEXT:-}" ]; then
+      sed -i.bak "s|^What is being built.*|$RECALL_CONTEXT|" "specs/$ticket.md" && rm "specs/$ticket.md.bak"
+    fi
+    git add -A && git commit -q -m "spec"
+    if env FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=1 CHALK_TEST_REPORT=out/report.xml \
+         CHALK_TEST_CMD="$recall_cmd" "$@" chalk run > "$tmp/$ticket.log" 2>&1; then
+      fail "the recall run for $ticket should end in detention"
+    fi
+    cd "$tmp/demo"
+  }
+  # recalled TICKET: the fixes in the last prompt's <lessons> block, in order.
+  recalled() {
+    sed -n '/^<lessons>$/,/^<\/lessons>$/s/^  Fix: //p' "$XDG_STATE_HOME/chalk/demo/runs/$1/io/prompt.md" | paste -sd ' ' -
+  }
+  # counted TICKET: runs.lessons for each agent loop of TICKET, in order.
+  counted() {
+    rpg -v ticket="$1" <<'SQL'
+SELECT string_agg(lessons::text, ' ' ORDER BY loop) FROM runs
+ WHERE ticket = :'ticket' AND kind IN ('continue', 'retry');
+SQL
+  }
+
+  # 1. Exact: the same fingerprint in the same repository comes first, and
+  # three lexical matches cannot push it out. The same fingerprint in
+  # another repository is not an exact match.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed demo "$fingerprint" "" "disk quota exceeded" EXACT-FIX
+  seed other "$fingerprint" "" "disk quota exceeded" OTHER-REPO-FIX
+  for fix in LEX-A LEX-B LEX-C; do seed other "fp-$fix" "$error" "rubric failed" "$fix"; done
+  recall_run PROJ-40
+  check "recall: the failure's own detention lesson carries the fingerprint seeded here" \
+    test "$(rpg -c "SELECT fingerprint FROM lessons WHERE ticket = 'PROJ-40'")" = "$fingerprint"
+  check "recall: an exact fingerprint match comes first and is never displaced" \
+    test "$(recalled PROJ-40)" = "EXACT-FIX LEX-C LEX-B"
+  check "recall: the lessons given are counted in runs.lessons" test "$(counted PROJ-40)" = "0 3"
+
+  # 2. Lexical: a similar first error from another repository matches; a
+  # different error does not.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed other fp-1 "$error in the working tree" "rubric failed" LEXICAL-FIX
+  seed other fp-2 "TypeError: Cannot read properties of undefined (reading 'map')" "rubric failed" WRONG-FIX
+  recall_run PROJ-41
+  check "recall: a lesson with a similar first error is recalled after a failure" \
+    test "$(recalled PROJ-41):$(counted PROJ-41)" = "LEXICAL-FIX:0 1"
+
+  # 3. Legacy: a lesson from before fingerprints has no first_error, and is
+  # matched on its signature. An unresolved one is never recalled.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed other "" "" "rubric failed (exit 1)
+$error
+FAILED demo::no_marker" LEGACY-FIX
+  seed other "" "" "rubric failed (exit 2)
+panic: runtime error: index out of range [3] with length 3" OTHER-LEGACY-FIX
+  rpg -c "INSERT INTO lessons (repo, ticket, signature) VALUES ('demo', 'OPEN-1', 'rubric failed (exit 1)
+$error')"
+  recall_run PROJ-42
+  check "recall: a lesson with no first_error is matched on its signature" \
+    test "$(recalled PROJ-42):$(counted PROJ-42)" = "LEGACY-FIX:0 1"
+
+  # 4. First loop: before any failure, a lesson whose error the spec mentions.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed other fp-1 "$error" "rubric failed" SPEC-FIX
+  seed other fp-2 "panic: runtime error: index out of range [3] with length 3" "rubric failed" NOT-IN-SPEC-FIX
+  RECALL_CONTEXT="CI fails with $error after the last refactor; make the marker check pass." \
+    recall_run PROJ-43 FAKE_CLAUDE_MODE=blocked
+  check "recall: the first loop gets the lessons whose error the spec mentions" \
+    test "$(recalled PROJ-43):$(counted PROJ-43)" = "SPEC-FIX:1"
+
+  # 5. No match: no <lessons> block at all, and nothing counted.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed other fp-1 "TypeError: Cannot read properties of undefined (reading 'map')" "rubric failed (exit 2)" NOPE-FIX
+  recall_run PROJ-44
+  check "recall: with no matching lesson the prompt has no <lessons> block" \
+    sh -c "! grep -q '<lessons>' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-44/io/prompt.md'"
+  check "recall: with no matching lesson none are counted" test "$(counted PROJ-44)" = "0 0"
+
+  # 6. Without fingerprints, recall matches the failure text, as it always did.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed other "" "" "rubric failed (exit 1)
+$error" TEXT-FIX
+  recall_run PROJ-45 CHALK_FP_RULES=off
+  check "recall: with CHALK_FP_RULES=off, lessons are matched on the failure text" \
+    test "$(recalled PROJ-45):$(counted PROJ-45)" = "TEXT-FIX:0 1"
+
+  rpg -c 'DROP SCHEMA chalk_recall CASCADE'
+  unset PGOPTIONS
+fi
 
 # 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
 # pull request through gh.

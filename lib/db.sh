@@ -204,33 +204,45 @@ SELECT signature FROM lessons
 SQL
 }
 
-# Prints resolved lessons whose failure text resembles the query, best first.
-db_similar_lessons() {
-  db_sql -v query="$1" <<'SQL'
+# db_recall_lessons REPO MODE QUERY [FINGERPRINT] [FIRST_ERROR]: prints up
+# to three resolved lessons as a markdown list (MODE and QUERY as for
+# memory_recall). The recall ladder:
+#   1 exact    same repository, same non-NULL fingerprint. Listed first, and
+#              never pushed out by a lexical match.
+#   2 lexical  any repository, by pg_trgm score, best first, above:
+#     failure  0.5 for similarity(first_error, FIRST_ERROR). The same failure
+#              scores about 0.8 or more; two different errors of one type
+#              ("AssertionError: ...") still score about 0.4. A lesson from
+#              before fingerprints has no first_error, and falls back to
+#              similarity(signature, QUERY) above 0.1, recall's old threshold.
+#     spec     0.6 (pg_trgm's default) for word_similarity(coalesce(first_error,
+#              signature), QUERY): the lesson's error appears in the spec. Plain
+#              similarity of one error line to a whole spec stays near zero.
+#     text     0.1 for similarity(signature, QUERY), as recall always did.
+db_recall_lessons() {
+  db_sql -v repo="$1" -v mode="$2" -v query="$3" -v fingerprint="${4:-}" -v first_error="${5:-}" <<'SQL'
+WITH candidates AS (
+  SELECT id, signature, coalesce(lesson, resolution) AS fix,
+         coalesce(repo = :'repo' AND fingerprint = nullif(:'fingerprint', ''), false) AS exact,
+         CASE WHEN :'mode' = 'spec'
+                THEN word_similarity(coalesce(nullif(first_error, ''), signature), :'query')
+              WHEN :'mode' = 'failure' AND nullif(first_error, '') IS NOT NULL
+                THEN similarity(first_error, nullif(:'first_error', ''))
+              ELSE similarity(signature, :'query')
+         END AS score,
+         CASE WHEN :'mode' = 'spec' THEN 0.6
+              WHEN :'mode' = 'failure' AND nullif(first_error, '') IS NOT NULL THEN 0.5
+              ELSE 0.1
+         END AS threshold
+    FROM lessons
+   WHERE resolution IS NOT NULL
+)
 SELECT '- Seen before: ' || left(regexp_replace(signature, '\s+', ' ', 'g'), 240)
-       || E'\n  Fix: ' || coalesce(lesson, resolution)
-  FROM lessons
- WHERE resolution IS NOT NULL AND similarity(signature, :'query') > 0.1
- ORDER BY similarity(signature, :'query') DESC
+       || E'\n  Fix: ' || fix
+  FROM candidates
+ WHERE exact OR score > threshold
+ ORDER BY exact DESC, score DESC NULLS LAST, id DESC
  LIMIT 3;
-SQL
-}
-
-# One JSON object per line for each resolved lesson not yet sent to memory.
-db_unsynced_lessons() {
-  db_sql <<'SQL'
-SELECT json_build_object('id', id, 'repo', repo, 'ticket', ticket,
-                         'signature', signature, 'resolution', resolution,
-                         'lesson', lesson)
-  FROM lessons
- WHERE resolution IS NOT NULL AND memory_synced_at IS NULL
- ORDER BY id;
-SQL
-}
-
-db_mark_lesson_synced() {
-  db_sql -v id="$1" <<'SQL'
-UPDATE lessons SET memory_synced_at = now() WHERE id = :'id';
 SQL
 }
 

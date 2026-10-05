@@ -20,9 +20,8 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_MODEL]=""
   [CHALK_TEXTBOOK]=.chalk/textbook.md
   [CHALK_AUTO_MR]=true
+  # Kept so that older configs still load; builtin is the only recall.
   [CHALK_MEMORY]=builtin
-  [CHALK_MEMORY_BANK]=chalk
-  [CHALK_MEMORY_TOKENS]=800
   [CHALK_SPEC_CHECK]=true
   [CHALK_REVIEW]=true
   [CHALK_REVIEW_ROUNDS]=1
@@ -31,13 +30,12 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_DISTILL]=true
   [CHALK_PERMISSION_MODE]=auto
   [CHALK_FP_RULES]=shadow
+  [CHALK_FP_FEEDBACK]=false
   [CHALK_TEST_REPORT]=""
 )
 
 # Machine-level settings: environment only, never read from the repository.
 declare -gA CHALK_ENV_DEFAULTS=(
-  [CHALK_MEMORY_URL]=http://127.0.0.1:18888
-  [CHALK_MEMORY_IMAGE]=ghcr.io/vectorize-io/hindsight:latest
   # OpenTelemetry export from the agents; off unless an endpoint is set.
   [CHALK_OTEL_ENDPOINT]=""
   [CHALK_OTEL_PROTOCOL]=grpc
@@ -46,13 +44,32 @@ declare -gA CHALK_ENV_DEFAULTS=(
   [CHALK_DB_TIMEOUT]=auto
 )
 
+# Settings of the Hindsight lesson memory, which was removed. They are
+# accepted from .chalk/config or the environment and ignored, with a warning.
+declare -gA CHALK_REMOVED_KEYS=(
+  [CHALK_MEMORY_URL]=1
+  [CHALK_MEMORY_BANK]=1
+  [CHALK_MEMORY_TOKENS]=1
+  [CHALK_MEMORY_IMAGE]=1
+)
+# Set once the warning about them has been given, so it is given once.
+CHALK_REMOVED_WARNED=""
+
 # load_config ROOT: sets every CHALK_* setting for the repository at ROOT.
 load_config() {
   local file="$1/.chalk/config" line key
+  local -a removed=()
+  for key in "${!CHALK_REMOVED_KEYS[@]}"; do
+    if [[ -n ${!key-} ]]; then removed+=("$key"); fi
+  done
   if [[ -f $file ]]; then
     while IFS= read -r line || [[ -n $line ]]; do
       [[ -z $line || $line == \#* ]] && continue
       key="${line%%=*}"
+      if [[ $key =~ ^[A-Z][A-Z0-9_]*$ && -v CHALK_REMOVED_KEYS[$key] ]]; then
+        [[ " ${removed[*]} " == *" $key "* ]] || removed+=("$key")
+        continue
+      fi
       if [[ ! $key =~ ^[A-Z][A-Z0-9_]*$ || ! -v CHALK_CONFIG_DEFAULTS[$key] ]]; then
         warn "ignoring unknown key in .chalk/config: $key"
         continue
@@ -82,8 +99,20 @@ load_config() {
     *) die "CHALK_FORGE must be 'auto', 'github' or 'gitlab' (got '$CHALK_FORGE')" ;;
   esac
   case "$CHALK_MEMORY" in
-    builtin|hindsight) ;;
-    *) die "CHALK_MEMORY must be 'builtin' or 'hindsight' (got '$CHALK_MEMORY')" ;;
+    builtin) ;;
+    hindsight) removed=("CHALK_MEMORY=hindsight" "${removed[@]}")
+               CHALK_MEMORY=builtin ;;
+    *) die "CHALK_MEMORY must be 'builtin' (got '$CHALK_MEMORY')" ;;
+  esac
+  if (( ${#removed[@]} )) && [[ -z $CHALK_REMOVED_WARNED ]]; then
+    CHALK_REMOVED_WARNED=1
+    warn "ignoring ${removed[*]}: Hindsight lesson memory was removed." \
+      "Lessons are now recalled from the chalk-db lessons table (same failure first, then similar errors)," \
+      "with nothing extra to run. Delete these settings; 'chalk memory' says how to remove the old container."
+  fi
+  case "$CHALK_FP_FEEDBACK" in
+    true|false) ;;
+    *) die "CHALK_FP_FEEDBACK must be 'true' or 'false' (got '$CHALK_FP_FEEDBACK')" ;;
   esac
   case "$CHALK_FP_RULES" in
     off|shadow|on) ;;
