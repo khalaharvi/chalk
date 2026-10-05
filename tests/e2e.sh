@@ -44,12 +44,60 @@ git init -q --bare "$tmp/origin.git"
 git init -q -b main "$tmp/demo"
 cd "$tmp/demo"
 git remote add origin "$tmp/origin.git"
-chalk init >/dev/null
+chalk init > "$tmp/init1.log"
 sed -i.bak 's/^CHALK_TEST_CMD=.*/CHALK_TEST_CMD=test ! -e BROKEN/' .chalk/config && rm .chalk/config.bak
 git add -A && git commit -q -m "init"
 
 check "init scaffolds config, textbook, CI and CLAUDE.md" \
   test -f .chalk/textbook.md -a -f .gitlab/chalk.gitlab-ci.yml -a -f .gitlab-ci.yml -a -f CLAUDE.md
+check "init says where to set the CI rubric's image for a stack other than Node" \
+  grep -q 'not Node 22?.*CHALK_CI_IMAGE in .gitlab/chalk.gitlab-ci.yml.*/guide/configuring/your-stack/' "$tmp/init1.log"
+
+# ci_rubric FILE REPO TEST_CMD: runs the rubric job's script from a CI file
+# that init wrote, with sh as a runner might, in a copy of REPO whose
+# CHALK_TEST_CMD is TEST_CMD.
+ci_rubric() {
+  local file="$1" repo="$2" test_cmd="$3" dir script
+  dir="$(mktemp -d "$tmp/ci.XXXXXX")"
+  mkdir -p "$dir/.chalk"
+  printf 'CHALK_SETUP_CMD=\nCHALK_TEST_CMD=%s\n' "$test_cmd" > "$dir/.chalk/config"
+  case "$file" in
+    *.github/workflows/*)
+      script="$(awk '/- name: Run the rubric/ { found = 1; next }
+        found && /run: [|]/ { body = 1; next }
+        body && /^          / { print substr($0, 11); next }
+        body { exit }' "$repo/$file")" ;;
+    *)
+      script="$(awk '/^chalk:rubric:/ { job = 1 }
+        job && /^    - / { line = substr($0, 7)
+          if (line ~ /^\047.*\047$/) line = substr(line, 2, length(line) - 2)
+          print line }
+        job && /^$/ { exit }' "$repo/$file")" ;;
+  esac
+  [ -n "$script" ] || return 2
+  (cd "$dir" && sh -ec "$script")
+}
+
+# ci_rubric_fails FILE REPO TEST_CMD: the job ran and failed with TEST_CMD's
+# status (3), not because its script could not be found (2).
+ci_rubric_fails() {
+  local status=0
+  ci_rubric "$@" || status=$?
+  [ "$status" -eq 3 ]
+}
+
+# The sandbox runs the rubric with bash -c (run_rubric), so CI does too: a
+# rubric that needs bash must not pass in one place and fail in the other.
+ci_runs_rubric_with_bash() {
+  grep -qF 'bash -c "$TEST_CMD"' "$1" && grep -qF 'bash -c "$SETUP_CMD"' "$1" &&
+    ! grep -qE '(^|[^a-z])sh -c' "$1"
+}
+check "GitLab CI runs the setup and the rubric with bash -c, never sh -c" \
+  ci_runs_rubric_with_bash .gitlab/chalk.gitlab-ci.yml
+check "GitLab CI rubric job passes a rubric that needs bash" \
+  ci_rubric .gitlab/chalk.gitlab-ci.yml "$PWD" 'set -o pipefail; [[ -n $BASH_VERSION ]]'
+check "GitLab CI rubric job fails when the rubric fails" \
+  ci_rubric_fails .gitlab/chalk.gitlab-ci.yml "$PWD" 'exit 3'
 
 # 0. chalk doctor asks the CLI in the sandbox image which permission mode a
 # loop on CHALK_MODEL starts in. It sends the SDK's initialize request and
@@ -839,9 +887,20 @@ git init -q -b main "$tmp/hub"
 cd "$tmp/hub"
 git remote add origin "$tmp/hub-origin.git"
 export CHALK_FORGE=github
-chalk init >/dev/null
+chalk init > "$tmp/init5.log"
 check "init on GitHub adds the Actions workflow, not GitLab CI" \
   test -f .github/workflows/chalk.yml -a ! -e .gitlab-ci.yml -a ! -e .gitlab
+check "init on GitHub names the repository variable CHALK_CI_IMAGE" \
+  grep -q 'not Node 22?.*the repository variable CHALK_CI_IMAGE' "$tmp/init5.log"
+CHALK_IMAGE=chalk-sandbox-go:local chalk init > "$tmp/init5b.log"
+check "init with a custom CHALK_IMAGE asks for CHALK_CI_IMAGE as an action" \
+  grep -q 'action   CHALK_IMAGE is chalk-sandbox-go:local: set the repository variable CHALK_CI_IMAGE' "$tmp/init5b.log"
+check "the Actions workflow runs the setup and the rubric with bash -c, never sh -c" \
+  ci_runs_rubric_with_bash .github/workflows/chalk.yml
+check "the Actions rubric job passes a rubric that needs bash" \
+  ci_rubric .github/workflows/chalk.yml "$PWD" 'set -o pipefail; [[ -n $BASH_VERSION ]]'
+check "the Actions rubric job fails when the rubric fails" \
+  ci_rubric_fails .github/workflows/chalk.yml "$PWD" 'exit 3'
 sed -i.bak 's/^CHALK_TEST_CMD=.*/CHALK_TEST_CMD=test ! -e BROKEN/' .chalk/config && rm .chalk/config.bak
 git add -A && git commit -q -m "init"
 chalk new PROJ-20 Hub feature >/dev/null

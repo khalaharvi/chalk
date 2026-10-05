@@ -109,6 +109,7 @@ nav:
           - Fleet runs: guide/running/fleet.md
       - Configuring:
           - Configuration: guide/configuring/configuration.md
+          - Your own stack: guide/configuring/your-stack.md
           - Permissions: guide/configuring/permissions.md
           - Prompts: guide/configuring/prompts.md
           - Lesson recall: guide/configuring/lesson-memory.md

@@ -79,4 +79,10 @@ older than 5.2.
 jq, ripgrep and the `claude` CLI. `chalk sandbox build` (or the first run)
 builds it. A custom image, set with `CHALK_IMAGE`, needs bash 5.2 or
 newer, git, coreutils and `claude` on `PATH`, and must already exist
-locally.
+locally. [Use your own stack](../guide/configuring/your-stack.md) has
+Python and Go examples built `FROM chalk-sandbox:local`.
+
+The rubric and `CHALK_SETUP_CMD` run with `bash -c` (`run_rubric` in
+`lib/run.sh`, `sandbox_sh` in `lib/sandbox.sh`). The CI gates run them
+with `bash -c` too, so a rubric that relies on bash behaves the same in
+the sandbox and in CI.

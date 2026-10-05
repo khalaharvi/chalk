@@ -10,7 +10,8 @@
 # gates passed, the approval records that a human reviewed the change.
 
 variables:
-  # Image with your toolchain for running the rubric.
+  # Image the rubric runs in. For a stack other than Node, set it to a
+  # registry image with your toolchain and bash, here or as a CI/CD variable.
   CHALK_CI_IMAGE: node:22
 
 .chalk:
@@ -34,17 +35,19 @@ chalk:spec:
         exit 1
       fi
 
-# Re-runs the rubric outside the agent's sandbox.
+# Re-runs the rubric outside the agent's sandbox, with bash -c as the
+# sandbox does.
 chalk:rubric:
   extends: .chalk
   stage: test
   image: $CHALK_CI_IMAGE
   script:
+    - 'command -v bash >/dev/null || { echo "CHALK_CI_IMAGE needs bash: the rubric runs with bash -c, as in the sandbox"; exit 1; }'
     - SETUP_CMD=$(sed -n 's/^CHALK_SETUP_CMD=//p' .chalk/config)
     - TEST_CMD=$(sed -n 's/^CHALK_TEST_CMD=//p' .chalk/config)
     - test -n "$TEST_CMD"
-    - if [ -n "$SETUP_CMD" ]; then sh -c "$SETUP_CMD"; fi
-    - sh -c "$TEST_CMD"
+    - if [ -n "$SETUP_CMD" ]; then bash -c "$SETUP_CMD"; fi
+    - bash -c "$TEST_CMD"
 
 # Records that the gates passed. Runs only when CHALK_AUDIT_DB_URL is set as a
 # masked CI/CD variable. Table definition: share/ci-audit-schema.sql.

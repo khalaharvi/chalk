@@ -33,8 +33,9 @@ jobs:
             exit 1
           fi
 
-  # Re-runs the rubric outside the agent's sandbox. Set the repository
-  # variable CHALK_CI_IMAGE to an image with your toolchain.
+  # Re-runs the rubric outside the agent's sandbox, with bash -c as the
+  # sandbox does. For a stack other than Node, set the repository variable
+  # CHALK_CI_IMAGE to a registry image with your toolchain and bash.
   rubric:
     if: startsWith(github.head_ref, 'chalk/') || startsWith(github.head_ref, 'tutoring/')
     runs-on: ubuntu-latest
@@ -43,11 +44,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run the rubric
         run: |
+          command -v bash >/dev/null || { echo "CHALK_CI_IMAGE needs bash: the rubric runs with bash -c, as in the sandbox"; exit 1; }
           SETUP_CMD=$(sed -n 's/^CHALK_SETUP_CMD=//p' .chalk/config)
           TEST_CMD=$(sed -n 's/^CHALK_TEST_CMD=//p' .chalk/config)
           test -n "$TEST_CMD"
-          if [ -n "$SETUP_CMD" ]; then sh -c "$SETUP_CMD"; fi
-          sh -c "$TEST_CMD"
+          if [ -n "$SETUP_CMD" ]; then bash -c "$SETUP_CMD"; fi
+          bash -c "$TEST_CMD"
 
   # Records that the gates passed. Runs only when the CHALK_AUDIT_DB_URL
   # secret is set. Table definition: share/ci-audit-schema.sql.

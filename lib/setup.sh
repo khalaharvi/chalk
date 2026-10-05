@@ -2,6 +2,9 @@
 
 DOCTOR_FAILED=0
 
+# The documentation site, for links in messages.
+CHALK_DOCS_URL="https://khalaharvi.github.io/chalk"
+
 # doctor_check required|optional LABEL HINT COMMAND...
 doctor_check() {
   local level="$1" label="$2" hint="$3"
@@ -131,10 +134,35 @@ cmd_init() {
     info "  updated  CLAUDE.md"
   fi
 
-  case "${| forge_kind; }" in
+  local forge
+  forge="${| forge_kind; }"
+  case "$forge" in
     github) init_copy chalk.github-workflow.yml .github/workflows/chalk.yml ;;
     gitlab) init_gitlab_ci ;;
   esac
 
-  info "next: set CHALK_TEST_CMD in .chalk/config, review .chalk/textbook.md, commit, then 'chalk doctor'"
+  init_ci_image_hint "$forge"
+}
+
+# init_ci_image_hint FORGE: the closing message. The CI rubric runs in
+# CHALK_CI_IMAGE, node:22 unless set, so a repository on another stack
+# fails it until that is set; said as an action when CHALK_IMAGE already
+# shows the stack is not the default.
+init_ci_image_hint() {
+  local where image
+  local next="next: set CHALK_TEST_CMD in .chalk/config, review .chalk/textbook.md, commit, then 'chalk doctor'"
+  case "$1" in
+    github) where="the repository variable CHALK_CI_IMAGE" ;;
+    *)      where="CHALK_CI_IMAGE in .gitlab/chalk.gitlab-ci.yml" ;;
+  esac
+  image="${CHALK_IMAGE:-$(sed -n 's/^CHALK_IMAGE=//p' .chalk/config 2>/dev/null | head -n 1)}"
+  if [[ -n $image && $image != "$CHALK_DEFAULT_IMAGE" ]]; then
+    info "  action   CHALK_IMAGE is $image: set $where to a registry image" \
+      "with the same toolchain and bash, or the CI rubric runs in node:22"
+    info "$next"
+  else
+    info "$next"
+    info "      not Node 22? set CHALK_IMAGE to a sandbox image with your toolchain, and $where" \
+      "to a registry image with it: $CHALK_DOCS_URL/guide/configuring/your-stack/"
+  fi
 }
