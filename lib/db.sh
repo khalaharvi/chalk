@@ -164,20 +164,21 @@ VALUES (:'repo', :'ticket', :'signature', nullif(:'run_id', ''),
 SQL
 }
 
-# db_open_match TICKET FINGERPRINT -> REPLY: 1 when an open lesson for
-# another ticket in this repository, from the last 30 days, has the same
-# fingerprint; empty otherwise, and when the database cannot be read.
+# db_open_match TICKET FINGERPRINT -> REPLY: the ticket of the newest open
+# lesson for another ticket in this repository, from the last 30 days, with
+# the same fingerprint; empty when there is none, and when the database
+# cannot be read.
 db_open_match() {
   REPLY=""
   [[ -n $2 ]] || return 0
   REPLY="$(db_sql -v repo="${| repo_name; }" -v ticket="$1" -v fingerprint="$2" 2>/dev/null <<'SQL' || true
-SELECT 1 FROM lessons
+SELECT ticket FROM lessons
  WHERE repo = :'repo' AND ticket <> :'ticket' AND resolution IS NULL
    AND fingerprint = :'fingerprint' AND created_at >= now() - interval '30 days'
- LIMIT 1;
+ ORDER BY id DESC LIMIT 1;
 SQL
 )"
-  [[ $REPLY == 1 ]] || REPLY=""
+  is_ticket "$REPLY" || REPLY=""
 }
 
 # Attaches the engineer's fix to the newest unresolved lesson for a ticket.

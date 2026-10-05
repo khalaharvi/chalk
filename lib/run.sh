@@ -23,6 +23,10 @@ run_context() {
   RUN_REVIEW_FINDINGS=""
   RUN_LESSONS=0
   RUN_CALL_SECONDS=0
+  # Permission refusals in the latest loop, and the ticket whose open
+  # detention the latest failure matched (see run_fingerprint).
+  RUN_DENIALS=0
+  RUN_OPEN_TICKET=""
   # Set by cmd_run when the loop starts; calls outside a run record none.
   RUN_ID=""
   RUN_FP_BASE=()
@@ -144,10 +148,12 @@ run_rubric() {
 # run_fingerprint VAR RUBRIC_EXIT: fills VAR with this loop's fingerprint,
 # which must be taken before anything is committed. A passing rubric needs
 # only the tree ID. A failing one is also checked against open lessons for
-# other tickets (CUR[open_match], see fp_verdict).
+# other tickets (CUR[open_match], see fp_verdict); the newest such ticket is
+# kept in RUN_OPEN_TICKET.
 run_fingerprint() {
   local -n __loop_fp=$1
   __loop_fp=()
+  RUN_OPEN_TICKET=""
   [[ $CHALK_FP_RULES != off ]] || return 0
   if (( $2 == 0 )); then
     __loop_fp=(["tree_id"]="${| fp_tree_id "$RUN_SANDBOX"; }")
@@ -156,7 +162,8 @@ run_fingerprint() {
   fp_report_fetch "$RUN_SANDBOX" "$RUN_IO/report.xml"
   fp_compute "$1" "$RUN_SANDBOX" "$RUN_IO/rubric.log" "$RUN_IO/report.xml"
   if [[ ${__loop_fp[tests]} != UNKNOWN ]]; then
-    __loop_fp["open_match"]="${| db_open_match "$RUN_TICKET" "${__loop_fp[fingerprint]}"; }"
+    RUN_OPEN_TICKET="${| db_open_match "$RUN_TICKET" "${__loop_fp[fingerprint]}"; }"
+    if [[ -n $RUN_OPEN_TICKET ]]; then __loop_fp["open_match"]=1; fi
   fi
 }
 
@@ -282,12 +289,40 @@ run_review() {
   if [ -z "$verdict" ]; then warn "final review returned no verdict; continuing without it"; fi
 }
 
-# run_detain REASON [DETAIL] [FINGERPRINT] [FIRST_ERROR]: parks the sandbox's
-# work on a local detention branch, logs the failure as an open lesson, and
-# halts this run. FINGERPRINT and FIRST_ERROR are given only when the loop
-# that detained the run failed its rubric.
+# A loop with at least this many permission refusals points to auto mode.
+RUN_MANY_DENIALS=3
+
+# run_next_step KIND -> REPLY: the one line that says what to do about a
+# detention of KIND (see run_detain). Many refusals in the last loop win
+# over KIND: they are what a loop looks like when auto mode is unavailable.
+run_next_step() {
+  if (( RUN_DENIALS >= RUN_MANY_DENIALS )); then
+    REPLY="$RUN_DENIALS actions were refused in the last loop, as when auto mode is unavailable for the model; run: chalk doctor"
+    return 0
+  fi
+  case "$1" in
+    blocked)     REPLY="provide what the agent asked for above, such as a credential, access or a decision" ;;
+    loop_limit)  REPLY="split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now $CHALK_MAX_LOOPS)" ;;
+    review)      REPLY="fix the review findings above, or raise CHALK_REVIEW_ROUNDS (now $CHALK_REVIEW_ROUNDS)" ;;
+    failed)      REPLY="the rubric still fails after $CHALK_MAX_RETRIES retries; fix the failure in $RUN_IO/rubric.log, or make the checkpoint smaller" ;;
+    agent_error) REPLY="see why the agent stopped in $RUN_IO/loop.json; if it ran out of budget, raise CHALK_BUDGET_USD (now $CHALK_BUDGET_USD)" ;;
+    passed)      REPLY="the rubric passes but no checkpoint was ticked; tick it if it is done, or make it testable" ;;
+    deja_vu)     REPLY="this fails like the open detention of ${RUN_OPEN_TICKET:-another ticket}; fix that one first" ;;
+    repeat)      REPLY="the agent made the same failing change twice; fix the failure yourself, a retry would repeat it" ;;
+    no_change)   REPLY="the agent changed nothing; make the checkpoint clearer, or do this step yourself" ;;
+    *)           REPLY="fix what stopped the run" ;;
+  esac
+}
+
+# run_detain KIND REASON [DETAIL] [FINGERPRINT] [FIRST_ERROR]: parks the
+# sandbox's work on a local detention branch, logs the failure as an open
+# lesson, says what to do next, and halts this run. KIND is blocked,
+# loop_limit or review; how the last loop ended when the retries ran out
+# (failed, agent_error or passed); or the verdict that stopped the run
+# (deja_vu, repeat or no_change). FINGERPRINT and FIRST_ERROR are given only
+# when the loop that detained the run failed its rubric.
 run_detain() {
-  local reason="$1" detail="${2:-}" fingerprint="${3:-}" first_error="${4:-}" branch signature
+  local kind="$1" reason="$2" detail="${3:-}" fingerprint="${4:-}" first_error="${5:-}" branch signature
   branch="detention/$RUN_TICKET-$EPOCHSECONDS"
 
   sandbox_commit "$RUN_SANDBOX" "detention($RUN_TICKET): $reason" --allow-empty
@@ -307,6 +342,7 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
 
   run_log "DETENTION: $reason"
   if [ -n "$detail" ]; then printf '%s\n' "$detail"; fi
+  run_log "next: ${| run_next_step "$kind"; }"
   run_log "work parked on local branch $branch. To unblock:"
   run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
   run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
@@ -395,7 +431,7 @@ cmd_run() {
       fi
       failed_reviews=$((failed_reviews + 1))
       if [ "$failed_reviews" -gt "$CHALK_REVIEW_ROUNDS" ]; then
-        run_detain "final review still finds problems after $CHALK_REVIEW_ROUNDS fix round(s)" "$RUN_REVIEW_FINDINGS"
+        run_detain review "final review still finds problems after $CHALK_REVIEW_ROUNDS fix round(s)" "$RUN_REVIEW_FINDINGS"
         return 1
       fi
       findings="$RUN_REVIEW_FINDINGS"
@@ -408,7 +444,7 @@ cmd_run() {
 
     RUN_LOOP=$((RUN_LOOP + 1))
     if [ "$RUN_LOOP" -gt "$CHALK_MAX_LOOPS" ]; then
-      run_detain "loop limit of $CHALK_MAX_LOOPS reached with $open checkpoints open"
+      run_detain loop_limit "loop limit of $CHALK_MAX_LOOPS reached with $open checkpoints open"
       return 1
     fi
 
@@ -416,13 +452,15 @@ cmd_run() {
     agent_status="ok"
     run_call loop "$CHALK_MODEL" "${CHALK_SCHEMA[loop]}" write < "$RUN_IO/prompt.md" || agent_status="error"
     if [ -n "$(agent_error "$result")" ]; then agent_status="$(agent_error "$result")"; fi
+    agent_usage "$result" usage
+    RUN_DENIALS="${usage[denials]}"
 
     # A reported blocker goes straight to an engineer; retrying cannot fix it.
     if [ "$(agent_field "$result" '.status')" = "blocked" ]; then
       fp=()
       run_verdict fp blocked
       db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
-      run_detain "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
+      run_detain blocked "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
       return 1
     fi
 
@@ -456,7 +494,6 @@ cmd_run() {
     db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
       "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (\$$(agent_cost "$result"), ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
-    agent_usage "$result" usage
     if (( usage[denials] > 0 )); then
       run_log "  ${usage[denials]} action(s) were refused by permission checks; see $result"
     fi
@@ -475,13 +512,13 @@ cmd_run() {
     # With CHALK_FP_RULES=on, a loop that repeats itself, changes nothing, or
     # fails like an open detention on another ticket is detained at once.
     if [ "$CHALK_FP_RULES" = "on" ] && fp_stops "${fp[verdict]-}"; then
-      run_detain "${fp[verdict]}: $reason" "" "${lesson[@]}"
+      run_detain "${fp[verdict]}" "${fp[verdict]}: $reason" "" "${lesson[@]}"
       return 1
     fi
 
     failures=$((failures + 1))
     if [ "$failures" -gt "$CHALK_MAX_RETRIES" ]; then
-      run_detain "$reason" "" "${lesson[@]}"
+      run_detain "$ended" "$reason" "" "${lesson[@]}"
       return 1
     fi
     feedback="$reason

@@ -30,6 +30,38 @@ git add -A && git commit -q -m "init"
 check "init scaffolds config, textbook, CI and CLAUDE.md" \
   test -f .chalk/textbook.md -a -f .gitlab/chalk.gitlab-ci.yml -a -f .gitlab-ci.yml -a -f CLAUDE.md
 
+# 0. chalk doctor asks the CLI in the sandbox image which permission mode a
+# loop on CHALK_MODEL starts in. It sends the SDK's initialize request and
+# no message, so it costs nothing.
+chalk doctor > "$tmp/doctor1.log" 2>&1 || { cat "$tmp/doctor1.log"; fail "doctor"; }
+check "doctor: auto mode is available for the default model" \
+  grep -qx '  ok    auto mode for the default model' "$tmp/doctor1.log"
+check "doctor: the CLI is asked for auto mode, with no prompt and no budget to spend" \
+  sh -c "grep -e '--input-format stream-json' '$FAKE_STATE/claude.log' | grep -q -e '--permission-mode auto' &&
+    ! grep -e '--input-format stream-json' '$FAKE_STATE/claude.log' | grep -q -e '--max-budget-usd'"
+if CHALK_MODEL=sonnet FAKE_AUTO_MODE=off chalk doctor > "$tmp/doctor2.log" 2>&1; then
+  fail "doctor must fail when auto mode is unavailable"
+fi
+check "doctor: auto mode unavailable for CHALK_MODEL is a FAIL that says what follows" \
+  grep -q '^  FAIL  auto mode for sonnet: unavailable: loops would start in manual mode' "$tmp/doctor2.log"
+FAKE_AUTO_MODE=unknown chalk doctor > "$tmp/doctor3.log" 2>&1 ||
+  { cat "$tmp/doctor3.log"; fail "doctor must pass when auto mode cannot be verified"; }
+check "doctor: auto mode that cannot be asked about is reported as not verified" \
+  grep -q '^  --    auto mode for the default model: could not verify' "$tmp/doctor3.log"
+CHALK_PERMISSION_MODE=bypass FAKE_AUTO_MODE=off chalk doctor > "$tmp/doctor4.log" 2>&1 ||
+  { cat "$tmp/doctor4.log"; fail "doctor with CHALK_PERMISSION_MODE=bypass"; }
+check "doctor: auto mode is not checked when CHALK_PERMISSION_MODE=bypass" \
+  grep -q 'auto mode not used (CHALK_PERMISSION_MODE=bypass)' "$tmp/doctor4.log"
+if CHALK_MODEL=haiku chalk doctor > "$tmp/doctor5.log" 2>&1; then fail "doctor must refuse Haiku in auto mode"; fi
+check "doctor: Haiku is refused for auto mode without asking the CLI" \
+  grep -q 'auto mode does not support Haiku' "$tmp/doctor5.log"
+
+# next_step LOG TEXT: LOG has exactly one "what to do next" line, and it
+# starts with TEXT.
+next_step() {
+  test "$(grep -c '^\[[A-Z0-9-]*\] next: ' "$1")" -eq 1 && grep -q "^\[[A-Z0-9-]*\] next: $2" "$1"
+}
+
 # 1. Happy path: two checkpoints, two loops, merge request opened.
 chalk new PROJ-1 Demo feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-1"
@@ -76,6 +108,8 @@ tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db2.log"
 check "shadow mode: the same three loops, then the usual detention" \
   sh -c "grep -q 'loop 3 (retry)' '$tmp/run2.log' && ! grep -q 'loop 4' '$tmp/run2.log' &&
     grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/run2.log'"
+check "next step when retries run out on a failing rubric: fix the failure" \
+  next_step "$tmp/run2.log" "the rubric still fails after 2 retries; fix the failure in .*/rubric.log"
 check "shadow mode: the retry prompt's failure feedback is unchanged" \
   sh -c "grep -A 1 '^<failure>' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-2/io/prompt.md' | grep -qx 'rubric failed (exit 1)'"
 check "shadow mode: one verdict per loop with no progress" \
@@ -119,10 +153,54 @@ fi
 tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db12.log"
 check "rules on: a repeating loop is detained at loop 2 with the verdict as the reason" \
   sh -c "grep -q 'DETENTION: repeat: rubric failed (exit 1)' '$tmp/run12.log' && ! grep -q 'loop 3' '$tmp/run12.log'"
+check "next step on repeat: fix the failure, since a retry would repeat it" \
+  next_step "$tmp/run12.log" "the agent made the same failing change twice"
 check "rules on: the loops record first, then repeat, with the failing test count" \
   sh -c "grep -q -e '-v failing=1 .*-v verdict=first$' '$tmp/db12.log' && grep -q -e '-v failing=1 .*-v verdict=repeat$' '$tmp/db12.log'"
 check "rules on: the lesson carries the failing loop's fingerprint and first error" \
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
+cd "$tmp/demo"
+
+# 2b'. Every detention says what to do next, in one line. These runs share
+# one ticket: a detention leaves its working branch as it was.
+chalk new PROJ-31 Detained feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-31"
+git add -A && git commit -q -m "spec"
+# detain NAME [ENV=VALUE...]: a run of PROJ-31 that must end in detention,
+# logged to $tmp/detain-NAME.log.
+detain() {
+  local name="$1"
+  shift
+  if env "$@" chalk run > "$tmp/detain-$name.log" 2>&1; then fail "the $name run should end in detention"; fi
+}
+# detained NAME REASON TEXT: the NAME run was detained for REASON, and its
+# one next-step line starts with TEXT.
+detained() { grep -q "DETENTION: $2" "$tmp/detain-$1.log" && next_step "$tmp/detain-$1.log" "$3"; }
+
+# The failure of PROJ-9, whose detention is still open. The fake database
+# is told so; a real one (make test-db) holds PROJ-9's open lesson.
+detain deja_vu FAKE_OPEN_MATCH=PROJ-9 FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_TEST_REPORT=out/report.xml \
+  CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$junit' > out/report.xml; echo 'AssertionError: BROKEN exists'; exit 1; fi"
+check "next step on deja_vu: fix the matching open detention first" \
+  detained deja_vu "deja_vu: " "this fails like the open detention of PROJ-9; fix that one first"
+detain no_change FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on
+check "next step on no_change: make the checkpoint clearer or do it yourself" \
+  detained no_change "no_change: " "the agent changed nothing"
+detain agent_error FAKE_CLAUDE_MODE=error CHALK_MAX_RETRIES=0
+check "next step when the agent stopped early: see why, or raise the budget" \
+  detained agent_error "agent stopped early (error_max_turns)" "see why the agent stopped in .*/loop.json"
+detain passed FAKE_CLAUDE_MODE=idle CHALK_MAX_RETRIES=0
+check "next step when nothing was ticked: tick it or make it testable" \
+  detained passed "rubric passed but no checkpoint was ticked" "the rubric passes but no checkpoint was ticked"
+detain refused FAKE_CLAUDE_MODE=refused CHALK_MAX_RETRIES=0
+check "next step after many permission refusals: check auto mode with chalk doctor" \
+  detained refused "rubric passed but no checkpoint was ticked" \
+    "4 actions were refused in the last loop, as when auto mode is unavailable for the model; run: chalk doctor"
+# Last, as its first loop's progress lands on the working branch.
+detain loop_limit CHALK_MAX_LOOPS=1
+check "next step at the loop limit: split the checkpoints or raise the limit" \
+  detained loop_limit "loop limit of 1 reached" \
+    "split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now 1)"
 cd "$tmp/demo"
 
 # 2c. With CHALK_FP_FEEDBACK=true, a retry is told the failing tests and the
@@ -181,6 +259,8 @@ if FAKE_CLAUDE_MODE=blocked chalk run > "$tmp/run6.log" 2>&1; then fail "blocked
 check "blocker goes to detention without retries" \
   sh -c "grep -q 'needs the staging API key' '$tmp/run6.log' && ! grep -q 'loop 2' '$tmp/run6.log'"
 check "blocker text recorded as the lesson signature" grep -q "signature=agent reported a blocker" "$FAKE_STATE/db.log"
+check "next step on a blocker: provide what the agent asked for" \
+  next_step "$tmp/run6.log" "provide what the agent asked for above"
 
 cd "$tmp/demo"
 chalk new PROJ-5 Reviewed feature >/dev/null
@@ -199,6 +279,8 @@ git add -A && git commit -q -m "spec"
 if FAKE_REVIEW=fail chalk run > "$tmp/run8.log" 2>&1; then fail "persistently failing review should exit non-zero"; fi
 check "unresolved review goes to detention, not a merge request" \
   sh -c "test -n \"\$(git for-each-ref 'refs/heads/detention/PROJ-6-*')\" && ! grep -q 'chalk/PROJ-6' '$FAKE_STATE/glab.log'"
+check "next step when the review still fails: fix the findings" \
+  next_step "$tmp/run8.log" "fix the review findings above, or raise CHALK_REVIEW_ROUNDS (now 1)"
 
 cd "$tmp/demo"
 chalk prompts eject continue >/dev/null

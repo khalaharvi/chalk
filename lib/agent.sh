@@ -67,6 +67,29 @@ agent_call() {
     > "$io/$name.json" 2> "$io/$name.err"
 }
 
+# The Agent SDK's first request to the CLI. Claude Code answers it with the
+# permission mode the session starts in, before any message is sent, so
+# asking costs nothing.
+CHALK_INIT_REQUEST='{"type":"control_request","request_id":"chalk-doctor","request":{"subtype":"initialize"}}'
+
+# agent_start_mode MODEL -> REPLY: the permission mode a loop on MODEL (empty
+# for the default) starts in when it asks for auto mode, asked of the claude
+# CLI in the sandbox image with the agent's credentials. "auto" when auto
+# mode is available; Claude Code falls back to "default" (manual) without an
+# error when it is not. Empty when the CLI could not be asked or did not say.
+agent_start_mode() {
+  local -a auth args=(-p --input-format stream-json --output-format stream-json --verbose
+                      --no-session-persistence --permission-mode auto)
+  if [ -n "$1" ]; then args+=(--model "$1"); fi
+  sandbox_auth_args auth
+  REPLY="$(printf '%s\n' "$CHALK_INIT_REQUEST" |
+    docker run --rm -i --user "$(id -u):$(id -g)" -e HOME=/tmp "${auth[@]}" \
+      --entrypoint timeout "$CHALK_IMAGE" 60 claude "${args[@]}" 2>/dev/null |
+    jq -rR 'fromjson? | select(.type? == "control_response")
+            | .response.response.current_permission_mode // empty' 2>/dev/null)" || REPLY=""
+  [[ $REPLY =~ ^[a-zA-Z]+$ ]] || REPLY=""
+}
+
 # agent_field FILE JQ_FILTER: reads from the structured answer; prints nothing
 # when the answer is missing or malformed.
 agent_field() {

@@ -40,6 +40,27 @@ doctor_profile() {
   doctor_check optional "database wait ${| system_timeout 30 "$CHALK_DB_TIMEOUT"; }s (CHALK_DB_TIMEOUT=$CHALK_DB_TIMEOUT)" "" true
 }
 
+# Whether loops get auto mode on CHALK_MODEL. Without it Claude Code starts
+# in manual mode with no error, and a headless loop has every edit refused.
+# load_config has already refused Haiku, which auto mode does not support.
+doctor_auto_mode() {
+  local label="auto mode for ${CHALK_MODEL:-the default model}" mode
+  if [[ $CHALK_PERMISSION_MODE != auto ]]; then
+    doctor_check optional "auto mode not used (CHALK_PERMISSION_MODE=$CHALK_PERMISSION_MODE)" "" true
+    return 0
+  fi
+  mode="${| agent_start_mode "$CHALK_MODEL"; }"
+  # Claude Code calls manual mode "default".
+  [[ $mode != default ]] || mode=manual
+  case "$mode" in
+    auto) doctor_check required "$label" "" true ;;
+    "")   doctor_check optional "$label" \
+            "could not verify; needs Docker running and the image built" false ;;
+    *)    doctor_check required "$label" \
+            "unavailable: loops would start in $mode mode and have every edit refused; choose another CHALK_MODEL, ask an administrator to allow auto mode, or set CHALK_PERMISSION_MODE=bypass" false ;;
+  esac
+}
+
 cmd_doctor() {
   load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   info "chalk $CHALK_VERSION"
@@ -65,6 +86,7 @@ cmd_doctor() {
   doctor_check optional "sandbox image"     "built on first run, or: chalk sandbox build" docker image inspect "$CHALK_IMAGE"
   doctor_check optional "sandbox bash ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]}+" \
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
+  doctor_auto_mode
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured
   [ "$DOCTOR_FAILED" -eq 0 ] || die "fix the FAIL items above"
 }
