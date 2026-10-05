@@ -22,7 +22,7 @@ first use.
 | Sandbox image and its bash | no | Built on the first run, or `chalk sandbox build`. A custom `CHALK_IMAGE` needs bash 5.2 or newer |
 | Auto mode for `CHALK_MODEL` | yes, when it can be asked | `FAIL` when loops would start in manual mode and have every edit refused: choose another `CHALK_MODEL`, ask an administrator to allow auto mode, or set `CHALK_PERMISSION_MODE=bypass`. "could not verify" when Docker or the image is not ready. See [auto mode requirements](../configuring/permissions.md#auto-mode-requirements) |
 | `uv` | no | Only the local [decider](../configuring/decider.md) needs it: `brew install uv` |
-| Decider | no | With `CHALK_DECIDER=off`, nothing to check. Otherwise, for the local service: whether `chalk decider up` installed it, the model revisions it resolved, whether it is running (a run starts it), its measured time per decision, and whether the host has memory for a run to start it. For a hosted decider: whether its `/health` answers |
+| Decider | no | With `CHALK_DECIDER=off`, nothing to check. Otherwise, for the local service: whether `chalk decider up` installed it, the model revisions it resolved, whether it is running (a run starts it once it can ask it something), its measured time per decision, and whether the host has memory for a run to start it. For a hosted decider: whether its `/health` answers. Either way, how many questions it was asked in the last 30 days and, when none, why |
 | Repository configured | no | `chalk init`, then set `CHALK_TEST_CMD` |
 
 ## Where a run keeps its files
@@ -96,13 +96,15 @@ none, as Alpine images do. See
 most once a day; `chalk doctor` reports it every time.
 
 **The decider is never asked anything.** `chalk doctor` says why: it is
-`off`, `chalk decider up` was never run, or the host lacks the memory for a
-run to start it (a run then warns "not starting the local decider"). A run
-starts it in the background, so the first loops of a run on a cold machine
-get no answers. The stuck question is asked only of failed loops whose
-verdict is `spinning` or `other`, and never with `CHALK_FP_RULES=off`.
-Recall asks it only once there are `CHALK_DECIDER_MIN_LESSONS` resolved
-lessons.
+`off`, `chalk decider up` was never run, the host lacks the memory for a
+run to start it (a run then warns "not starting the local decider"), or
+no run met a question's conditions. The stuck question is asked only of
+failed loops whose verdict is `spinning` or `other`, and never with
+`CHALK_FP_RULES=off`. Recall asks it only once there are
+`CHALK_DECIDER_MIN_LESSONS` resolved lessons. `chalk doctor` and
+`chalk decider status` count the loops that failed and the lessons
+resolved; see [When nothing is asked](../configuring/decider.md#when-nothing-is-asked).
+Until a question can come, a run does not start the local service.
 
 **"the local decider took … ms per decision".** `chalk decider up`
 measured it at over 1 second, so on this machine it records in shadow

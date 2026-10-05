@@ -1,6 +1,30 @@
 # The report card: a single self-contained HTML page built from the local
 # telemetry database. Nothing is served and nothing leaves the machine.
 
+# dashboard_ledger_note REACH -> REPLY: why the verdict ledger may count no
+# detained run, from REACH (as db_decider_reach prints it): how many loops
+# failed their rubric or passed with no checkpoint ticked, the only loops a
+# stopping verdict can judge, and how many runs ended in a blocker
+# instead. Empty when REACH is empty or has no loops.
+dashboard_ledger_note() {
+  local days="" loops=0 failed=0 unticked=0 blocked=0 n
+  REPLY=""
+  [[ -n ${1:-} ]] || return 0
+  IFS=$'\t' read -r days loops failed unticked blocked < <(jq -r '
+    [.days, .loops, .failed, .unticked, .blocked_runs] | map(tostring) | @tsv' <<<"$1" 2>/dev/null) || true
+  for n in "$days" "$loops" "$failed" "$unticked" "$blocked"; do [[ $n =~ ^[0-9]+$ ]] || return 0; done
+  (( loops > 0 )) || return 0
+  if (( failed + unticked == 0 )); then
+    REPLY="No loop failed its rubric or passed without ticking a checkpoint in the last $days days ($loops loop(s)), so no verdict could stop a run"
+    if (( blocked > 0 )); then
+      REPLY+="; agents that could not progress reported a blocker instead ($blocked run(s))"
+    fi
+  else
+    REPLY="Of $loops loop(s) in the last $days days, $failed failed their rubric and $unticked passed without ticking a checkpoint, but none of their runs was detained in shadow mode"
+  fi
+  REPLY+="."
+}
+
 cmd_dashboard() {
   local days=30 open_it=1 output=""
   while [ $# -gt 0 ]; do
@@ -32,6 +56,17 @@ cmd_dashboard() {
              --argjson pct "$DECIDER_CALIBRATION_PERCENT" '
     .decider.gate = $gate
     | .decider.gate_rules = {threshold: ($threshold | tonumber), runs: $runs, percent: $pct}' <<<"$data")" ||
+    die "could not read telemetry for the dashboard"
+  # Why the decider panel and the verdict ledger are empty, when they are.
+  local reach decider_note=""
+  reach="$(db_decider_reach "$days" 2>/dev/null || true)"
+  jq -e '(.loops | type) == "number"' >/dev/null 2>&1 <<<"$reach" || reach=""
+  if [[ -n $reach && $CHALK_DECIDER != off ]]; then
+    decider_note="${| decider_quiet_note "$reach"; }"
+    [[ -z $decider_note ]] || decider_note="0 questions in the last $days days: $decider_note."
+  fi
+  data="$(jq -c --arg decider "$decider_note" --arg ledger "${| dashboard_ledger_note "$reach"; }" '
+    .empty = {decider: $decider, ledger: $ledger}' <<<"$data")" ||
     die "could not read telemetry for the dashboard"
   # "</" is escaped so that no stored text can close the page's script tag.
   data="${data//<\//<\\/}"

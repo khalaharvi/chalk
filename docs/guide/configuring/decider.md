@@ -32,6 +32,24 @@ verdicts; lesson recall still uses the decider.
 Start in `shadow`. `on` acts only once the decider has shown, in shadow
 mode, that its confident answers are right nine times in ten.
 
+## When nothing is asked
+
+Both questions wait for something a run may never produce. The stuck
+question follows only a loop that fails its rubric and that the verdicts
+call `spinning` or `other`; agents that keep the rubric green on every
+loop, and report a blocker when they cannot, never get there. Lesson
+rerank waits for 30 resolved lessons. Until either happens, shadow mode
+records nothing, and the report card has nothing to calibrate with.
+
+`chalk doctor`, `chalk decider status` and the report card then say why,
+from the last 30 days of runs (the report card's period):
+
+```text
+  --    decider asked 0 questions in the last 30 days: the stuck question is asked
+        only after a loop fails its rubric, and 0 of 85 loops did (4 run(s) ended in a
+        blocker instead); lesson rerank needs 30 resolved lessons, this machine has 4
+```
+
 ## The calibration gate
 
 "Act at 0.9 or above" is safe only if answers at 0.9 are right about nine
@@ -114,15 +132,30 @@ Chalk tracks the latest release and model revision rather than pinning
 them, and records the revisions it resolved: `chalk decider status`,
 `chalk doctor` and every recorded answer name them.
 
-**Runs start it, and never download.** When the service is installed and
-`CHALK_DECIDER` is not `off`, `chalk run` starts it in the background and
-does not wait for it: loops that come before it is ready simply get no
-answers. Concurrent runs, such as a fleet, start exactly one copy. A run
-never installs or downloads anything.
+**Runs start it once it can be asked something, and never download.**
+When the service is installed and `CHALK_DECIDER` is not `off`,
+`chalk run` starts it in the background and does not wait for it. It
+holds several GB, so a run starts it only when a question can come:
+
+- **at run start**, when there are `CHALK_DECIDER_MIN_LESSONS` (30)
+  resolved lessons, since lesson rerank is asked from the first loop's
+  prompt on;
+- otherwise **when a loop first fails its rubric**. The stuck question
+  compares a failed loop with the one before it, so the next loop is the
+  earliest it can be asked. The run log says
+  `loop 1 failed its rubric: starting the local decider for the stuck question`.
+
+A run that never fails a loop, with fewer lessons than that, never starts
+it, and says so once at the start. Starting took about 10 seconds on an
+M3 Pro, and a loop takes minutes, so the service is up by the next
+loop's question. A question it gets while still loading its model has
+no answer, recorded as `starting`. Concurrent runs, such as a fleet,
+start exactly one copy. A run never installs or downloads anything.
+`chalk decider up` starts it at once.
 
 **It stops when idle.** After `CHALK_DECIDER_IDLE_MINUTES` (30) without a
 question it exits and frees its memory, several GB with the models
-loaded; the next run starts it again.
+loaded; a run starts it again when it can ask it something.
 
 **It needs memory beside Docker.** A run starts it only when the host has
 at least 6 GiB free beside what Docker takes, unless `CHALK_DECIDER=on`.
@@ -217,8 +250,9 @@ model are only as good as its calibration, so it too has to pass
 
 All the calls one loop makes to the decider and chalk-embed share a
 budget of **2 seconds**. Each call gets what is left; once it is used up,
-the remaining calls are skipped. A decider that is down, slow, busy with
-other loops, refuses the token or answers in a way Chalk cannot read
+the remaining calls are skipped. A decider that is down, still starting,
+slow, busy with other loops, refuses the token or answers in a way Chalk
+cannot read
 gives **no answer**, and the loop goes on exactly as with
 `CHALK_DECIDER=off`. Each such call is recorded with the reason.
 

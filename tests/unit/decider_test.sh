@@ -7,7 +7,7 @@
 set -euo pipefail
 # shellcheck source=tests/unit/testlib.sh
 . "$(dirname "$0")/testlib.sh"
-load core/log core/runtime core/jobs core/system db decider
+load core/log core/runtime core/jobs core/system db decider dashboard
 
 export XDG_STATE_HOME="$tmp/state" FAKE_STATE="$tmp/fake"
 mkdir -p "$FAKE_STATE" "$tmp/bin"
@@ -387,8 +387,10 @@ check "no embeddings when chalk-embed is down" test -z "${| FAKE_DECIDER_DOWN=1 
 # --- the rerank's size ------------------------------------------------------
 
 # Stand-ins for the database: enough resolved lessons, no embeddings, and a
-# shortlist of two exact matches and N other lessons.
-db_decider_gate() { echo "40 0"; }
+# shortlist of two exact matches and N other lessons. With gate=none, the
+# database does not answer.
+gate="40 0"
+db_decider_gate() { [[ $gate != none ]] || return 1; echo "$gate"; }
 db_recall_shortlist() { printf '%s\n' "$recall_shortlist"; }
 # lessons N FAILURE FIX: that shortlist, every lesson with FAILURE and FIX.
 lessons() {
@@ -557,6 +559,69 @@ check "a decider that died alone is started again, with chalk-embed" \
   test "$(grep -c '^decider' "$tmp/started"):$(grep -c '^embed' "$tmp/started")" = 2:2
 check "... and the chalk-embed it left is stopped" fails kill -0 "$old_embed"
 decider_stop
+
+# --- starting only once a question can be asked (#85) -----------------------
+
+# Below CHALK_DECIDER_MIN_LESSONS resolved lessons, lesson rerank cannot be
+# asked, so a run waits for a failed loop to start the service.
+gate="4 1"
+check "the resolved lessons lesson rerank waits for are counted" test "${| decider_lessons; }" = 4
+gate=none
+check "... and not guessed without the database" test -z "${| decider_lessons; }"
+gate="40 0"
+
+SYS=() SYS_PROBED=1
+rm -f "$tmp/started"
+touch "$tmp/started"
+CHALK_DECIDER=off
+check "decider off: a run starts nothing" fails decider_start_bg "$tmp/bg/start.log"
+CHALK_DECIDER=shadow
+check "shadow, installed and stopped: a run starts it in the background" decider_start_bg "$tmp/bg/start.log"
+for _ in $(seq 1 50); do [[ -n ${| decider_pid decider; } ]] && break; sleep 0.1; done
+check "... with its output in the run's log" test -e "$tmp/bg/start.log"
+check "... and once: running, it is not started again" fails decider_start_bg "$tmp/bg/start.log"
+
+# A question while strands-decider loads its model (its process is up, but
+# nothing listens yet) gets no answer, recorded as starting; once it has
+# been up for longer than its start may take, as unreachable.
+decider_budget_reset
+ask FAKE_DECIDER_DOWN=1 || true
+check "a question while the decider is starting is recorded as starting, not unreachable" \
+  test "$DECIDER_ERROR" = starting
+touch -t 202001010000 "$dir/decider.pid"
+decider_budget_reset
+ask FAKE_DECIDER_DOWN=1 || true
+check "... and one to a decider up for long that does not answer, as unreachable" test "$DECIDER_ERROR" = unreachable
+decider_stop
+CHALK_DECIDER=on
+
+# --- why nothing was asked (#85) --------------------------------------------
+
+# reach LOOPS FAILED GRAY BLOCKED_RUNS QUESTIONS LESSONS: db_decider_reach's record.
+reach() {
+  jq -cn --argjson l "$1" --argjson f "$2" --argjson g "$3" --argjson b "$4" --argjson q "$5" --argjson n "$6" \
+    '{days: 30, loops: $l, failed: $f, gray: $g, unticked: 0, blocked_runs: $b, questions: $q, lessons: $n}'
+}
+quiet() { printf '%s\n' "${| decider_quiet_note "$(reach "$@")"; }"; }
+check "no failed loop: the stuck question waits for one, and lesson rerank for lessons" \
+  test "$(quiet 85 0 0 4 0 4)" = "the stuck question is asked only after a loop fails its rubric, and 0 of 85 loops did (4 run(s) ended in a blocker instead); lesson rerank needs 30 resolved lessons, this machine has 4"
+check "failed loops, none spinning or other" \
+  test "$(quiet 20 3 0 0 0 4)" = "the stuck question is asked only after a failed loop the verdicts call spinning or other, and none of 3 failed loop(s) was; lesson rerank needs 30 resolved lessons, this machine has 4"
+check "loops that could have been asked: the decider was off for them" \
+  test "$(quiet 20 3 2 0 0 31)" = "2 failed loop(s) the verdicts call spinning or other could have been asked, but the decider was off for them; lesson rerank had 31 resolved lessons, but no candidate lesson for any loop's failure"
+check "no loops at all" test "$(quiet 0 0 0 0 0 0)" = "no loop ran; lesson rerank needs 30 resolved lessons, this machine has 0"
+check "with CHALK_FP_RULES=off, the stuck question needs verdicts" \
+  sh -c 'case "$1" in "the stuck question needs verdicts, which CHALK_FP_RULES=off turns off; "*) ;; *) exit 1 ;; esac' _ \
+    "$(CHALK_FP_RULES=off; quiet 20 0 0 0 0 4)"
+check "nothing to explain once a question was asked" test -z "$(quiet 85 1 1 0 1 4)"
+check "nor without the database" test -z "${| decider_quiet_note ""; }"
+check "nor from a record it cannot read" test -z "${| decider_quiet_note '{"questions": 0}'; }"
+ledger_note() { printf '%s\n' "${| dashboard_ledger_note "$1"; }"; }
+check "the ledger: no loop the rules judge, and the runs that reported a blocker instead" \
+  test "$(ledger_note "$(reach 85 0 0 4 0 4)")" = "No loop failed its rubric or passed without ticking a checkpoint in the last 30 days (85 loop(s)), so no verdict could stop a run; agents that could not progress reported a blocker instead (4 run(s))."
+check "the ledger: loops the rules judge, in runs that were not detained" \
+  test "$(ledger_note "$(reach 20 3 0 0 0 4)")" = "Of 20 loop(s) in the last 30 days, 3 failed their rubric and 0 passed without ticking a checkpoint, but none of their runs was detained in shadow mode."
+check "the ledger: nothing to say with no loops" test -z "$(ledger_note "$(reach 0 0 0 0 0 4)")"
 
 # --- taking turns at the local decider --------------------------------------
 
