@@ -41,9 +41,18 @@ branch, and your fix becomes a lesson for later runs.
 
 ```sh
 brew install khalaharvi/chalk/chalk
-export CLAUDE_CODE_OAUTH_TOKEN=...   # or ANTHROPIC_API_KEY
+claude setup-token                   # once, with a Claude plan: prints a token
+export CLAUDE_CODE_OAUTH_TOKEN=...   # that token, or ANTHROPIC_API_KEY instead
 chalk doctor
 ```
+
+**Use your Claude subscription or an API key.** A Pro, Max, Team or
+Enterprise plan works: `claude setup-token` needs Claude Code on your
+machine and prints a token that lasts a year. Runs then count against your
+plan's usage limits, and `chalk fleet` runs several agents at once, so it
+reaches them sooner. If `ANTHROPIC_API_KEY` is also set, it wins and the API
+account is billed; unset it to use the subscription.
+[More on signing in](https://khalaharvi.github.io/chalk/getting-started/#sign-in-to-claude).
 
 You also need a Docker runtime (Docker Desktop, OrbStack or Colima) and
 `gh auth login` (GitHub) or `glab auth login` (GitLab). Chalk picks the
