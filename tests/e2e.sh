@@ -226,6 +226,84 @@ check "a service that fails to start is named" grep -q "could not start: databas
 check "no sandbox is started when a service fails" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-14"
 cd "$tmp/demo"
 
+# 3g. Database versions and `chalk db upgrade`. With FAKE_DB_MODEL set, the
+# fake keeps chalk-db containers and volumes as state, here in a fake state
+# of their own.
+db_state="$tmp/db-model"
+db_reset() { rm -rf "$db_state"; mkdir -p "$db_state"; }
+in_db_model() { FAKE_STATE="$db_state" FAKE_DB_MODEL=1 "$@"; }
+db_field() { cat "$db_state/dbs/$1/$2" 2>/dev/null || true; }
+
+# Two first runs on a fresh machine both reach the database; one creates it.
+db_reset
+for ticket in PROJ-15 PROJ-16; do
+  chalk new "$ticket" Fresh machine >/dev/null
+  (cd "$tmp/demo.worktrees/$ticket" && git add -A && git commit -q -m "spec")
+done
+pids=()
+for ticket in PROJ-15 PROJ-16; do
+  (cd "$tmp/demo.worktrees/$ticket" && in_db_model chalk run > "$tmp/$ticket.log" 2>&1) &
+  pids+=("$!")
+done
+reached=0
+for pid in "${pids[@]}"; do
+  if wait "$pid"; then reached=$((reached + 1)); fi
+done
+[ "$reached" -eq 2 ] || cat "$tmp/PROJ-15.log" "$tmp/PROJ-16.log"
+check "two first runs on a fresh machine both reach the database" test "$reached" -eq 2
+check "exactly one of them creates chalk-db" test "$(grep -c -e '--name chalk-db ' "$db_state/docker.log")" -eq 1
+check "a fresh machine gets Postgres 17 with pgvector, on the new volume" \
+  test "$(db_field chalk-db image) $(db_field chalk-db volume)" = "pgvector/pgvector:pg17 chalk-db-data-17"
+
+# A missing container on the legacy volume comes back on Postgres 16.
+db_reset
+mkdir -p "$db_state/volumes/chalk-db-data"
+in_db_model chalk db up > "$tmp/db1.log" 2>&1 || { cat "$tmp/db1.log"; fail "db up on the legacy volume"; }
+check "a missing container on the legacy volume is recreated on Postgres 16" \
+  test "$(db_field chalk-db image) $(db_field chalk-db volume)" = "postgres:16-alpine chalk-db-data"
+check "Postgres 17 is never started next to Postgres 16 data" test ! -e "$db_state/volumes/chalk-db-data-17"
+check "a Postgres 16 database warns to upgrade, and carries on" \
+  grep -q 'run `chalk db upgrade`; semantic recall is off until then' "$tmp/db1.log"
+
+mkdir -p "$XDG_STATE_HOME/chalk/other/runs/PROJ-77"
+echo "$$" > "$XDG_STATE_HOME/chalk/other/runs/PROJ-77/pid"
+if in_db_model chalk db upgrade > "$tmp/db2.log" 2>&1; then fail "upgrade must refuse while a run is active"; fi
+check "upgrade refuses while any run is active, and changes nothing" \
+  sh -c "grep -q 'still active' '$tmp/db2.log' && test ! -e '$db_state/dbs/chalk-db-16'"
+rm -rf "$XDG_STATE_HOME/chalk/other"
+
+if in_db_model chalk db upgrade --cleanup > "$tmp/db3.log" 2>&1; then fail "cleanup must refuse before an upgrade"; fi
+check "cleanup before an upgrade removes nothing" test -d "$db_state/volumes/chalk-db-data"
+
+# A restore that fails puts the original container back, running.
+if FAKE_DB_RESTORE_FAIL=1 in_db_model chalk db upgrade > "$tmp/db4.log" 2>&1; then
+  fail "a failed restore must fail the upgrade"
+fi
+check "a failed restore leaves the original chalk-db running on its volume" \
+  test "$(db_field chalk-db image) $(db_field chalk-db volume) $(db_field chalk-db running)" = \
+    "postgres:16-alpine chalk-db-data true"
+check "rollback removes the new container's volume and frees the old name" \
+  test ! -e "$db_state/volumes/chalk-db-data-17" -a ! -e "$db_state/dbs/chalk-db-16"
+check "a failed upgrade says what failed and that it rolled back" \
+  sh -c "grep -q 'upgrade failed: the restore failed' '$tmp/db4.log' && grep -q 'rolled back' '$tmp/db4.log'"
+
+# A successful upgrade, then cleanup.
+in_db_model chalk db upgrade > "$tmp/db5.log" 2>&1 || { cat "$tmp/db5.log"; fail "db upgrade"; }
+check "upgrade moves chalk-db to Postgres 17 on its own volume" \
+  test "$(db_field chalk-db image) $(db_field chalk-db volume) $(db_field chalk-db running)" = \
+    "pgvector/pgvector:pg17 chalk-db-data-17 true"
+check "the dump of the old database is restored into the new one" grep -q "database cluster dump" "$db_state/db.log"
+check "row counts are verified after the restore" grep -Eq "runs events lessons: [0-9]+ [0-9]+ [0-9]+ rows" "$tmp/db5.log"
+check "the old container is kept, stopped, as chalk-db-16" \
+  test "$(db_field chalk-db-16 image) $(db_field chalk-db-16 running)" = "postgres:16-alpine false"
+in_db_model chalk db up > "$tmp/db6.log" 2>&1 || { cat "$tmp/db6.log"; fail "db up after upgrade"; }
+check "Postgres 17 does not warn" sh -c "! grep -q 'chalk db upgrade' '$tmp/db6.log'"
+in_db_model chalk db upgrade --cleanup > "$tmp/db7.log" 2>&1 || { cat "$tmp/db7.log"; fail "cleanup"; }
+check "cleanup removes chalk-db-16 and the legacy volume" \
+  test ! -e "$db_state/dbs/chalk-db-16" -a ! -e "$db_state/volumes/chalk-db-data"
+check "cleanup keeps the upgraded database" test "$(db_field chalk-db image)" = "pgvector/pgvector:pg17"
+cd "$tmp/demo"
+
 # 4. Hindsight memory: lessons are stored at office hours and recalled into prompts.
 export CHALK_MEMORY=hindsight
 chalk new PROJ-3 Memory feature >/dev/null

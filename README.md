@@ -148,7 +148,7 @@ documented in the file. Environment variables override it. The important ones:
 | `CHALK_BUDGET_USD` | `1.00` | Spend cap per loop |
 | `CHALK_MAX_LOOPS` | `20` | Loops per run; worst-case spend is budget × loops |
 | `CHALK_MAX_RETRIES` | `2` | Consecutive failed loops before detention |
-| `CHALK_MAX_PARALLEL` | `4` | Concurrent agents for `chalk fleet` |
+| `CHALK_MAX_PARALLEL` | `auto` | Concurrent agents for `chalk fleet`; `auto` sizes it to Docker's CPUs and memory (4 if unknown) |
 | `CHALK_SPEC_CHECK` | `true` | Check the spec before the first loop |
 | `CHALK_REVIEW` | `true` | Review the finished change before the pull or merge request |
 | `CHALK_CHEAP_MODEL` | `haiku` | Model for the spec check and lesson distillation |
@@ -180,6 +180,13 @@ machine and opens it. Nothing is served and nothing is sent anywhere. It shows:
 Every agent call is recorded in the `runs` table with its kind, model, prompt
 set, cost, duration, tokens, cache use and outcome. Query it directly with
 `chalk db psql`.
+
+The database runs Postgres 17 with pgvector. A machine set up before that
+keeps working on Postgres 16, with a warning, until you run
+`chalk db upgrade` (no runs may be active). It dumps the old database,
+restores it into a new container on a new volume and checks the row counts;
+if anything fails, the old container is put back as it was. The old
+container and volume are kept until `chalk db upgrade --cleanup`.
 
 ### OpenTelemetry
 

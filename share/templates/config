@@ -24,8 +24,12 @@ CHALK_BUDGET_USD=1.00
 CHALK_MAX_LOOPS=20
 # Consecutive failed loops tolerated before detention.
 CHALK_MAX_RETRIES=2
-# Agents `chalk fleet` will run at once on one machine.
-CHALK_MAX_PARALLEL=4
+# Agents `chalk fleet` will run at once on one machine. auto picks the
+# smallest of 8, half of Docker's CPUs, and Docker's memory less 1 GiB
+# divided by CHALK_SANDBOX_MEM_MB (4 when Docker cannot be asked).
+CHALK_MAX_PARALLEL=auto
+# Memory one sandbox needs, in MiB, for CHALK_MAX_PARALLEL=auto.
+CHALK_SANDBOX_MEM_MB=2048
 
 # Sandbox image. Needs bash 5.2 or newer, git, coreutils and the claude CLI.
 CHALK_IMAGE=chalk-sandbox:local

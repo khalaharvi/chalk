@@ -27,7 +27,7 @@ check "numbers are read as given" test "$CHALK_MAX_LOOPS" = 7
 check "the environment wins over the file" test "$CHALK_BUDGET_USD" = 9.00
 check "an empty value takes the default" test "$CHALK_BASE_BRANCH" = main
 check "unset settings take their defaults" \
-  test "$CHALK_RUBRIC_TIMEOUT:$CHALK_MAX_PARALLEL:$CHALK_CHEAP_MODEL" = "900:4:haiku"
+  test "$CHALK_RUBRIC_TIMEOUT:$CHALK_MAX_PARALLEL:$CHALK_CHEAP_MODEL" = "900:auto:haiku"
 check "environment-only settings take their defaults" test "$CHALK_OTEL_PROTOCOL" = grpc
 check "unknown keys are reported" grep -q "unknown key in .chalk/config: NOT_A_CHALK_KEY" <<<"$warnings"
 check "malformed keys are reported" grep -q 'unknown key.*touch pwned' <<<"$warnings"
@@ -45,3 +45,10 @@ check "an invalid forge stops Chalk" \
   sh -c '! (CHALK_FORGE=bitbucket; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"
 check "an invalid permission mode stops Chalk" \
   sh -c '! (CHALK_PERMISSION_MODE=ask; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"
+for value in zero -1 0 4x; do
+  check "CHALK_MAX_PARALLEL=$value stops Chalk with a message" \
+    "$BASH" -c '(CHALK_MAX_PARALLEL=$1; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>&1 |
+      grep -q "CHALK_MAX_PARALLEL must be .auto. or a positive whole number"' "$CHALK_HOME" "$value"
+done
+check "CHALK_MAX_PARALLEL accepts a positive number" \
+  "$BASH" -c '(CHALK_MAX_PARALLEL=6; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere)' "$CHALK_HOME"
