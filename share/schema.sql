@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS runs_ticket_idx ON runs (repo, ticket);
 CREATE INDEX IF NOT EXISTS runs_created_idx ON runs (created_at);
 
--- Ticket milestones: detention | submitted | spec_blocked.
+-- Ticket milestones: detention | submitted | spec_blocked | ready.
 CREATE TABLE IF NOT EXISTS events (
     id          BIGSERIAL PRIMARY KEY,
     repo        TEXT NOT NULL,

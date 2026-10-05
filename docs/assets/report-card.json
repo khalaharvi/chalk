@@ -521,6 +521,9 @@
   "detained_runs": 7,
   "no_progress_cost": 6.84,
   "saved": 2.31,
+  "blocked_only": 0,
+  "blocked_only_cost": 0,
+  "no_verdicts": 0,
   "by_verdict": [
    {
     "verdict": "repeat",
@@ -547,7 +550,8 @@
     "after_cost": 0.61,
     "false_stop": false,
     "converging": false,
-    "last": "2026-09-29T14:20:00Z"
+    "last": "2026-09-29T14:20:00Z",
+    "could_stop": true
    },
    {
     "run_id": "API-17-1790700000",
@@ -559,7 +563,8 @@
     "after_cost": 0.48,
     "false_stop": false,
     "converging": false,
-    "last": "2026-09-26T11:05:00Z"
+    "last": "2026-09-26T11:05:00Z",
+    "could_stop": true
    },
    {
     "run_id": "SHOP-33-1790300000",
@@ -571,7 +576,8 @@
     "after_cost": 0,
     "false_stop": false,
     "converging": true,
-    "last": "2026-09-21T16:40:00Z"
+    "last": "2026-09-21T16:40:00Z",
+    "could_stop": true
    }
   ],
   "unknown_tests": [

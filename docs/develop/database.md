@@ -36,8 +36,10 @@ referenced as `:'name'`, so psql does the quoting (`db_sql`).
 | `failing_tests` | The failing test IDs behind `tests_hash`, one per line and sorted, the first 100 only; NULL when unknown. The report card's "Which tests keep failing?" reads them |
 | `fp_rules` | The `CHALK_FP_RULES` the call ran under (`off`, `shadow` or `on`); NULL for calls recorded before it was, when `shadow` was the default. The verdict ledger counts only shadow-mode runs |
 
-**`events`**: ticket milestones: `detention`, `submitted` or
-`spec_blocked`.
+**`events`**: ticket milestones: `detention`, `submitted`,
+`spec_blocked`, or `ready` (done and reviewed, but not submitted because
+`CHALK_AUTO_MR` is off). The report card shows a ticket's latest one as
+its state; `chalk status` does too, unless an agent call came after it.
 
 **`lessons`**: one row per detention. `signature` is the failure;
 `resolution` is the engineer's office-hours note, and the record of

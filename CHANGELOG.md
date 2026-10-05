@@ -5,6 +5,12 @@ Conventional Commits titles merged since the previous release (see
 [CONTRIBUTING.md](CONTRIBUTING.md#commit-titles)). Releases before 0.7.0 were
 written by hand.
 
+## 0.7.1 (2026-10-04)
+
+### Fixes
+
+- **run:** count only judged detentions in the ledger, keep Go rubric failures in the log, and report run progress and ticket state ([#75](https://github.com/khalaharvi/chalk/pull/75))
+
 ## 0.7.0 (2026-10-04)
 
 ### Features
