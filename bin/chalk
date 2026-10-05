@@ -28,7 +28,7 @@ for module in log runtime jobs; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
-for module in repo forge state config db memory sandbox agent \
+for module in repo forge state config db memory sandbox fingerprint agent \
               run fleet lifecycle dashboard setup; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib" "$module.sh"

@@ -62,3 +62,25 @@ CREATE TABLE IF NOT EXISTS lessons (
     memory_synced_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS lessons_signature_trgm ON lessons USING gin (signature gin_trgm_ops);
+
+-- Loop fingerprints (lib/fingerprint.sh). Added to existing databases in
+-- place; every column is nullable, so older rows stay valid.
+--   run_id       one `chalk run`: TICKET-EPOCHSECONDS; links a lesson to its run
+--   tests_hash   sha256 of the failing test IDs; NULL when they are unknown
+--   failing      how many tests failed; NULL when unknown, never 0 for unknown
+--   first_error  the first error line, normalized
+--   tree_id      git tree ID of the working tree after the loop
+--   verdict      for loops that made no progress: blocked | agent_error |
+--                first | deja_vu | repeat | no_change | improving |
+--                spinning | other
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS tests_hash TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS failing INT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS first_error TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS tree_id TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS verdict TEXT;
+-- fingerprint is set only for detentions after a failed rubric.
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS run_id TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS first_error TEXT;
+CREATE INDEX IF NOT EXISTS lessons_fingerprint_idx ON lessons (repo, fingerprint);

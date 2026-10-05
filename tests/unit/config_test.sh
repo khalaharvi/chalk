@@ -45,3 +45,7 @@ check "an invalid forge stops Chalk" \
   sh -c '! (CHALK_FORGE=bitbucket; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"
 check "an invalid permission mode stops Chalk" \
   sh -c '! (CHALK_PERMISSION_MODE=ask; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"
+check "fingerprint verdicts are recorded in shadow by default, with no test report" \
+  test "$CHALK_FP_RULES:$CHALK_TEST_REPORT" = "shadow:"
+check "an invalid CHALK_FP_RULES stops Chalk" \
+  sh -c '! (CHALK_FP_RULES=maybe; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"

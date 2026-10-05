@@ -77,6 +77,58 @@ SELECT json_build_object(
       'without', count(*) FILTER (WHERE lessons = 0),
       'without_passed', count(*) FILTER (WHERE lessons = 0 AND progressed))
     FROM r WHERE kind = 'retry'),
+  -- The verdict ledger, per run (run_id): what CHALK_FP_RULES=on would have
+  -- done. It detains a run at its first stopping verdict (deja_vu, repeat,
+  -- no_change), so the loops after that one are what it would have saved.
+  -- A run is detained when a lesson names it; fingerprinted when any of its
+  -- loops has a verdict (not CHALK_FP_RULES=off).
+  'ledger', (WITH l AS (
+      SELECT * FROM r WHERE is_loop AND run_id IS NOT NULL
+    ), per_run AS (
+      SELECT run_id, min(repo) AS repo, min(ticket) AS ticket,
+             EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = l.run_id) AS detained,
+             bool_or(verdict IS NOT NULL) AS fingerprinted,
+             min(loop) FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')) AS stop_loop,
+             (array_agg(verdict ORDER BY loop)
+                FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')))[1] AS stop_verdict,
+             (array_agg(verdict ORDER BY loop DESC))[1] AS last_verdict,
+             coalesce(sum(cost_usd) FILTER (WHERE NOT progressed), 0) AS no_progress_cost,
+             max(created_at) AS last
+        FROM l GROUP BY run_id
+    ), lr AS (
+      -- after_cost: the loops after the first stop. A false stop is a run
+      -- that progressed after it.
+      SELECT p.*,
+             coalesce((SELECT sum(cost_usd) FROM l
+                        WHERE l.run_id = p.run_id AND l.loop > p.stop_loop), 0) AS after_cost,
+             coalesce((SELECT bool_or(progressed) FROM l
+                        WHERE l.run_id = p.run_id AND l.loop > p.stop_loop), false) AS false_stop
+        FROM per_run p
+    )
+    SELECT json_build_object(
+      'detained_runs', count(*) FILTER (WHERE detained AND fingerprinted),
+      'no_progress_cost', coalesce(sum(no_progress_cost) FILTER (WHERE detained AND fingerprinted), 0),
+      'saved', coalesce(sum(after_cost) FILTER (WHERE detained), 0),
+      'by_verdict', (SELECT coalesce(json_agg(v ORDER BY v.saved DESC), '[]') FROM (
+          SELECT stop_verdict AS verdict, count(*) AS runs, sum(after_cost) AS saved
+            FROM lr WHERE detained AND stop_loop IS NOT NULL GROUP BY stop_verdict) v),
+      'false_stops', count(*) FILTER (WHERE false_stop),
+      'false_stop_cost', coalesce(sum(after_cost) FILTER (WHERE false_stop), 0),
+      'converging', count(*) FILTER (WHERE detained AND last_verdict = 'improving'),
+      'runs', (SELECT coalesce(json_agg(x ORDER BY x.last DESC), '[]') FROM (
+          SELECT run_id, repo, ticket, detained, stop_verdict, stop_loop, after_cost,
+                 false_stop, detained AND last_verdict = 'improving' AS converging,
+                 to_char(last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last
+            FROM lr WHERE detained OR stop_loop IS NOT NULL
+           ORDER BY lr.last DESC LIMIT 50) x),
+      -- Failed loops per repository, and how many of them named no tests.
+      'unknown_tests', (SELECT coalesce(json_agg(u ORDER BY u.loops DESC), '[]') FROM (
+          SELECT repo, count(*) AS loops, count(*) FILTER (WHERE failing IS NULL) AS unknown
+            FROM l
+           WHERE rubric_exit <> 0 AND agent_status = 'ok'
+             AND verdict IS NOT NULL AND verdict NOT IN ('blocked', 'agent_error')
+           GROUP BY repo) u))
+    FROM lr),
   'tickets', (SELECT coalesce(json_agg(t ORDER BY t.last DESC), '[]') FROM (
       SELECT * FROM (
       SELECT r.repo, r.ticket, count(*) FILTER (WHERE is_loop) AS loops,

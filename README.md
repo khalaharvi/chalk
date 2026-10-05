@@ -148,6 +148,8 @@ documented in the file. Environment variables override it. The important ones:
 | `CHALK_BUDGET_USD` | `1.00` | Spend cap per loop |
 | `CHALK_MAX_LOOPS` | `20` | Loops per run; worst-case spend is budget × loops |
 | `CHALK_MAX_RETRIES` | `2` | Consecutive failed loops before detention |
+| `CHALK_FP_RULES` | `shadow` | Loop verdicts: `shadow` records them, `on` also detains a run that repeats itself, `off` skips them |
+| `CHALK_TEST_REPORT` | none | JUnit XML report the rubric writes, as a path in the repo; names failing tests for the verdicts |
 | `CHALK_MAX_PARALLEL` | `4` | Concurrent agents for `chalk fleet` |
 | `CHALK_SPEC_CHECK` | `true` | Check the spec before the first loop |
 | `CHALK_REVIEW` | `true` | Review the finished change before the pull or merge request |

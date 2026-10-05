@@ -40,13 +40,16 @@ db_sql() {
     psql -X -q -A -t -v ON_ERROR_STOP=1 -U chalk -d chalk "$@"
 }
 
-# db_record_call KIND STATUS RUBRIC_EXIT PROGRESSED MODEL SECONDS LESSONS RESULT_FILE
+# db_record_call KIND STATUS RUBRIC_EXIT PROGRESSED MODEL SECONDS LESSONS RESULT_FILE [FP]
 # Records one agent call for the current run (RUN_* globals). The model is the
-# one the result reports; MODEL, the one requested, is the fallback.
+# one the result reports; MODEL, the one requested, is the fallback. FP names
+# an associative array filled like fp_compute's, plus its verdict; a key it
+# does not set is stored as NULL.
 db_record_call() {
   local kind="$1" status="$2" rubric_exit="$3" progressed="$4" model="$5"
   local seconds="$6" lessons="$7" result="$8" ran
-  local -A usage
+  local -A usage __no_fp=()
+  local -n __fp="${9:-__no_fp}"
   agent_usage "$result" usage
   ran="$(agent_model "$result")"
   model="${ran:-$model}"
@@ -56,13 +59,18 @@ db_record_call() {
     -v cost="$(agent_cost "$result")" -v budget="$CHALK_BUDGET_USD" -v seconds="$seconds" \
     -v input="${usage[input]}" -v output="${usage[output]}" -v cache_read="${usage[cache_read]}" \
     -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
-    -v lessons="$lessons" <<'SQL'
+    -v lessons="$lessons" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
+    -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
+    -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
                   model, prompts, cost_usd, budget_usd, duration_s, input_tokens,
-                  output_tokens, cache_read_tokens, cache_write_tokens, turns, denials, lessons)
+                  output_tokens, cache_read_tokens, cache_write_tokens, turns, denials, lessons,
+                  run_id, tests_hash, failing, first_error, tree_id, verdict)
 VALUES (:'repo', :'ticket', :'branch', :'loop', :'kind', :'status', :'rubric_exit', :'progressed',
         :'model', :'prompts', :'cost', :'budget', :'seconds', :'input',
-        :'output', :'cache_read', :'cache_write', :'turns', :'denials', :'lessons');
+        :'output', :'cache_read', :'cache_write', :'turns', :'denials', :'lessons',
+        nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing', '')::int,
+        nullif(:'first_error', ''), nullif(:'tree_id', ''), nullif(:'verdict', ''));
 SQL
 }
 
@@ -78,11 +86,32 @@ db_dashboard() {
   db_sql -v days="$1" < "$CHALK_HOME/share/dashboard.sql"
 }
 
+# db_open_lesson REPO TICKET SIGNATURE RUN_ID [FINGERPRINT] [FIRST_ERROR]
+# Records a detention as an open lesson. FINGERPRINT and FIRST_ERROR come
+# from the loop that detained the run, and only when its rubric failed.
 db_open_lesson() {
-  local ticket="$1" signature="$2"
-  db_sql -v repo="${| repo_name; }" -v ticket="$ticket" -v signature="$signature" <<'SQL'
-INSERT INTO lessons (repo, ticket, signature) VALUES (:'repo', :'ticket', :'signature');
+  db_sql -v repo="$1" -v ticket="$2" -v signature="$3" -v run_id="$4" \
+    -v fingerprint="${5:-}" -v first_error="${6:-}" <<'SQL'
+INSERT INTO lessons (repo, ticket, signature, run_id, fingerprint, first_error)
+VALUES (:'repo', :'ticket', :'signature', nullif(:'run_id', ''),
+        nullif(:'fingerprint', ''), nullif(:'first_error', ''));
 SQL
+}
+
+# db_open_match TICKET FINGERPRINT -> REPLY: 1 when an open lesson for
+# another ticket in this repository, from the last 30 days, has the same
+# fingerprint; empty otherwise, and when the database cannot be read.
+db_open_match() {
+  REPLY=""
+  [[ -n $2 ]] || return 0
+  REPLY="$(db_sql -v repo="${| repo_name; }" -v ticket="$1" -v fingerprint="$2" 2>/dev/null <<'SQL' || true
+SELECT 1 FROM lessons
+ WHERE repo = :'repo' AND ticket <> :'ticket' AND resolution IS NULL
+   AND fingerprint = :'fingerprint' AND created_at >= now() - interval '30 days'
+ LIMIT 1;
+SQL
+)"
+  [[ $REPLY == 1 ]] || REPLY=""
 }
 
 # Attaches the engineer's fix to the newest unresolved lesson for a ticket.
