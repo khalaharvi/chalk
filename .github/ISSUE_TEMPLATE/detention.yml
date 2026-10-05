@@ -1,0 +1,55 @@
+name: Detention I couldn't fix
+description: A run went to detention and office hours did not get it moving again, or the detention itself looked wrong.
+labels: [real-run]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Everything here is public: remove secrets, and any repository names, paths, ticket IDs or test names you would rather not share.
+  - type: input
+    id: version
+    attributes:
+      label: Chalk version
+      description: The output of `chalk version`.
+    validations:
+      required: true
+  - type: input
+    id: reason
+    attributes:
+      label: Detention line
+      description: The `DETENTION:` line from the run log, and the `next:` line after it.
+      placeholder: "DETENTION: repeat: rubric failed (exit 1)"
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you tried
+      description: What you fixed on the detention branch, the note you gave `chalk office-hours`, and what the resumed run did.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Run log (redacted)
+      description: From `chalk logs TICKET` or `~/.local/state/chalk/<repository>/runs/<ticket>/`. Replace anything private with a placeholder.
+      render: text
+  - type: textarea
+    id: rubric
+    attributes:
+      label: Rubric output (redacted)
+      description: Optional. The end of `io/rubric.log` in the run directory, if the rubric failed.
+      render: text
+  - type: dropdown
+    id: right
+    attributes:
+      label: Was the detention right?
+      options: ["Yes, the agent really was stuck", "No, it would have got there", "Not sure"]
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: chalk doctor
+      description: Optional. The output of `chalk doctor`.
+      render: text

@@ -5,24 +5,37 @@ next: edit specs/SHOP-7.md, commit it, then run 'chalk run' from that directory
 shop $ cd ../shop.worktrees/SHOP-7
 SHOP-7 $ # Spec written and committed: two checkpoints. Each loop leaves a stray file.
 SHOP-7 $ chalk run
+[SHOP-7] starting the database and the sandbox image
 [SHOP-7] starting sandbox chalk-sandbox-shop-SHOP-7 on chalk/SHOP-7
+[SHOP-7] cloning chalk/SHOP-7 into the sandbox
+[SHOP-7] checking the spec with haiku
+[SHOP-7] spec check passed ($0.25, 0s)
+[SHOP-7] loop 1 (continue) started
 [SHOP-7] loop 1 (continue): agent ok ($0.25, 0s), rubric exit 1. did the thing
+[SHOP-7] loop 2 (retry) started
 [SHOP-7] loop 2 (retry): agent ok ($0.25, 0s), rubric exit 1. did the thing
-[SHOP-7] loop 3 (retry): agent ok ($0.25, 1s), rubric exit 1. did the thing
+[SHOP-7] loop 3 (retry) started
+[SHOP-7] loop 3 (retry): agent ok ($0.25, 0s), rubric exit 1. did the thing
 [SHOP-7] DETENTION: rubric failed (exit 1)
 [SHOP-7] next: the rubric still fails after 2 retries; fix the failure in /home/sam/.local/state/chalk/shop/runs/SHOP-7/io/rubric.log, or make the checkpoint smaller
-[SHOP-7] work parked on local branch detention/SHOP-7-1791171685. To unblock:
-[SHOP-7]   cd '/home/sam/shop.worktrees/SHOP-7' && git switch 'detention/SHOP-7-1791171685'
+[SHOP-7] work parked on local branch detention/SHOP-7-1791215648. To unblock:
+[SHOP-7]   cd '/home/sam/shop.worktrees/SHOP-7' && git switch 'detention/SHOP-7-1791215648'
 [SHOP-7]   fix the blocker, commit, then: chalk office-hours -m "what was wrong"
 SHOP-7 $ # Nothing was pushed. A person looks at the parked work and fixes it.
-SHOP-7 $ git switch -q detention/SHOP-7-1791171685
+SHOP-7 $ git switch -q detention/SHOP-7-1791215648
 SHOP-7 $ git rm -q BROKEN && git commit -q -m "Remove the stray BROKEN file"
 SHOP-7 $ chalk office-hours -m "Never commit scratch files such as BROKEN"
 lesson: Distilled: never commit a BROKEN marker
-lesson recorded; continuing on tutoring/SHOP-7-1791171689
-[SHOP-7] starting sandbox chalk-sandbox-shop-SHOP-7 on tutoring/SHOP-7-1791171689
+lesson recorded; continuing on tutoring/SHOP-7-1791215650
+[SHOP-7] starting the database and the sandbox image
+[SHOP-7] starting sandbox chalk-sandbox-shop-SHOP-7 on tutoring/SHOP-7-1791215650
+[SHOP-7] cloning tutoring/SHOP-7-1791215650 into the sandbox
+[SHOP-7] spec check skipped: it passed before and the checkpoints have not changed
+[SHOP-7] loop 1 (continue) started
 [SHOP-7] loop 1 (continue): agent ok ($0.25, 0s), rubric exit 0. implemented a checkpoint
+[SHOP-7] loop 2 (continue) started
 [SHOP-7] loop 2 (continue): agent ok ($0.25, 0s), rubric exit 0. implemented a checkpoint
+[SHOP-7] final review started
 [SHOP-7] final review: pass. Looks complete.
 [SHOP-7] all checkpoints complete (5 loops, $2.00, 1 human interventions)
 https://gitlab.example.com/acme/shop/-/merge_requests/42

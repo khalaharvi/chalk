@@ -24,6 +24,9 @@ excludes=(
   '^https://mcp\.atlassian\.com/'
   '^https://claude\.ai/settings/'
   '^https://github\.com/users/khalaharvi/projects/'
+  # Discussions, where report cards are posted, answer 404 until they are
+  # turned on in the repository's settings, and need a login to post.
+  '^https://github\.com/khalaharvi/chalk/discussions'
   # Edit links point at files that exist only once a change is merged.
   '^https://github\.com/khalaharvi/chalk/edit/'
   # The site's own URL (canonical links, the sitemap) before it is deployed;

@@ -1,0 +1,40 @@
+# The form for a new discussion in the "Report cards" category. GitHub
+# matches it to the category by its slug, so the category must be named
+# "Report cards" (slug report-cards) in the repository's Discussions settings.
+title: "Report card: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Paste what `chalk share` printed. It holds counts, rates, rounded costs, model families and the size of your machine, and no repository, path, ticket, test name, error or note; PRIVACY.md lists every field.
+        Numbers from many machines are how Chalk's defaults (budgets, verdict thresholds, the decider) get tuned. Thank you.
+  - type: textarea
+    id: share
+    attributes:
+      label: chalk share
+      description: The JSON from `chalk share`, as printed. You may remove any field before posting.
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of work
+      options: [Personal project, Work project, Open source project, Trying Chalk out, Rather not say]
+  - type: input
+    id: stack
+    attributes:
+      label: Stack
+      description: Optional. The language and test runner, such as "TypeScript, vitest".
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything the numbers do not show
+      description: Optional. What went well, what you tuned, what you would change.
+  - type: checkboxes
+    id: reviewed
+    attributes:
+      label: Before you post
+      options:
+        - label: I read the JSON above and I am happy for it to be public.
+          required: true

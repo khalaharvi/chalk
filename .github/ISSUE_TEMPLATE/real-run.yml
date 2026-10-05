@@ -1,0 +1,83 @@
+name: Real-run report
+description: Something that broke or felt rough when you ran Chalk on a real repository, with real Docker, Claude and GitHub or GitLab.
+labels: [real-run]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for running Chalk for real. Reports like this one decide what gets fixed first.
+        Everything here is public: remove secrets, and any repository names, paths or ticket IDs you would rather not share.
+  - type: input
+    id: version
+    attributes:
+      label: Chalk version
+      description: The output of `chalk version`.
+      placeholder: "0.7.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: command
+    attributes:
+      label: Command
+      description: Where it happened.
+      options: [chalk run, chalk fleet, chalk office-hours, chalk submit, chalk new or check, chalk doctor or init, chalk db, chalk decider, chalk dashboard or share, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: chalk doctor
+      description: The output of `chalk doctor`, run in the repository.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Run log (redacted)
+      description: |
+        The lines around the problem, from `chalk logs TICKET` or `~/.local/state/chalk/<repository>/runs/<ticket>/`.
+        Replace anything private with a placeholder, such as `<repo>` or `<path>`.
+      render: text
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Docker runtime
+      options: [Docker Desktop, OrbStack, Colima, Docker Engine on Linux, Other]
+    validations:
+      required: true
+  - type: dropdown
+    id: forge
+    attributes:
+      label: Forge
+      options: [GitHub, GitHub Enterprise, GitLab, GitLab self-managed, Not relevant]
+    validations:
+      required: true
+  - type: input
+    id: stack
+    attributes:
+      label: Stack
+      description: Optional. The language and test runner, and whether you use your own sandbox image.
+      placeholder: "Python 3.12, pytest, own image FROM chalk-sandbox"
+  - type: textarea
+    id: share
+    attributes:
+      label: chalk share (optional)
+      description: |
+        The JSON from `chalk share --json`: counts, rates, rounded costs and model families, with no repository, path, ticket or text.
+        It helps us see whether the problem shows in the numbers. See PRIVACY.md for every field.
+      render: json
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed secrets, and anything else I do not want public, from the output above.
+          required: true

@@ -54,15 +54,15 @@ OpenTelemetry export. Specs are Markdown files with checkbox checkpoints in
 ## Capabilities and Constraints
 
 - Commands: doctor, init, db, sandbox build, prompts, new, check, run, fleet,
-  status, logs, dashboard, office-hours, submit, cleanup.
+  status, logs, dashboard, share, office-hours, submit, cleanup.
 - School vocabulary is product terminology and the brand: rubric (test
   command), textbook (repo-wide agent rules), spec checkpoints, detention
   (parked failure), office hours (human fix + resume), tutoring branch,
   lessons, report card (`chalk dashboard`), end of sprint (cleanup).
 - Status is early (v0.6.0). Covered by an end-to-end test with fakes; few real
   runs yet. Maintained by one person, part-time. Apache-2.0.
-- Planned (not shipped): docs site, more test report formats, PRIVACY.md and
-  `chalk share`. See docs/roadmap.md.
+- Planned (not shipped): more test report formats, opt-in telemetry (only if
+  `chalk share` reports are too few). See docs/roadmap.md and PRIVACY.md.
 
 ## Brand Commitments
 

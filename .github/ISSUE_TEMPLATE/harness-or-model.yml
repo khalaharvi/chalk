@@ -1,0 +1,34 @@
+name: Harness or model request
+description: A coding-agent CLI Chalk should drive, or a model or provider it should support.
+labels: [idea]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Harnesses (agent CLIs other than Claude Code) are planned for 2027, and bring-your-own-model work starts in Q1 2027; see docs/roadmap.md.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [Harness (an agent CLI), Model, Provider or gateway]
+    validations:
+      required: true
+  - type: input
+    id: which
+    attributes:
+      label: Which one
+      description: Its name, and a link to its docs.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What you would use it for, and what it would change for you (cost, data residency, quality, a team standard).
+    validations:
+      required: true
+  - type: dropdown
+    id: test
+    attributes:
+      label: Could you try it on real runs?
+      options: ["Yes", "Maybe", "No"]

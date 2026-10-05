@@ -6,3 +6,6 @@ contact_links:
   - name: Roadmap and priorities
     url: https://github.com/khalaharvi/chalk/issues/53
     about: Comment on what should come next.
+  - name: Share a report card
+    url: https://github.com/khalaharvi/chalk/discussions/new?category=report-cards
+    about: Post what `chalk share` prints (no repository, path or ticket in it) to help tune Chalk's defaults.

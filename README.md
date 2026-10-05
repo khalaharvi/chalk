@@ -187,19 +187,26 @@ created /home/sam/shop.worktrees/SHOP-7 on branch chalk/SHOP-7
 shop $ cd ../shop.worktrees/SHOP-7
 SHOP-7 $ # Spec written and committed: two checkpoints. Each loop leaves a stray file.
 SHOP-7 $ chalk run
+[SHOP-7] starting the database and the sandbox image
+…
+[SHOP-7] spec check passed ($0.25, 0s)
+[SHOP-7] loop 1 (continue) started
 [SHOP-7] loop 1 (continue): agent ok ($0.25, 0s), rubric exit 1. did the thing
-[SHOP-7] loop 2 (retry): agent ok ($0.25, 0s), rubric exit 1. did the thing
-[SHOP-7] loop 3 (retry): agent ok ($0.25, 1s), rubric exit 1. did the thing
+…
+[SHOP-7] loop 3 (retry): agent ok ($0.25, 0s), rubric exit 1. did the thing
 [SHOP-7] DETENTION: rubric failed (exit 1)
 [SHOP-7] next: the rubric still fails after 2 retries; fix the failure in /home/sam/.local/state/chalk/shop/runs/SHOP-7/io/rubric.log, or make the checkpoint smaller
-[SHOP-7] work parked on local branch detention/SHOP-7-1791171685. To unblock: …
-SHOP-7 $ git switch -q detention/SHOP-7-1791171685
+[SHOP-7] work parked on local branch detention/SHOP-7-1791215648. To unblock: …
+SHOP-7 $ git switch -q detention/SHOP-7-1791215648
 SHOP-7 $ git rm -q BROKEN && git commit -q -m "Remove the stray BROKEN file"
 SHOP-7 $ chalk office-hours -m "Never commit scratch files such as BROKEN"
 lesson: Distilled: never commit a BROKEN marker
-lesson recorded; continuing on tutoring/SHOP-7-1791171689
+lesson recorded; continuing on tutoring/SHOP-7-1791215650
+…
+[SHOP-7] spec check skipped: it passed before and the checkpoints have not changed
 [SHOP-7] loop 1 (continue): agent ok ($0.25, 0s), rubric exit 0. implemented a checkpoint
 [SHOP-7] loop 2 (continue): agent ok ($0.25, 0s), rubric exit 0. implemented a checkpoint
+[SHOP-7] final review started
 [SHOP-7] final review: pass. Looks complete.
 [SHOP-7] all checkpoints complete (5 loops, $2.00, 1 human interventions)
 https://gitlab.example.com/acme/shop/-/merge_requests/42
@@ -273,6 +280,8 @@ Work
   chalk status                 Show runs, cost and detentions for this repo
   chalk logs TICKET [-f]       Show a run log
   chalk dashboard [--days N]   Open the report card: spend, waste and what to tune
+  chalk share [--days N] [--output FILE] [--json]
+                               Print an anonymised report card to post if you choose; sends nothing
 
 Failure lifecycle
   chalk office-hours -m NOTE [--detach]
@@ -310,6 +319,16 @@ and outcome. Together with the log of human interventions, that is evidence
 for an ISO/IEC 42001 management system, though Chalk alone does not make a
 team compliant. See [Pull and merge request gates](https://khalaharvi.github.io/chalk/guide/operating/merge-request-gates/).
 
+## Privacy
+
+Chalk collects no usage data. Your code goes to the model provider you
+configure; anything else leaves your machine only when you set it up or
+send it. `chalk share` prints an anonymised summary of your report card,
+counts and rounded costs with no repository, path, ticket or text, for you
+to post if you choose; it sends nothing itself. [PRIVACY.md](PRIVACY.md)
+lists what Chalk stores, every way data can leave, and every field
+`chalk share` holds.
+
 ## Documentation
 
 - **Guide:** [the workflow](https://khalaharvi.github.io/chalk/guide/running/workflow/),
@@ -323,6 +342,7 @@ team compliant. See [Pull and merge request gates](https://khalaharvi.github.io/
   [verdicts and the report card](https://khalaharvi.github.io/chalk/guide/operating/dashboard/),
   [pull and merge request gates](https://khalaharvi.github.io/chalk/guide/operating/merge-request-gates/)
 - **Reference:** [commands](https://khalaharvi.github.io/chalk/reference/commands/),
+  [privacy](PRIVACY.md),
   [decider protocol](https://khalaharvi.github.io/chalk/decider-protocol/),
   [glossary of the school terms](https://khalaharvi.github.io/chalk/reference/glossary/),
   [roadmap](docs/roadmap.md)

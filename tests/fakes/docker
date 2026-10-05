@@ -181,8 +181,13 @@ case "$cmd" in
             END { print (event != "" ? event : last != "" ? last : "new") }' "$FAKE_STATE/db.log")"
           echo "2 0.5000 0 $state" ;;
         *"chalk db upgrade: row counts"*) echo "3 1 2" ;;
+        # The report card's data, and the counts chalk share adds to it.
+        # FAKE_DASHBOARD and FAKE_SHARE_COUNTS name files to answer with instead.
         *"'generated_at'"*)
+          if [ -n "${FAKE_DASHBOARD:-}" ]; then cat "$FAKE_DASHBOARD"; exit 0; fi
           echo '{"generated_at":"2026-01-01 00:00","days":30,"submitted":0,"detentions":0,"totals":{"calls":0},"note":"</script>"}' ;;
+        *"chalk share:"*)
+          if [ -n "${FAKE_SHARE_COUNTS:-}" ]; then cat "$FAKE_SHARE_COUNTS"; else echo '{}'; fi ;;
         *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;
         # FAKE_OPEN_MATCH=TICKET: an open lesson of TICKET has the same fingerprint.
         *"SELECT ticket FROM lessons"*) echo "${FAKE_OPEN_MATCH:-}" ;;
