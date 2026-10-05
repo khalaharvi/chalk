@@ -63,7 +63,8 @@ system_timeout() {
 # Machine-wide locks. With flock the kernel releases a lock when its holder
 # exits. Without it (stock macOS) a lock is a directory made with mkdir,
 # which is atomic, and a lock whose holder died is cleared by the next
-# process that wants it. Either way the holder's pid is written into it.
+# process that wants it (chalk_lock_clear). Either way the holder's pid is
+# written into it.
 #
 #   chalk_lock db 300 || die "..."
 #   ... create the thing only one process may create ...
@@ -83,7 +84,7 @@ chalk_lock_path() {
 # (default 60; 0 tries once). Returns non-zero when it is still held by
 # someone else after that.
 chalk_lock() {
-  local name="$1" wait="${2:-60}" path fd deadline cleared=0
+  local name="$1" wait="${2:-60}" path fd deadline
   path="${| chalk_lock_path "$name"; }"
   mkdir -p "${path%/*}"
   system_profile
@@ -103,24 +104,67 @@ chalk_lock() {
 
   deadline=$((EPOCHSECONDS + wait))
   until mkdir "$path" 2>/dev/null; do
-    # A holder that died left its lock behind: clear it, then retry once.
-    if (( ! cleared )) && chalk_lock_stale "$path"; then
-      rm -rf "$path"
-      cleared=1
-      continue
-    fi
+    # A holder that died left its lock behind: clear it, then try again.
+    if chalk_lock_stale "$path" && chalk_lock_clear "$path"; then continue; fi
     (( EPOCHSECONDS < deadline )) || return 1
     sleep 0.1
   done
   printf '%s\n' "$BASHPID" > "$path/pid"
 }
 
-# True when the mkdir lock at PATH names a holder that is no longer alive.
-# A lock without a pid yet is being taken right now, so it is not stale.
+# Seconds a mkdir lock may go without a pid before it counts as abandoned.
+# Its holder writes the pid straight after mkdir, so a lock with none for
+# this long belongs to a process that died in between.
+CHALK_LOCK_GRACE=10
+
+# chalk_lock_age PATH -> REPLY: seconds since PATH was last modified; empty
+# when it is missing or its age cannot be read.
+chalk_lock_age() {
+  local mtime
+  REPLY=""
+  # GNU stat first, then BSD (macOS) stat.
+  mtime="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
+  [[ ! $mtime =~ ^[0-9]+$ ]] || REPLY=$((EPOCHSECONDS - mtime))
+}
+
+# True when the mkdir lock at PATH names a holder that is no longer alive,
+# or has had no pid for CHALK_LOCK_GRACE seconds. A lock that got no pid
+# more recently is being taken right now, so it is not stale.
 chalk_lock_stale() {
-  local pid
-  { read -r pid < "$1/pid"; } 2>/dev/null || return 1
-  [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null
+  local pid="" age
+  [[ -d $1 ]] || return 1
+  { read -r pid < "$1/pid"; } 2>/dev/null || true
+  if [[ -n $pid ]]; then
+    ! kill -0 "$pid" 2>/dev/null
+  else
+    age="${| chalk_lock_age "$1"; }"
+    [[ -n $age ]] && (( age >= CHALK_LOCK_GRACE ))
+  fi
+}
+
+# chalk_lock_clear PATH: removes the stale mkdir lock at PATH. Returns
+# non-zero when it removed nothing.
+#
+# Two waiters can find the same lock stale. If both removed it, the first
+# could remove it and take it afresh, then lose it to the second's removal,
+# and both would hold it. So clearing has a lock of its own, PATH.clear,
+# also taken with mkdir: one waiter at a time clears, and only after
+# checking again, under it, that the lock is still stale. PATH.clear is held
+# for a moment; one left by a process that died holding it is removed once
+# it is CHALK_LOCK_GRACE seconds old.
+chalk_lock_clear() {
+  local path="$1" guard="$1.clear" age status=1
+  if ! mkdir "$guard" 2>/dev/null; then
+    age="${| chalk_lock_age "$guard"; }"
+    if [[ -n $age ]] && (( age >= CHALK_LOCK_GRACE )); then rmdir "$guard" 2>/dev/null || true; fi
+    return 1
+  fi
+  if chalk_lock_stale "$path"; then
+    rm -rf "$path"
+    status=0
+  fi
+  rmdir "$guard" 2>/dev/null || true
+  return "$status"
 }
 
 # chalk_unlock NAME: releases a lock this process holds; otherwise does nothing.

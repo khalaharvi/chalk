@@ -1,15 +1,18 @@
 # Local telemetry and lessons database. One Postgres container per machine,
 # reached only through `docker exec`, so no port is published and no
 # password ever leaves the container.
-
-CHALK_DB_CONTAINER="chalk-db"
-CHALK_DB_IMAGE="pgvector/pgvector:pg17"
-CHALK_DB_VOLUME="chalk-db-data-17"
+#
+# The names and images can be set from the environment, only so that a test
+# (scripts/ci-db-upgrade.sh) can run a real upgrade on containers and
+# volumes of its own. Nothing else sets them.
+CHALK_DB_CONTAINER="${CHALK_DB_CONTAINER:-chalk-db}"
+CHALK_DB_IMAGE="${CHALK_DB_IMAGE:-pgvector/pgvector:pg17}"
+CHALK_DB_VOLUME="${CHALK_DB_VOLUME:-chalk-db-data-17}"
 # Installs from before Postgres 17 keep these until `chalk db upgrade`,
 # which parks the old container as CHALK_DB_OLD_CONTAINER until --cleanup.
-CHALK_DB_LEGACY_IMAGE="postgres:16-alpine"
-CHALK_DB_LEGACY_VOLUME="chalk-db-data"
-CHALK_DB_OLD_CONTAINER="chalk-db-16"
+CHALK_DB_LEGACY_IMAGE="${CHALK_DB_LEGACY_IMAGE:-postgres:16-alpine}"
+CHALK_DB_LEGACY_VOLUME="${CHALK_DB_LEGACY_VOLUME:-chalk-db-data}"
+CHALK_DB_OLD_CONTAINER="${CHALK_DB_OLD_CONTAINER:-chalk-db-16}"
 
 db_running() {
   [ "$(docker inspect -f '{{.State.Running}}' "$CHALK_DB_CONTAINER" 2>/dev/null)" = "true" ]
@@ -78,6 +81,20 @@ db_wait_ready() {
   done
 }
 
+# True when the Postgres 16 warning has not been given today on this
+# machine, and records that it now has. Every run starts the database, so
+# without this a fleet would print it on every run. `chalk doctor` still
+# reports it every time.
+db_upgrade_nag_due() {
+  local stamp today last=""
+  stamp="${XDG_STATE_HOME:-$HOME/.local/state}/chalk/db-upgrade-warned"
+  printf -v today '%(%F)T' -1
+  { read -r last < "$stamp"; } 2>/dev/null || true
+  [[ $last != "$today" ]] || return 1
+  # A stamp that cannot be written only means the warning comes again.
+  { mkdir -p "${stamp%/*}" && printf '%s\n' "$today" > "$stamp"; } 2>/dev/null || true
+}
+
 db_up() {
   local fresh=""
   if ! db_running; then
@@ -92,7 +109,7 @@ db_up() {
     chalk_unlock db
   fi
   db_wait_ready "${fresh:-0}"
-  if [[ ${| db_major; } == 16 ]]; then
+  if [[ ${| db_major; } == 16 ]] && db_upgrade_nag_due; then
     warn "$CHALK_DB_CONTAINER runs Postgres 16: run \`chalk db upgrade\`; semantic recall is off until then"
   fi
 
@@ -112,6 +129,8 @@ db_sql() {
 # an associative array filled like fp_compute's, plus its verdict; a key it
 # does not set is stored as NULL. Of its failing tests, the first 100 are
 # stored, which also keeps them well inside one command-line argument.
+# CHALK_FP_RULES is stored with every call, so the dashboard can tell what
+# a verdict did (on) from what it would have done (shadow).
 db_record_call() {
   local kind="$1" status="$2" rubric_exit="$3" progressed="$4" model="$5"
   local seconds="$6" lessons="$7" result="$8" ran tests=""
@@ -127,17 +146,17 @@ db_record_call() {
     -v cost="$(agent_cost "$result")" -v budget="$CHALK_BUDGET_USD" -v seconds="$seconds" \
     -v input="${usage[input]}" -v output="${usage[output]}" -v cache_read="${usage[cache_read]}" \
     -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
-    -v lessons="$lessons" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
+    -v lessons="$lessons" -v fp_rules="${CHALK_FP_RULES:-}" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
     -v failing_tests="$tests" -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
     -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
                   model, prompts, cost_usd, budget_usd, duration_s, input_tokens,
                   output_tokens, cache_read_tokens, cache_write_tokens, turns, denials, lessons,
-                  run_id, tests_hash, failing_tests, failing, first_error, tree_id, verdict)
+                  fp_rules, run_id, tests_hash, failing_tests, failing, first_error, tree_id, verdict)
 VALUES (:'repo', :'ticket', :'branch', :'loop', :'kind', :'status', :'rubric_exit', :'progressed',
         :'model', :'prompts', :'cost', :'budget', :'seconds', :'input',
         :'output', :'cache_read', :'cache_write', :'turns', :'denials', :'lessons',
-        nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing_tests', ''),
+        nullif(:'fp_rules', ''), nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing_tests', ''),
         nullif(:'failing', '')::int,
         nullif(:'first_error', ''), nullif(:'tree_id', ''), nullif(:'verdict', ''));
 SQL

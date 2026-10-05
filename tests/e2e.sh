@@ -18,6 +18,27 @@ pass() { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; exit 1; }
 check() { local label="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$label"; else fail "$label"; fi; }
 
+# Against a real Postgres (make test-db), everything this test writes goes
+# to a schema of its own, made afresh on every run, so a database used
+# before gives the same results and its other data is never touched. The
+# extensions stay in public, where dropping the schema cannot take them.
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  PGOPTIONS='-c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -v ON_ERROR_STOP=1 <<'SQL'
+CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+        CREATE EXTENSION IF NOT EXISTS vector SCHEMA public;
+    END IF;
+END
+$$;
+DROP SCHEMA IF EXISTS chalk_e2e_run CASCADE;
+CREATE SCHEMA chalk_e2e_run;
+SQL
+  e2e_pgoptions='-c search_path=chalk_e2e_run,public'
+  export PGOPTIONS="$e2e_pgoptions"
+fi
+
 # A repository with a remote and a rubric that rejects a file named BROKEN.
 git init -q --bare "$tmp/origin.git"
 git init -q -b main "$tmp/demo"
@@ -114,6 +135,8 @@ check "shadow mode: the retry prompt's failure feedback is unchanged" \
   sh -c "grep -A 1 '^<failure>' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-2/io/prompt.md' | grep -qx 'rubric failed (exit 1)'"
 check "shadow mode: one verdict per loop with no progress" \
   test "$(grep -c -e '-v verdict=first$' "$tmp/db2.log"):$(grep -c -e '-v verdict=no_change$' "$tmp/db2.log")" = 1:2
+check "shadow mode: every call records CHALK_FP_RULES=shadow" \
+  test "$(grep -c 'INSERT INTO runs' "$tmp/db2.log")" = "$(grep -c -e '-v fp_rules=shadow ' "$tmp/db2.log")"
 check "every call in the run records its run_id" \
   test "$(grep -c 'INSERT INTO runs' "$tmp/db2.log")" = "$(grep -Ec -e '-v run_id=PROJ-2-[0-9]+ -v tests_hash=' "$tmp/db2.log")"
 check "the lesson is linked to its run" grep -Eq -e '-v run_id=PROJ-2-[0-9]+ -v fingerprint=' "$tmp/db2.log"
@@ -157,6 +180,8 @@ check "next step on repeat: fix the failure, since a retry would repeat it" \
   next_step "$tmp/run12.log" "the agent made the same failing change twice"
 check "rules on: the loops record first, then repeat, with the failing test count" \
   sh -c "grep -q -e '-v failing=1 .*-v verdict=first$' '$tmp/db12.log' && grep -q -e '-v failing=1 .*-v verdict=repeat$' '$tmp/db12.log'"
+check "rules on: every call records CHALK_FP_RULES=on" \
+  test "$(grep -c 'INSERT INTO runs' "$tmp/db12.log")" = "$(grep -c -e '-v fp_rules=on ' "$tmp/db12.log")"
 check "rules on: the lesson carries the failing loop's fingerprint and first error" \
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
 check "rules on: the failing loops record their failing test IDs" \
@@ -343,8 +368,6 @@ fi
 # so the numbers do not depend on the rest of this test.
 if [ -n "${FAKE_PG_URL:-}" ]; then
   pg() { PGOPTIONS='-c search_path=chalk_e2e,public -c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
-  # pg_trgm stays in public, so dropping the test schema cannot take it along.
-  PGOPTIONS='-c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public'
   pg -c 'DROP SCHEMA IF EXISTS chalk_e2e CASCADE' -c 'CREATE SCHEMA chalk_e2e'
   pg -f "$here/../share/schema.sql"
   # A database from before fingerprints, with a row in it.
@@ -355,7 +378,8 @@ INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, p
 VALUES ('old', 'OLD-1', 'chalk/OLD-1', 1, 'continue', 'ok', 0, true, 'm', 'p', 0.5, 1, 0, 0, 0, 0, 0, 0, 0, 0);
 INSERT INTO lessons (repo, ticket, signature) VALUES ('old', 'OLD-1', 'rubric failed');
 ALTER TABLE runs DROP COLUMN run_id, DROP COLUMN tests_hash, DROP COLUMN failing,
-                 DROP COLUMN first_error, DROP COLUMN tree_id, DROP COLUMN verdict;
+                 DROP COLUMN first_error, DROP COLUMN tree_id, DROP COLUMN verdict,
+                 DROP COLUMN fp_rules;
 DROP INDEX lessons_fingerprint_idx;
 ALTER TABLE lessons DROP COLUMN run_id, DROP COLUMN fingerprint, DROP COLUMN first_error;
 ALTER TABLE runs DROP COLUMN failing_tests;
@@ -367,7 +391,7 @@ SQL
   check "schema: the fingerprint columns are added, and old rows read as NULL" \
     test "$(pg -c "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'chalk_e2e'
                      AND column_name IN ('run_id', 'tests_hash', 'failing', 'first_error', 'tree_id',
-                                         'verdict', 'fingerprint')"):$(pg -c 'SELECT count(*) FROM runs WHERE verdict IS NULL')" = 9:1
+                                         'verdict', 'fingerprint', 'fp_rules')"):$(pg -c 'SELECT count(*) FROM runs WHERE verdict IS NULL AND fp_rules IS NULL')" = 10:1
   check "schema: lessons are indexed by fingerprint" \
     test "$(pg -c "SELECT count(*) FROM pg_indexes WHERE schemaname = 'chalk_e2e' AND indexname = 'lessons_fingerprint_idx'")" = 1
   check "schema: the failing test IDs column is added, and old rows read as NULL" \
@@ -378,6 +402,10 @@ SQL
   #   L-2 detained:  first, repeat, repeat (40c)         saves 40c by repeat
   #   L-3 submitted: first, no_change, progressed (50c)  a false stop, 50c after it
   #   L-4 detained:  first, improving, improving         converging but detained
+  #   L-5 detained:  first, repeat, under CHALK_FP_RULES=on: stopped at its
+  #                  first stop, so it is counted apart and changes nothing
+  # L-1 records CHALK_FP_RULES=shadow; the others, from before it was
+  # recorded, record nothing and count as shadow.
   pg -c 'TRUNCATE runs, lessons'
   pg <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
@@ -397,8 +425,18 @@ SELECT 'ledger', t, 'chalk/' || t, n, CASE n WHEN 1 THEN 'continue' ELSE 'retry'
     ('L-4', 1, false, 0.10, 3, 'first'), ('L-4', 2, false, 0.20, 2, 'improving'),
     ('L-4', 3, false, 0.30, 1, 'improving')
   ) v(t, n, p, cost, failing, verdict);
+UPDATE runs SET fp_rules = 'shadow' WHERE run_id = 'L-1-100';
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons,
+                  run_id, failing, verdict, fp_rules)
+VALUES ('ledger-on', 'L-5', 'chalk/L-5', 1, 'continue', 'ok', 1, false, 'm', 'p', 0.10, 1, 1,
+        0, 0, 0, 0, 0, 0, 0, 'L-5-100', 1, 'first', 'on'),
+       ('ledger-on', 'L-5', 'chalk/L-5', 2, 'retry', 'ok', 1, false, 'm', 'p', 0.20, 1, 1,
+        0, 0, 0, 0, 0, 0, 0, 'L-5-100', 1, 'repeat', 'on');
 INSERT INTO lessons (repo, ticket, signature, run_id)
-VALUES ('ledger', 'L-1', 's', 'L-1-100'), ('ledger', 'L-2', 's', 'L-2-100'), ('ledger', 'L-4', 's', 'L-4-100');
+VALUES ('ledger', 'L-1', 's', 'L-1-100'), ('ledger', 'L-2', 's', 'L-2-100'), ('ledger', 'L-4', 's', 'L-4-100'),
+       ('ledger-on', 'L-5', 's', 'L-5-100');
 SQL
   pg -v days=30 -f "$here/../share/dashboard.sql" | jq -c .ledger > "$tmp/ledger.json"
   # Amounts are compared in cents: jq may keep "0.7000" as Postgres wrote it.
@@ -410,11 +448,12 @@ SQL
   check "ledger: a stop followed by progress is a false stop, with the spend after it" \
     test "$(ledger '[.false_stops, (.false_stop_cost | c)] | join(" ")')" = "1 50"
   check "ledger: runs detained while improving are counted" test "$(ledger .converging)" = 1
+  check "ledger: a run stopped by CHALK_FP_RULES=on is counted apart" test "$(ledger .stopped_on)" = 1
   check "ledger: one row per run" \
     test "$(ledger '[.runs[] | "\(.run_id):\(.stop_verdict):\(.stop_loop):\(.after_cost | c):\(.false_stop):\(.converging)"] | sort | join(" ")')" \
       = "L-1-100:no_change:2:30:false:false L-2-100:repeat:2:40:false:false L-3-100:no_change:2:50:true:false L-4-100:null:null:0:false:true"
   check "ledger: failed loops that named no tests, per repository" \
-    test "$(ledger '[.unknown_tests[] | "\(.repo) \(.loops) \(.unknown)"] | join(" ")')" = "ledger 11 5"
+    test "$(ledger '[.unknown_tests[] | "\(.repo) \(.loops) \(.unknown)"] | join(" ")')" = "ledger 11 5 ledger-on 2 0"
 
   # Tests that keep failing: in ft, test a fails in four loops on two
   # tickets, b in two and c in one; a review naming z is not a loop. In
@@ -542,6 +581,15 @@ check "a missing container on the legacy volume is recreated on Postgres 16" \
 check "Postgres 17 is never started next to Postgres 16 data" test ! -e "$db_state/volumes/chalk-db-data-17"
 check "a Postgres 16 database warns to upgrade, and carries on" \
   grep -q 'run `chalk db upgrade`; semantic recall is off until then' "$tmp/db1.log"
+# Every run starts the database, so the warning is given once a day.
+in_db_model chalk db up > "$tmp/db1b.log" 2>&1 || { cat "$tmp/db1b.log"; fail "db up again on Postgres 16"; }
+check "the Postgres 16 warning is not repeated the same day" sh -c "! grep -q 'chalk db upgrade' '$tmp/db1b.log'"
+echo 2000-01-01 > "$XDG_STATE_HOME/chalk/db-upgrade-warned"
+in_db_model chalk db up > "$tmp/db1c.log" 2>&1 || { cat "$tmp/db1c.log"; fail "db up on Postgres 16 another day"; }
+check "the Postgres 16 warning is given again on another day" grep -q 'run `chalk db upgrade`' "$tmp/db1c.log"
+in_db_model chalk doctor > "$tmp/doctor16.log" 2>&1 || true
+check "chalk doctor reports Postgres 16 every time, whatever the day" \
+  grep -q 'database on Postgres 16 (chalk-db-data): run: chalk db upgrade' "$tmp/doctor16.log"
 
 mkdir -p "$XDG_STATE_HOME/chalk/other/runs/PROJ-77"
 echo "$$" > "$XDG_STATE_HOME/chalk/other/runs/PROJ-77/pid"
@@ -731,7 +779,7 @@ $error" TEXT-FIX
     test "$(recalled PROJ-45):$(counted PROJ-45)" = "TEXT-FIX:0 1"
 
   rpg -c 'DROP SCHEMA chalk_recall CASCADE'
-  unset PGOPTIONS
+  export PGOPTIONS="$e2e_pgoptions"
 fi
 
 # 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
