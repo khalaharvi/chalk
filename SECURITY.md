@@ -29,9 +29,8 @@ and contains no details. Fixes go into the latest release.
   It does hold the model credentials you export (`ANTHROPIC_API_KEY`,
   `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_AUTH_TOKEN`, and
   `ANTHROPIC_BASE_URL`), and it has outbound network access.
-- **Local services:** the telemetry database publishes no port and is
-  reached only through `docker exec`. The optional memory server listens
-  on 127.0.0.1 only.
+- **Local services:** the telemetry and lessons database publishes no
+  port and is reached only through `docker exec`.
 - **Not a defence against a malicious repository:** setup and test commands
   from `.chalk/config` run inside the container. But CI configuration
   (`.github/workflows/`, `.gitlab-ci.yml`) and anything else merged from

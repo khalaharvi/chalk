@@ -46,7 +46,8 @@ Postgres 17 with pgvector and `chalk db upgrade`.
 ## Q1 2027: Cheaper loops, open models (v0.8)
 
 - **[Lesson recall](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#recall)** by the fingerprint
-  of a failure, replacing the optional Hindsight memory server.
+  of a failure, replacing the optional Hindsight memory server. Done in
+  [#55](https://github.com/khalaharvi/chalk/pull/55), in the next release.
 - **[Verdicts on](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#verdicts-on):** let the
   stuck-loop verdicts stop runs early, where the shadow numbers show it
   saves money.
