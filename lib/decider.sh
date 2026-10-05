@@ -13,8 +13,10 @@
 # runs on 127.0.0.1 and is two processes: strands-decider, installed with
 # `uv tool install`, and chalk-embed (share/decider/chalk-embed.py), the
 # embedding model for semantic lesson recall. Both exit after
-# CHALK_DECIDER_IDLE_MINUTES without a request, and a run starts them again
-# (decider_start_once). A run never downloads anything.
+# CHALK_DECIDER_IDLE_MINUTES without a request. A run starts them again
+# (decider_start_bg) once a question can be asked: at run start when
+# lesson rerank can be, otherwise at the first loop that fails its rubric
+# (decider_lessons). A run never downloads anything.
 
 DECIDER_PROTOCOL=1
 DECIDER_PORT=8471
@@ -440,12 +442,19 @@ decider_post() {
 # alone, starts it in the background, so that later loops of this run get
 # answers. The same gate as at run start.
 decider_wake() {
-  [[ -z ${| decider_pid decider; } ]] || return 0
-  decider_autostart_ok || return 0
-  local dir
-  dir="${| decider_dir; }"
-  mkdir -p "$dir"
-  jobs_detach "$dir/start.log" decider_start_once
+  decider_start_bg "${| decider_dir; }/start.log" || true
+}
+
+# decider_starting: true when strands-decider's process is alive but does
+# not answer yet: it was launched less than its start timeout ago, and is
+# still loading its model. A call to it then gets no answer, recorded as
+# starting rather than unreachable.
+decider_starting() {
+  local age limit
+  [[ -n ${| decider_pid decider; } ]] || return 1
+  age="${| chalk_lock_age "${| decider_dir; }/decider.pid"; }"
+  limit="${| system_timeout 120 "${CHALK_DECIDER_TIMEOUT:-auto}"; }"
+  [[ -n $age ]] && (( age < limit ))
 }
 
 # decider_ask STATE QUESTIONS VAR: asks the decider the questions in
@@ -467,7 +476,9 @@ decider_ask() {
             '{protocol: $protocol, state: $state, questions: $questions}')" || true
   if decider_local; then
     decider_touch
-    if [[ $DECIDER_ERROR == unreachable ]]; then decider_wake; fi
+    if [[ $DECIDER_ERROR == unreachable ]]; then
+      if decider_starting; then DECIDER_ERROR=starting; else decider_wake; fi
+    fi
   fi
   if [[ -z $DECIDER_ERROR ]]; then
     # One line for the protocol and model, then KEY TAB ANSWER TAB CONFIDENCE.
@@ -707,6 +718,58 @@ decider_calibration_note() {
   if [[ -n ${__note[suggested]} ]]; then
     REPLY+="; it would be at CHALK_DECIDER_THRESHOLD=${__note[suggested]}"
   fi
+}
+
+# ---------------------------------------------------------------- why nothing was asked
+
+# Both questions have entry conditions that a run may never meet (#85): the
+# stuck question follows only a failed loop the verdicts call spinning or
+# other, and lesson rerank waits for CHALK_DECIDER_MIN_LESSONS resolved
+# lessons. When nothing was asked, chalk doctor, chalk decider status and
+# the report card say which, with the numbers, rather than show zeros.
+
+# The days chalk doctor and chalk decider status look back over: the
+# report card's default period.
+DECIDER_REACH_DAYS=30
+
+# decider_reach -> REPLY: db_decider_reach over DECIDER_REACH_DAYS, as one
+# JSON object; empty when the database could not give it.
+decider_reach() {
+  REPLY="$(db_decider_reach "$DECIDER_REACH_DAYS" 2>/dev/null || true)"
+  jq -e '(.loops | type) == "number"' >/dev/null 2>&1 <<<"$REPLY" || REPLY=""
+}
+
+# decider_quiet_note REACH -> REPLY: why the decider was asked nothing,
+# from REACH (as db_decider_reach prints it): what the stuck question and
+# lesson rerank wait for, with the numbers. Empty when REACH is empty or
+# records a question.
+decider_quiet_note() {
+  local loops=0 failed=0 gray=0 blocked=0 questions="" lessons=0 stuck rerank n s=s
+  REPLY=""
+  [[ -n ${1:-} ]] || return 0
+  IFS=$'\t' read -r loops failed gray blocked questions lessons < <(jq -r '
+    [.loops, .failed, .gray, .blocked_runs, .questions, .lessons] | map(tostring) | @tsv' <<<"$1" 2>/dev/null) || true
+  [[ $questions == 0 ]] || return 0
+  for n in "$loops" "$failed" "$gray" "$blocked" "$lessons"; do [[ $n =~ ^[0-9]+$ ]] || return 0; done
+  if [[ ${CHALK_FP_RULES:-shadow} == off ]]; then
+    stuck="the stuck question needs verdicts, which CHALK_FP_RULES=off turns off"
+  elif (( loops == 0 )); then
+    stuck="no loop ran"
+  elif (( failed == 0 )); then
+    if (( loops == 1 )); then s=""; fi
+    stuck="the stuck question is asked only after a loop fails its rubric, and 0 of $loops loop$s did"
+    if (( blocked > 0 )); then stuck+=" ($blocked run(s) ended in a blocker instead)"; fi
+  elif (( gray == 0 )); then
+    stuck="the stuck question is asked only after a failed loop the verdicts call spinning or other, and none of $failed failed loop(s) was"
+  else
+    stuck="$gray failed loop(s) the verdicts call spinning or other could have been asked, but the decider was off for them"
+  fi
+  if (( lessons < CHALK_DECIDER_MIN_LESSONS )); then
+    rerank="lesson rerank needs $CHALK_DECIDER_MIN_LESSONS resolved lessons, this machine has $lessons"
+  else
+    rerank="lesson rerank had $lessons resolved lessons, but no candidate lesson for any loop's failure"
+  fi
+  REPLY="$stuck; $rerank"
 }
 
 # ---------------------------------------------------------------- the stuck question
@@ -973,6 +1036,30 @@ decider_autostart_ok() {
   fi
 }
 
+# decider_start_bg LOG: starts the local service in the background
+# (decider_start_once), its output in LOG, when CHALK_DECIDER is not off,
+# a run may start it (decider_autostart_ok) and it is not running. Never
+# waited for: until it answers, loops go on without it. False when it
+# started nothing.
+decider_start_bg() {
+  [[ ${CHALK_DECIDER:-off} != off && -z ${| decider_pid decider; } ]] || return 1
+  decider_autostart_ok || return 1
+  mkdir -p "${1%/*}"
+  jobs_detach "$1" decider_start_once
+}
+
+# decider_lessons -> REPLY: how many lessons are resolved; empty when the
+# database cannot tell. Lesson rerank waits for CHALK_DECIDER_MIN_LESSONS
+# of them (decider_recall). Before that, the only question is the stuck
+# one, which needs a failed loop before it, so a run starts the local
+# service, which holds several GB, only once a loop fails its rubric.
+decider_lessons() {
+  local resolved=""
+  REPLY=""
+  read -r resolved _ < <(db_decider_gate 2>/dev/null || true) || true
+  if [[ $resolved =~ ^[0-9]+$ ]]; then REPLY="$resolved"; fi
+}
+
 # True on Apple silicon, where strands-decider runs on the GPU through MPS
 # or, from the release after 0.1.0, MLX.
 decider_apple_silicon() {
@@ -1091,8 +1178,8 @@ decider_stop() {
 # exactly once however many runs ask at the same time (eng review A3): one
 # starter takes the decider lock, starts both processes, and holds the lock
 # until the decider is healthy or the wait is over; the others find the
-# lock held, or the service alive, and leave it. Run in the background by
-# run_start_services (never in jobs_wait), so a run does not wait for it.
+# lock held, or the service alive, and leave it. Run in the background
+# (decider_start_bg, never in jobs_wait), so a run does not wait for it.
 # It is running while strands-decider is: if that died alone, what is left
 # (chalk-embed, the watcher) is stopped and both start again.
 decider_start_once() {
@@ -1292,7 +1379,7 @@ decider_up() {
     db_sql < "$CHALK_HOME/share/schema.sql" >/dev/null 2>&1 || true
     info "  embedded ${| decider_embed_lessons; } resolved lesson(s) that had none"
   fi
-  info "it stops after ${CHALK_DECIDER_IDLE_MINUTES} idle minutes, and runs start it again. To use it, set CHALK_DECIDER=shadow."
+  info "it stops after ${CHALK_DECIDER_IDLE_MINUTES} idle minutes, and runs start it again once they can ask it something. To use it, set CHALK_DECIDER=shadow."
 }
 
 # decider_device_note -> REPLY: the --device `chalk decider up` chose for
@@ -1336,6 +1423,21 @@ decider_status_hosted() {
   decider_disclosure "  " "$CHALK_DECIDER_URL" "$CHALK_EMBED_URL"
 }
 
+# decider_status_questions: for `chalk decider status`, how many questions
+# the decider was asked in the last DECIDER_REACH_DAYS days and, when
+# none, why (decider_quiet_note). Nothing without the database.
+decider_status_questions() {
+  local reach questions
+  reach="${| decider_reach; }"
+  [[ -n $reach ]] || return 0
+  questions="$(jq -r .questions <<<"$reach")"
+  if [[ $questions != 0 ]]; then
+    info "questions: $questions in the last $DECIDER_REACH_DAYS days (the report card has the answers: chalk dashboard)"
+  else
+    info "questions: 0 in the last $DECIDER_REACH_DAYS days: ${| decider_quiet_note "$reach"; }"
+  fi
+}
+
 decider_status() {
   local -A got cal
   local mode slow note
@@ -1343,6 +1445,7 @@ decider_status() {
   info "CHALK_DECIDER=$CHALK_DECIDER (acting as $mode), CHALK_DECIDER_URL=$CHALK_DECIDER_URL"
   decider_calibration cal
   info "calibration: ${| decider_calibration_note cal; }"
+  decider_status_questions
   decider_status_hosted
   if ! decider_local; then
     if ! decider_acknowledged "$CHALK_DECIDER_URL"; then :
@@ -1358,7 +1461,7 @@ decider_status() {
   fi
   if decider_healthy "$DECIDER_LOCAL_URL"; then info "local decider: running and healthy"
   elif decider_alive; then info "local decider: starting"
-  else info "local decider: stopped (a run starts it; or: chalk decider up)"
+  else info "local decider: stopped (a run starts it once a question can be asked; or: chalk decider up)"
   fi
   info "  package: ${got[package]-?}, installed ${got[installed_at]-?}"
   info "  decider: ${got[decider_model]} on ${got[device]-?}"
