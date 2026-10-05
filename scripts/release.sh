@@ -3,7 +3,7 @@
 #
 #   scripts/release.sh VERSION
 #
-# VERSION is like 0.5.0. Pushing the v* tag starts .github/workflows/release.yml,
+# VERSION is like 1.2.3. Pushing the v* tag starts .github/workflows/release.yml,
 # which runs the checks, creates the GitHub Release and updates the Homebrew tap.
 set -euo pipefail
 
@@ -12,7 +12,7 @@ fail() { echo "error: $*" >&2; exit 1; }
 version="${1:-}"
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "usage: scripts/release.sh VERSION   (VERSION like 0.5.0)" >&2; exit 2 ;;
+  *) echo "usage: scripts/release.sh VERSION   (VERSION like 1.2.3)" >&2; exit 2 ;;
 esac
 
 cd "$(git rev-parse --show-toplevel)"

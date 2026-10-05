@@ -14,7 +14,7 @@ version="${1:-}"
 tap="${2:-}"
 case "$version" in
   [0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "usage: scripts/update-tap.sh VERSION TAP_DIR   (VERSION like 0.4.0)" >&2; exit 2 ;;
+  *) echo "usage: scripts/update-tap.sh VERSION TAP_DIR   (VERSION like 1.2.3)" >&2; exit 2 ;;
 esac
 [ -d "$tap/.git" ] || fail "$tap is not a clone of the tap repository"
 
