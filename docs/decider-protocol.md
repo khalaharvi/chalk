@@ -34,11 +34,12 @@ A decider is reached at a base URL, `CHALK_DECIDER_URL`.
 | Method and path | Purpose | Required |
 | :-- | :-- | :-- |
 | `POST /v1/systemone` | Answer the questions about one text | yes |
-| `GET /health` | Say that the model is loaded, and which | no |
+| `GET /health` | Say that the model is loaded, and which | no; see [Health](#health) |
 
-Chalk asks `/health` only from `chalk decider up`, `chalk decider status`
-and `chalk doctor`, never during a loop. During a loop, a decider that is
-down is found out by its first question.
+Chalk checks health only from `chalk decider up`, `chalk decider status`,
+`chalk doctor`, a run starting the local service, and office hours before
+it writes a lesson's embedding; never during a loop. During a loop, a
+decider that is down is found out by its first question.
 
 ## Request
 
@@ -204,17 +205,35 @@ What each answer can do:
 
 ## What a decider receives
 
-Only what the `state` and `instructions` above hold: test IDs, first error
-lines, file names with line counts, and lesson texts, which are past
-failures and the notes people wrote about them. Never source code or a
-full diff. The local reference service runs on your machine, so with it
-nothing leaves the machine. A hosted decider receives the same text, at
-the address in `CHALK_DECIDER_URL`.
+Only what the `state` and `instructions` above hold, and the bearer token:
+
+| Question | `state` | In the questions |
+| :-- | :-- | :-- |
+| `stuck` | For the failed loop and the one before: up to 20 failing test IDs and the first error line of each, then `git diff --stat` between their working trees (file paths and line counts, at most 41 lines). At most 6,000 characters. | The fixed question |
+| `lesson_<id>` | `Current failure:` and up to 1,500 characters of it: its first error and failing test IDs; before the first loop, the start of the spec; when the rubric gave neither, the failure reason and the last lines of the rubric's output, which can quote source lines from a stack trace | Each of up to 5 past lessons: its failure (first error or signature) and the fix note someone wrote, shortened so the whole request is at most 4,000 characters |
+
+Never the repository's files, the changes themselves, or the Claude
+credentials. Health checks send nothing of yours (see [Health](#health)).
+
+The local reference service runs on your machine, so with it nothing
+leaves the machine. **A decider on another machine gets nothing until
+you acknowledge it.** Any `CHALK_DECIDER_URL` (or `CHALK_EMBED_URL`)
+whose host is not 127.0.0.0/8, `localhost` or `::1` is sent nothing, not
+even a health check, until you run:
+
+```sh
+chalk decider trust https://decider.example.com
+```
+
+which prints exactly what that address would receive, as in the table
+above, and records it as acknowledged. Until then a run goes on with the
+decider off and says why, once; `chalk doctor` and `chalk decider status`
+say so too, with the same list. `chalk decider untrust URL` takes it back.
 
 ## Health
 
-`GET /health` answers `200` with JSON once the model is loaded. Only
-`status` is required:
+`GET /health` is **optional**. A decider that has it answers `200` with
+JSON once the model is loaded, and only `status` is required:
 
 ```json
 {"status": "ok", "model": "strands-decider-2B-hobson-v19", "device": "mps"}
@@ -222,6 +241,23 @@ the address in `CHALK_DECIDER_URL`.
 
 strands-decider also reports its checkpoint and base model, which
 `chalk decider status` shows with the revisions it resolved.
+
+When `/health` answers `404` or `405`, Chalk checks the decider with the
+smallest real request instead: one `POST /v1/systemone` with a single
+`noul` question about a fixed text, with the bearer token:
+
+```json
+{"protocol": 1, "state": "Chalk health check.",
+ "questions": {"health": {"type": "noul", "instructions": "Is this text a health check?"}}}
+```
+
+A `200` with an `answers` object is healthy, whatever the answer. The
+probe has 2 seconds of its own, outside any loop's budget, and at the
+local reference service it waits its turn like any question (see
+[Concurrent requests](#errors-and-time)). Anything else from `/health`,
+such as a `503` while the model loads, or no connection, is not healthy,
+and nothing is probed. So a decider need not implement `/health`; one
+that does is checked without spending a question.
 
 ## Embeddings
 
@@ -248,8 +284,16 @@ POST /v1/embeddings
 
 Vectors have 384 dimensions and unit length, so cosine distance is
 `1 − dot product`. `GET /health` answers like the decider's, with the
-model's `dimensions` and `revision`. Embedding calls share the loop's
-2-second budget.
+model's `dimensions` and `revision`; it is optional too, and without it
+Chalk embeds the one word `health` instead. Embedding calls share the
+loop's 2-second budget.
+
+chalk-embed receives the current failure, up to 4,000 characters (the
+same text as the `lesson_<id>` question's, before it is cut to 1,500),
+and, to store their embeddings, each resolved lesson's failure (up to
+1,500 characters) and fix note. An embedding service at a
+`CHALK_EMBED_URL` on another machine needs `chalk decider trust` like a
+decider.
 
 ## Testing a decider
 

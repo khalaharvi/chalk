@@ -60,7 +60,9 @@ CHALK_SANDBOX_MEM_MB=2048
 # A decider: a small, fast model that judges the loops the verdicts cannot
 # settle (stuck or not?) and which past lessons apply. By default the local
 # service from `chalk decider up`; it receives failing test names, first
-# error lines, file names with line counts and lesson texts, never code.
+# error lines, file names with line counts and lesson texts, never your
+# files. One on another machine (CHALK_DECIDER_URL, set in the environment)
+# gets nothing until `chalk decider trust URL`, which lists what it gets.
 #   off     ask nothing
 #   shadow  ask, and record the answers only (see `chalk dashboard`)
 #   on      also act on answers at CHALK_DECIDER_THRESHOLD or above: detain

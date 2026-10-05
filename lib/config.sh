@@ -47,7 +47,8 @@ declare -gA CHALK_ENV_DEFAULTS=(
   [CHALK_DB_TIMEOUT]=auto
   # Where the decider is (docs/decider-protocol.md): by default the local
   # service that `chalk decider up` installs. A repository cannot point it
-  # elsewhere, since the decider receives test output.
+  # elsewhere, since the decider receives test output. One on another
+  # machine is sent nothing until `chalk decider trust URL`.
   [CHALK_DECIDER_URL]="http://127.0.0.1:8471"
   # Bearer token for a hosted decider. Never logged.
   [CHALK_DECIDER_TOKEN]=""

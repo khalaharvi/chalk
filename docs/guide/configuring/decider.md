@@ -129,10 +129,39 @@ export CHALK_DECIDER_URL=https://decider.example.com
 export CHALK_DECIDER_TOKEN=...        # sent as a bearer token; never logged
 ```
 
+Then acknowledge it, once on each machine:
+
+```sh
+chalk decider trust https://decider.example.com
+```
+
+**A hosted decider gets nothing until you do.** Any address whose host is
+not this machine (127.0.0.0/8, `localhost` or `::1`) is sent nothing, not
+even a health check. `chalk decider trust URL` prints exactly what it
+would receive ([below](#what-the-decider-receives)) and records the URL
+(less any trailing slash) under `~/.local/state/chalk/decider/trusted`. Until
+then:
+
+- a run goes on with the decider off, and says so once, with the same
+  list and the command to run;
+- `chalk doctor` and `chalk decider status` say it is not acknowledged,
+  and list what it would receive.
+
+Pointing `CHALK_DECIDER_URL` at another address needs a new
+acknowledgement. `chalk decider untrust URL` takes one back. A
+`CHALK_EMBED_URL` on another machine needs the same.
+
+Why a command rather than a setting: the acknowledgement is given where
+the list of what is sent is printed, it names the one address it allows,
+and it lives in your state directory, so neither a repository's
+`.chalk/config` nor an environment file that comes with a repository can
+give it. In CI, run `chalk decider trust URL` as a setup step.
+
 Chalk does not start or stop a hosted decider; `chalk doctor` checks its
-`/health`. The endpoint must speak [the decider protocol](../../decider-protocol.md).
-Answers from a hosted model are only as good as its calibration, so start
-it in `shadow`.
+health, through `/health` or, for a decider without it, one question (see
+[Health](../../decider-protocol.md#health)). The endpoint must speak
+[the decider protocol](../../decider-protocol.md). Answers from a hosted
+model are only as good as its calibration, so start it in `shadow`.
 
 ## Time
 
@@ -152,18 +181,33 @@ largest takes about 1.2 s, and leaves time for the stuck question.
 
 ## What the decider receives
 
-- **The stuck question:** the failing test IDs and first error line of the
-  previous and the current loop, and a diffstat between their working
-  trees (file names with the number of lines changed), capped at about
-  1,500 tokens. Never source code, and never the diff itself.
-- **The lesson question:** the current failure (its first error and
-  failing tests, or before the first loop, the spec), up to 1,500
-  characters, and for each candidate lesson its past failure and fix
-  note, shortened to fit 4,000 characters in all. Chalk-embed receives the
-  same failure text, and the text of each resolved lesson.
+This is the list `chalk decider trust`, `chalk doctor` and
+`chalk decider status` print.
 
-With the local service this stays on your machine. A hosted decider
-receives the same text at `CHALK_DECIDER_URL`.
+- **The stuck question**, after a failed loop the verdicts call `spinning`
+  or `other`: the failing test IDs (up to 20) and the first error line of
+  that loop and the one before, and `git diff --stat` between their
+  working trees (file paths and the number of lines changed, at most 41
+  lines); 6,000 characters at most, about 1,500 tokens. Never the diff
+  itself.
+- **The lesson question**, once 30 lessons are resolved: the current
+  failure, up to 1,500 characters, and for each of up to 5 candidate
+  lessons its past failure (first error or signature) and fix note,
+  shortened to fit 4,000 characters in all. The current failure is its
+  first error and failing test IDs; before the first loop, the start of
+  the spec; when the rubric gave neither, the failure reason and the last
+  lines of the rubric's output, which can quote source lines from a stack
+  trace.
+- **chalk-embed**, with Postgres 17: the same current failure, up to
+  4,000 characters, and each resolved lesson's failure (up to 1,500
+  characters) and fix note.
+- `CHALK_DECIDER_TOKEN`, when set, as a bearer token; and for health
+  checks, `GET /health` or a fixed question about a fixed text.
+
+Never the repository's files, the changes themselves, or the Claude
+credentials. With the local service all of this stays on your machine. A
+hosted decider receives the same text at `CHALK_DECIDER_URL`, once you
+have [acknowledged it](#a-hosted-decider).
 
 ## Where answers are kept
 

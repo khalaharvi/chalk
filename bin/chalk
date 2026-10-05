@@ -44,6 +44,7 @@ Setup
   chalk db up|down|psql        Manage the local telemetry database
   chalk db upgrade [--cleanup] Move the database to Postgres 17, then drop the old one
   chalk decider up|down|status Install and start the local decider, stop it, or check it
+  chalk decider trust|untrust URL  Allow (or stop) sending to a decider on another machine
   chalk sandbox build          Build the default sandbox image
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
 

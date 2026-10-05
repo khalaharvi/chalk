@@ -75,9 +75,22 @@ doctor_decider() {
     doctor_check optional "decider off (CHALK_DECIDER=off)" "" true
     return 0
   fi
+  # Another machine gets nothing, not even a health check, until acknowledged.
+  local -a unacked=()
+  decider_unacknowledged unacked
+  if (( ${#unacked[@]} )); then
+    doctor_check optional "decider (CHALK_DECIDER=$CHALK_DECIDER)" \
+      "runs go on with it off: ${| decider_untrusted_hint "${unacked[@]}"; }" false
+  fi
+  if ! decider_loopback "$CHALK_DECIDER_URL" || ! decider_loopback "$CHALK_EMBED_URL"; then
+    info "        a decider or chalk-embed on another machine receives exactly this:"
+    decider_disclosure "        " "$CHALK_DECIDER_URL" "$CHALK_EMBED_URL"
+  fi
+  (( ! ${#unacked[@]} )) || return 0
   if ! decider_local; then
     doctor_check optional "decider at $CHALK_DECIDER_URL (CHALK_DECIDER=$CHALK_DECIDER)" \
-      "not answering GET /health; runs go on without it" decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN
+      "not answering GET /health, nor a question without it; runs go on without it" \
+      decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN
     return 0
   fi
   decider_info got

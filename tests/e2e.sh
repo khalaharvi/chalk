@@ -935,6 +935,45 @@ detained_as_usual() {
     next_step "$tmp/$1.log" "the rubric still fails after 2 retries"
 }
 
+# A decider on another machine gets nothing until `chalk decider trust`
+# acknowledges it: the run goes on with the decider off and says so once,
+# with exactly what it would have sent, and where.
+touch "$FAKE_STATE/curl.log"
+curl_lines="$(wc -l < "$FAKE_STATE/curl.log")"
+decider_run PROJ-49 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97"
+check "hosted, not acknowledged: the run goes as with the decider off" detained_as_usual PROJ-49
+check "hosted, not acknowledged: nothing reaches the decider or chalk-embed" \
+  sh -c "test ! -s '$tmp/PROJ-49.decider' &&
+    ! tail -n +$((curl_lines + 1)) '$FAKE_STATE/curl.log' | grep -qE '^http://(decider|embed)\.test'"
+check "... and no answer is recorded" sh -c "! grep -q 'INSERT INTO decisions' '$tmp/PROJ-49.db'"
+check "hosted, not acknowledged: the run says so once, with what to run" \
+  test "$(grep -c '^warning: continuing with the decider off: http://decider.test and http://embed.test are on another machine, .* run: chalk decider trust http://decider.test; chalk decider trust http://embed.test$' "$tmp/PROJ-49.log")" -eq 1
+check "... and the disclosure: what each would receive, and where" \
+  sh -c "grep -q '^  The decider (http://decider.test) gets, in POST /v1/systemone:' '$tmp/PROJ-49.log' &&
+    grep -q 'the failing test IDs (up to 20) and the first error line' '$tmp/PROJ-49.log' &&
+    grep -q '^  The embedding service (http://embed.test) gets' '$tmp/PROJ-49.log'"
+curl_lines="$(wc -l < "$FAKE_STATE/curl.log")"
+CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test \
+  chalk doctor > "$tmp/doctor-untrusted.log" 2>&1 || true
+CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test \
+  chalk decider status > "$tmp/status-untrusted.log" 2>&1 || { cat "$tmp/status-untrusted.log"; fail "chalk decider status"; }
+check "doctor: a hosted decider not acknowledged is reported, with what to run" \
+  grep -q '^  --    decider (CHALK_DECIDER=shadow): runs go on with it off: http://decider.test and http://embed.test are on another machine' \
+    "$tmp/doctor-untrusted.log"
+check "doctor: ... and what it would receive" \
+  grep -q '^        The decider (http://decider.test) gets, in POST /v1/systemone:' "$tmp/doctor-untrusted.log"
+check "chalk decider status: the same, for each" \
+  sh -c "grep -q '^http://decider.test: on another machine and not acknowledged' '$tmp/status-untrusted.log' &&
+    grep -q '^http://embed.test: on another machine and not acknowledged' '$tmp/status-untrusted.log' &&
+    grep -q '^  The decider (http://decider.test) gets' '$tmp/status-untrusted.log'"
+check "doctor and status contact neither, not even for health" \
+  sh -c "! tail -n +$((curl_lines + 1)) '$FAKE_STATE/curl.log' | grep -qE '^http://(decider|embed)\.test'"
+chalk decider trust http://decider.test > "$tmp/trust.log" 2>&1 || { cat "$tmp/trust.log"; fail "chalk decider trust"; }
+check "chalk decider trust shows what is sent, then records the URL" \
+  sh -c "grep -q '^The decider (http://decider.test) gets' '$tmp/trust.log' &&
+    grep -q '^acknowledged: ' '$tmp/trust.log' && grep -qx 'http://decider.test' '$XDG_STATE_HOME/chalk/decider/trusted'"
+chalk decider trust http://embed.test >/dev/null 2>&1 || fail "chalk decider trust (embed)"
+
 decider_run PROJ-50 CHALK_DECIDER=off
 check "decider off: the churning run takes three loops, then the usual detention" detained_as_usual PROJ-50
 check "decider off: the loops after the first are spinning" \
@@ -943,6 +982,9 @@ check "decider off: nothing is asked" test "$(asked PROJ-50)" -eq 0
 
 decider_run PROJ-51 CHALK_DECIDER=shadow FAKE_DECIDER_ANSWERS="stuck=0.97"
 check "decider shadow: the run is unchanged" detained_as_usual PROJ-51
+check "hosted, acknowledged: the run says where questions go, and asks" \
+  sh -c "grep -q '^decider: questions go to http://decider.test (acknowledged' '$tmp/PROJ-51.log' &&
+    ! grep -q 'continuing with the decider off' '$tmp/PROJ-51.log' && test -s '$tmp/PROJ-51.decider'"
 check "decider shadow: each spinning loop is put to the decider" test "$(asked PROJ-51)" -eq 2
 state="$(grep '"stuck"' "$tmp/PROJ-51.decider" | tail -n 1 | jq -r .state)"
 check "the decider gets the failing tests and first errors of both loops" \
@@ -1006,10 +1048,19 @@ check "doctor: a local decider that was never installed is reported" \
 CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test chalk doctor > "$tmp/doctor-decider2.log" 2>&1 || true
 check "doctor: a hosted decider is checked through its health endpoint" \
   grep -q '^  ok    decider at http://decider.test (CHALK_DECIDER=shadow)' "$tmp/doctor-decider2.log"
+: > "$FAKE_STATE/decider.log"
+CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test FAKE_DECIDER_HEALTH=404 \
+  chalk doctor > "$tmp/doctor-decider3.log" 2>&1 || true
+check "doctor: a hosted decider without /health is checked with one question" \
+  sh -c "grep -q '^  ok    decider at http://decider.test (CHALK_DECIDER=shadow)' '$tmp/doctor-decider3.log' &&
+    test \"\$(grep -c '\"health\":{\"type\":\"noul\"' '$FAKE_STATE/decider.log')\" -eq 1"
 check "doctor: off says so" grep -q '^  ok    decider off (CHALK_DECIDER=off)' "$tmp/doctor1.log"
 CHALK_DECIDER_URL=http://decider.test chalk decider status > "$tmp/decider-status.log" 2>&1 ||
   { cat "$tmp/decider-status.log"; fail "chalk decider status"; }
 check "chalk decider status reports a hosted decider's health" grep -q '^decider: healthy' "$tmp/decider-status.log"
+CHALK_DECIDER_URL=http://decider.test FAKE_DECIDER_HEALTH=404 chalk decider status > "$tmp/decider-status2.log" 2>&1 ||
+  { cat "$tmp/decider-status2.log"; fail "chalk decider status"; }
+check "... and, without /health, through one question" grep -q '^decider: healthy' "$tmp/decider-status2.log"
 if CHALK_DECIDER_URL=http://decider.test chalk decider up > "$tmp/decider-up.log" 2>&1; then
   fail "chalk decider up must refuse a decider it does not manage"
 fi

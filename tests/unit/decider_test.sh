@@ -34,6 +34,72 @@ ask() {
   return "$status"
 }
 
+# --- another machine: nothing is sent before `chalk decider trust` --------
+
+for url in http://127.0.0.1:8471 http://localhost:9000/v1 "http://[::1]:8471" http://127.1.2.3 HTTP://LOCALHOST \
+           http://user@127.0.0.1:8471; do
+  check "$url is this machine" decider_loopback "$url"
+done
+for url in http://decider.test https://127.0.0.1.example.com http://localhost@decider.test:80 \
+           http://10.0.0.1:8471 "http://[::2]:8471" http://localhost.example.com http://0.0.0.0:8471; do
+  check "$url is another machine" fails decider_loopback "$url"
+done
+
+: > "$FAKE_STATE/curl.log"
+decider_budget_reset
+ask 2> "$tmp/untrusted.err" || true
+check "a decider on another machine that was not acknowledged is not asked" test ! -s "$FAKE_STATE/curl.log"
+check "... named untrusted" test "$DECIDER_ERROR" = untrusted
+check "... and the warning says what to run" \
+  grep -q 'http://decider.test is on another machine, and nothing is sent there .* run: chalk decider trust http://decider.test$' \
+    "$tmp/untrusted.err"
+check "... nor checked for health" fails decider_healthy http://decider.test
+check "... and chalk-embed on another machine is sent nothing either" test -z "${| decider_embed one; }"
+check "... named untrusted" test "$DECIDER_ERROR" = untrusted
+check "... and still nothing reached either" test ! -s "$FAKE_STATE/curl.log"
+
+# decider_gate, as a run starts: the decider off, said once, with what it
+# would have received.
+DECIDER_WARNED=()
+decider_gate 2> "$tmp/gate.err"
+check "a run with an unacknowledged decider goes on with the decider off" test "$CHALK_DECIDER" = off
+check "... saying where it would have sent, and how to allow it" \
+  grep -q '^warning: continuing with the decider off: http://decider.test and http://embed.test are on another machine' "$tmp/gate.err"
+check "... and exactly what it would send: the stuck question's facts and caps" \
+  grep -q "the failing test IDs (up to 20) and the first error line" "$tmp/gate.err"
+check "... the rerank's failure and lesson texts, and their caps" \
+  grep -q "failure and fix note of up to $DECIDER_SHORTLIST past lessons; at most $DECIDER_RERANK_CHARS characters" "$tmp/gate.err"
+check "... and what chalk-embed would get" grep -q '^  The embedding service (http://embed.test) gets' "$tmp/gate.err"
+CHALK_DECIDER=shadow
+decider_gate 2> "$tmp/gate.err"
+check "... said once a process" test ! -s "$tmp/gate.err"
+CHALK_DECIDER=shadow
+
+# chalk decider trust: shows what is sent, then records the URL.
+decider_trust http://decider.test/ > "$tmp/trust.out"
+check "chalk decider trust shows what the decider gets" grep -q '^The decider (http://decider.test) gets' "$tmp/trust.out"
+check "... records the URL, without its trailing slash" grep -qx 'http://decider.test' "${| decider_trust_file; }"
+check "... and then the decider is asked" ask
+check "... though not a URL that only starts the same" fails decider_acknowledged http://decider.test.example.com/v1/systemone
+check "chalk-embed's URL is still not acknowledged" test -z "${| decider_embed one; }"
+check "trusting a URL twice records it once" \
+  test "$(decider_trust http://decider.test | tail -n 1; grep -c . "${| decider_trust_file; }")" = $'already acknowledged: http://decider.test\n1'
+check "trusting this machine records nothing" \
+  test "$(decider_trust http://localhost:8471; grep -c localhost "${| decider_trust_file; }" || true)" = $'http://localhost:8471 is on this machine: nothing to acknowledge\n0'
+decider_untrust http://decider.test >/dev/null
+check "chalk decider untrust takes it back" fails decider_acknowledged http://decider.test
+DECIDER_WARNED=()
+decider_gate 2>/dev/null
+check "... and the next run goes on with the decider off" test "$CHALK_DECIDER" = off
+CHALK_DECIDER=shadow
+decider_trust http://decider.test >/dev/null
+decider_trust http://embed.test >/dev/null
+DECIDER_WARNED=()
+check "once both are acknowledged, a run keeps the decider" \
+  test "$(decider_gate 2>&1; printf '%s' "$CHALK_DECIDER")" = \
+    "decider: questions go to http://decider.test (acknowledged; what it gets: chalk decider status)
+shadow"
+
 # --- answers ----------------------------------------------------------------
 
 decider_budget_reset
@@ -448,6 +514,64 @@ wait "$holder"
 max="$(sed -n 's/^max-time=\([0-9.]*\) .*/\1/p' "$FAKE_STATE/decider.log")"
 check "... and its call may take only what the wait left of the budget (--max-time $max)" \
   awk -v m="$max" 'BEGIN { exit !(m > 0 && m <= 1.6) }'
+
+# --- health, with /health optional ------------------------------------------
+
+# probes: how many probe questions the fake decider got.
+probes() { grep -c '"health":{"type":"noul"' "$FAKE_STATE/decider.log" || true; }
+: > "$FAKE_STATE/decider.log"
+: > "$FAKE_STATE/curl.log"
+check "a decider answering /health is healthy" decider_healthy http://decider.test
+check "... without a question asked" test "$(probes)" -eq 0
+export FAKE_DECIDER_HEALTH=404
+CHALK_DECIDER_TOKEN="s3cret-token"
+check "a decider whose /health is 404 is healthy when it answers one question" \
+  decider_healthy http://decider.test CHALK_DECIDER_TOKEN
+check "... a noul question, as the protocol has it, with the token" \
+  test "$(probes):$(grep -c 'auth=yes' "$FAKE_STATE/decider.log")" = 1:1
+CHALK_DECIDER_TOKEN=""
+FAKE_DECIDER_HEALTH=405
+check "... and when it is 405" decider_healthy http://decider.test
+decider_budget_reset
+DECIDER_SPENT_MS=1900 DECIDER_ERROR=budget
+decider_healthy http://decider.test
+check "the probe is outside the loop's budget, which it leaves as it was" \
+  test "$DECIDER_SPENT_MS:$DECIDER_LIMIT_MS:$DECIDER_ERROR" = "1900:$DECIDER_LOOP_BUDGET_MS:budget"
+decider_budget_reset
+FAKE_DECIDER_HEALTH=404
+FAKE_DECIDER_TOKEN=other-token \
+  check "a decider whose /health is 404 and that refuses the question is not healthy" \
+    fails decider_healthy http://decider.test
+: > "$FAKE_STATE/decider.log"
+FAKE_DECIDER_HEALTH=503
+check "a /health that says it is not ready is not healthy" fails decider_healthy http://decider.test
+check "... and is not probed" test "$(probes)" -eq 0
+FAKE_DECIDER_HEALTH=404
+FAKE_DECIDER_DOWN=1 check "nothing listening is not healthy" fails decider_healthy http://decider.test
+check "... and is not probed" test "$(probes)" -eq 0
+# chalk-embed's probe is one embedding.
+: > "$FAKE_STATE/curl.log"
+check "chalk-embed whose /health is 404 is healthy when it embeds one word" decider_embed_healthy http://embed.test
+check "... asked at /v1/embeddings" grep -q '^http://embed.test/v1/embeddings$' "$FAKE_STATE/curl.log"
+# At the local decider, the probe waits its turn like any question.
+CHALK_DECIDER_URL="$DECIDER_LOCAL_URL"
+SYS=() SYS_PROBED=1 SYS[has_flock]=1
+export FAKE_DECIDER_HEALTH=404
+rm -f "$FAKE_STATE/overlaps"
+: > "$FAKE_STATE/decider.log"
+hold 2.5
+started="${| decider_now_ms; }"
+check "the local decider busy with a loop's question is not probed over it" fails decider_healthy "$DECIDER_LOCAL_URL"
+elapsed=$(( ${| decider_now_ms; } - started ))
+check "... the probe gave up after its turn did not come (${elapsed} ms)" \
+  test "$elapsed" -ge "$DECIDER_QUEUE_MS" -a "$elapsed" -le $((DECIDER_HEALTH_MS + 300))
+check "... having sent nothing" test "$(probes)" -eq 0
+wait "$holder"
+hold 0.3
+check "once its turn comes, the probe is answered" decider_healthy "$DECIDER_LOCAL_URL"
+wait "$holder"
+check "... one at a time" test ! -e "$FAKE_STATE/overlaps"
+unset FAKE_DECIDER_HEALTH
 
 # --- the device -------------------------------------------------------------
 
