@@ -355,16 +355,70 @@ SQL
 db_record_decisions() {
   db_sql -v run_id="${RUN_ID:-}" -v loop="$RUN_LOOP" -v rows="$1" <<'SQL'
 INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode,
-                       latency_ms, acted, lesson_id, model, error)
+                       latency_ms, acted, lesson_id, model, error, url)
 SELECT (SELECT id FROM runs
          WHERE run_id = :'run_id' AND loop = :'loop'::int
            AND kind IN ('continue', 'retry', 'fix-review')
          ORDER BY id DESC LIMIT 1),
        :'run_id', d.kind, d.question, d.answer, d.confidence, d.threshold, d.mode,
-       d.latency_ms, d.acted, d.lesson_id, d.model, d.error
+       d.latency_ms, d.acted, d.lesson_id, d.model, d.error, d.url
   FROM json_to_recordset(:'rows'::json) AS d(kind text, question text, answer text,
        confidence numeric, threshold numeric, mode text, latency_ms int, acted boolean,
-       lesson_id bigint, model text, error text);
+       lesson_id bigint, model text, error text, url text);
+SQL
+}
+
+# db_decider_calibration: prints, as one JSON array, what the calibration
+# gate (decider_calibration_judge) judges each decider by: one object per
+# provider, a url and a model (with its revision) that ever answered, most
+# recent first, with when it last did (last) and its levels. A level is a
+# confidence t at which the provider said "stuck" in shadow mode, and what
+# acting at t would have done: under CHALK_DECIDER=on a run stops at its
+# first "stuck" at or above the threshold, so each run counts once, by
+# that answer. It is judged once the run has shown whether it was right:
+#   correct  the run made no progress after it, and was detained
+#   judged   correct ones, and those after which a loop progressed (false
+#            stops)
+#   waiting  neither yet: no progress since, and no detention
+# The numbers at any threshold are those of the lowest level at or above it.
+# Answers taken under on are left out: one that acted stopped its run, so
+# nothing after it could show whether it was right.
+db_decider_calibration() {
+  db_sql <<'SQL'
+WITH a AS (
+  SELECT coalesce(d.url, '') AS url, coalesce(d.model, '') AS model, d.run_id, c.loop, d.confidence,
+         EXISTS (SELECT 1 FROM runs l
+                  WHERE l.run_id = d.run_id AND l.loop > c.loop AND l.progressed
+                    AND l.kind IN ('continue', 'retry', 'fix-review')) AS progressed_after,
+         EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = d.run_id) AS detained
+    FROM decisions d JOIN runs c ON c.id = d.call_id
+   WHERE d.kind = 'stuck' AND d.answer = 'yes' AND d.mode = 'shadow'
+     AND d.run_id IS NOT NULL AND d.confidence IS NOT NULL
+), providers AS (
+  SELECT coalesce(url, '') AS url, coalesce(model, '') AS model, max(created_at) AS last
+    FROM decisions WHERE answer IS NOT NULL GROUP BY 1, 2
+), levels AS (
+  SELECT DISTINCT url, model, confidence AS t FROM a
+), firsts AS (
+  SELECT DISTINCT ON (v.url, v.model, v.t, a.run_id) v.url, v.model, v.t, a.progressed_after, a.detained
+    FROM levels v JOIN a ON a.url = v.url AND a.model = v.model AND a.confidence >= v.t
+   ORDER BY v.url, v.model, v.t, a.run_id, a.loop
+), stats AS (
+  SELECT url, model, t,
+         count(*) FILTER (WHERE progressed_after OR detained) AS judged,
+         count(*) FILTER (WHERE detained AND NOT progressed_after) AS correct,
+         count(*) FILTER (WHERE NOT progressed_after AND NOT detained) AS waiting
+    FROM firsts GROUP BY url, model, t
+)
+SELECT coalesce(json_agg(json_build_object(
+         'url', p.url, 'model', p.model,
+         'last', to_char(p.last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+         'levels', (SELECT coalesce(json_agg(json_build_object(
+                             't', s.t::float8, 'judged', s.judged, 'correct', s.correct, 'waiting', s.waiting)
+                           ORDER BY s.t), '[]')
+                      FROM stats s WHERE s.url = p.url AND s.model = p.model))
+         ORDER BY p.last DESC, p.url, p.model), '[]')
+  FROM providers p;
 SQL
 }
 

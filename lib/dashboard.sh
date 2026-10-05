@@ -13,6 +13,8 @@ cmd_dashboard() {
     shift
   done
   case "$days" in ''|*[!0-9]*) die "--days takes a whole number" ;; esac
+  # For CHALK_DECIDER_THRESHOLD, which the calibration gate is judged at.
+  load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
   need docker jq
   db_up
@@ -23,6 +25,14 @@ cmd_dashboard() {
   local -a page
   data="$(db_dashboard "$days")" || die "could not read telemetry for the dashboard"
   jq -e . >/dev/null 2>&1 <<<"$data" || die "could not read telemetry for the dashboard"
+  # The calibration gate, judged as runs judge it (decider_calibration_judge),
+  # over every answer recorded, not only this window's.
+  data="$(jq -c --argjson gate "${| decider_calibration_judge "${| decider_calibration_data; }"; }" \
+             --arg threshold "$CHALK_DECIDER_THRESHOLD" --argjson runs "$DECIDER_CALIBRATION_RUNS" \
+             --argjson pct "$DECIDER_CALIBRATION_PERCENT" '
+    .decider.gate = $gate
+    | .decider.gate_rules = {threshold: ($threshold | tonumber), runs: $runs, percent: $pct}' <<<"$data")" ||
+    die "could not read telemetry for the dashboard"
   # "</" is escaped so that no stored text can close the page's script tag.
   data="${data//<\//<\\/}"
 

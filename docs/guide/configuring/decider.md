@@ -23,14 +23,63 @@ the local reference service below or any hosted endpoint that speaks it.
 | :-- | :-- |
 | `off` (default) | Nothing is asked. |
 | `shadow` | Every question is asked and its answer recorded, and nothing changes: not the run, not the prompt. The [report card](../operating/dashboard.md#the-decider) shows what the answers would have done. |
-| `on` | Answers at `CHALK_DECIDER_THRESHOLD` (0.9) or above act: a stuck loop is detained at once, and the lessons the decider picks are the ones the loop gets. |
+| `on` | Answers at `CHALK_DECIDER_THRESHOLD` (0.9) or above act: a stuck loop is detained at once, and the lessons the decider picks are the ones the loop gets. Only once the decider is [calibrated](#the-calibration-gate); until then, `on` records as `shadow`. |
 
 A decider can stop a run early; it can never give a run more loops.
 `CHALK_FP_RULES=off` turns the stuck question off too, since it depends on
 verdicts; lesson recall still uses the decider.
 
-Start in `shadow`. Turn it `on` once the report card shows that its
-confident answers are right about nine times in ten.
+Start in `shadow`. `on` acts only once the decider has shown, in shadow
+mode, that its confident answers are right nine times in ten.
+
+## The calibration gate
+
+"Act at 0.9 or above" is safe only if answers at 0.9 are right about nine
+times in ten. That has to be shown for each decider, not assumed: every
+decider starts held to shadow, and `CHALK_DECIDER=on` acts only once it is
+**calibrated**.
+
+- **A decider** here is a URL and the model that answered there, with its
+  revision. A new revision of the local model, after `chalk decider up`,
+  or a hosted provider's new model, starts again.
+- **What it is judged by.** Under `on`, a run stops at its first
+  confident "stuck". So each shadow run counts once, by its first "stuck"
+  at `CHALK_DECIDER_THRESHOLD` or above: **right** when the run made no
+  progress after it and was detained, a **false stop** when a later loop
+  made progress. A run that has done neither yet is not settled, and does
+  not count.
+- **The bar.** At least **20** such runs, and at least **90%** of them
+  right. 90% is what a 0.9 threshold promises. 20 runs is the sample the
+  [verdict ledger](../operating/dashboard.md#verdicts) asks before
+  `CHALK_FP_RULES=on`, so both ways of stopping a run early need the same
+  evidence; it allows two false stops, and a false stop costs a detention
+  you resolve, never a wrong change. Runs, not answers, are counted, so a
+  run asked loop after loop does not fill the sample alone. The bar is
+  fixed, not a setting: a repository's config cannot lower it.
+- **What it holds.** Until the decider is calibrated, `on` behaves as
+  `shadow` for both questions, the stuck question and lesson recall, and
+  its answers are recorded as shadow answers, which count towards the
+  gate. The run says why once, with the numbers:
+
+  ```text
+  warning: CHALK_DECIDER=on records in shadow mode only: strands-decider-2B-hobson-v19@1a2b3c4
+  at http://127.0.0.1:8471 is not calibrated yet: 0 shadow run(s) judged at
+  CHALK_DECIDER_THRESHOLD=0.9; it needs 90% right over at least 20; it would be at
+  CHALK_DECIDER_THRESHOLD=0.7 (see: chalk doctor)
+  ```
+
+  `chalk doctor` and `chalk decider status` show the same numbers, and the
+  report card's [May it act yet?](../operating/dashboard.md#the-decider)
+  shows them for every decider. Without the database, the gate cannot be
+  read, and `on` records as `shadow`.
+- **The threshold.** The gate is judged at your `CHALK_DECIDER_THRESHOLD`,
+  over every answer recorded, so changing the threshold changes which
+  answers count. The **suggested threshold** is the lowest at which the
+  decider would be calibrated. A decider whose confidence runs low can be
+  right far more often than its numbers say: on an M3 Pro the local
+  decider's answers ranged from 0.55 to 0.83, so at 0.9 none of them
+  count and it can never act; at a lower suggested threshold it can. Lower
+  `CHALK_DECIDER_THRESHOLD` to the suggestion only once it appears.
 
 ## The local reference service
 
@@ -161,7 +210,8 @@ Chalk does not start or stop a hosted decider; `chalk doctor` checks its
 health, through `/health` or, for a decider without it, one question (see
 [Health](../../decider-protocol.md#health)). The endpoint must speak
 [the decider protocol](../../decider-protocol.md). Answers from a hosted
-model are only as good as its calibration, so start it in `shadow`.
+model are only as good as its calibration, so it too has to pass
+[the calibration gate](#the-calibration-gate) before `on` acts.
 
 ## Time
 

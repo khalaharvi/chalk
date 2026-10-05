@@ -118,10 +118,13 @@ ALTER TABLE lessons ADD COLUMN IF NOT EXISTS scope TEXT;
 --               server | invalid | version)
 --   confidence  0 to 1; threshold is CHALK_DECIDER_THRESHOLD when asked
 --   mode        shadow | on, as the decision was taken: on is held to
---               shadow on a machine too slow for it
+--               shadow on a machine too slow for it, and for a decider
+--               not yet calibrated (decider_hold)
 --   acted       the answer changed the run: it detained it (stuck) or put
 --               the lesson in the prompt (rerank)
 --   model       the model that answered, with its revision when known
+--   url         CHALK_DECIDER_URL, without credentials. With model, it
+--               names the provider the calibration gate judges.
 CREATE TABLE IF NOT EXISTS decisions (
     id          BIGSERIAL PRIMARY KEY,
     call_id     BIGINT REFERENCES runs (id) ON DELETE CASCADE,
@@ -141,6 +144,11 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS decisions_run_idx ON decisions (run_id);
 CREATE INDEX IF NOT EXISTS decisions_call_idx ON decisions (call_id);
+-- Answers recorded before url was are from the local service when their
+-- model carries a seven-character revision, which only it is given.
+ALTER TABLE decisions ADD COLUMN IF NOT EXISTS url TEXT;
+UPDATE decisions SET url = 'http://127.0.0.1:8471'
+ WHERE url IS NULL AND model ~ '@[0-9a-f]{7}$';
 
 -- Semantic recall: each resolved lesson's embedding, from chalk-embed
 -- (BAAI/bge-small-en-v1.5, 384 dimensions), with an HNSW index for cosine

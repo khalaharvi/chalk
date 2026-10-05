@@ -174,6 +174,8 @@ echo "$dead" > "$lock/pid"
 check "clear: a dead lock is left to the waiter already clearing it" fails chalk_lock_clear "$lock"
 check "clear: ... and is kept" test "$(<"$lock/pid")" = "$dead"
 touch -t 202001010000 "$lock.clear"
-check "clear: an abandoned clearing lock does not block forever" chalk_lock t 1
+# A generous wait: the check is that it ends at all, and it returns as soon
+# as the lock is taken, so a busy machine does not make it fail.
+check "clear: an abandoned clearing lock does not block forever" chalk_lock t 10
 check "clear: ... the clearing lock is gone" test ! -e "$lock.clear"
 chalk_unlock t

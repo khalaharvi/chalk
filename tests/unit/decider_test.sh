@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib/decider.sh: the protocol client and its shared per-loop budget, the
-# mode and the slow-machine cap, the rerank's size, the auto-start headroom
+# mode, the calibration gate and the slow-machine cap, the rerank's size, the auto-start headroom
 # gate, starting the local service exactly once, idle shutdown and restart,
 # concurrent loops taking turns at the local decider, the device it serves
 # on, the benchmark, and the chalk-embed contract.
@@ -192,10 +192,119 @@ CHALK_DECIDER_THRESHOLD=0.9
 
 dir="${| decider_dir; }"
 mkdir -p "$dir"
-installed() { printf 'decider_model=%s@0123456789abcdef\nbench_ms=%s\n' "$DECIDER_MODEL" "$1" > "$dir/installed"; }
-CHALK_DECIDER=on CHALK_DECIDER_URL="$DECIDER_LOCAL_URL"
+installed() { printf 'decider_model=%s@%s\nbench_ms=%s\n' "$DECIDER_MODEL" "${2:-0123456789abcdef}" "$1" > "$dir/installed"; }
+
+# --- the calibration gate ---------------------------------------------------
+
+# A stand-in for the database: db_decider_calibration prints $calibration,
+# one provider per line of "URL MODEL T:JUDGED:CORRECT:WAITING...", most
+# recent first; with calibration unset, the database does not answer.
+db_decider_calibration() {
+  [[ -v calibration ]] || return 1
+  local url model levels_line
+  local -a levels
+  while read -r url model levels_line; do
+    [[ -n $url ]] || continue
+    read -ra levels <<<"$levels_line"
+    jq -cn --arg url "$url" --arg model "$model" '
+      {url: $url, model: $model, last: "2026-10-01T00:00:00Z",
+       levels: [$ARGS.positional[] | split(":") | map(tonumber)
+                | {t: .[0], judged: .[1], correct: .[2], waiting: .[3]}]}' --args "${levels[@]}"
+  done <<<"$calibration" | jq -cs .
+}
+# gate [LINES]: the database holds LINES (none: it does not answer), read
+# afresh, with no answer yet in this process and no warning given.
+gate() {
+  if (( $# )); then calibration="$1"; else unset calibration; fi
+  DECIDER_CALIBRATION_READ=0 DECIDER_ANSWERED_BY="" DECIDER_ERROR="" DECIDER_WARNED=()
+}
+# judged FIELD...: the current provider's judgement, its fields joined by spaces.
+judged() {
+  local -A cal
+  local field out=()
+  decider_calibration cal
+  for field in "$@"; do out+=("${cal[$field]}"); done
+  printf '%s\n' "${out[*]}"
+}
+# note: the current provider's judgement in words.
+note() {
+  local -A cal
+  decider_calibration cal
+  printf '%s\n' "${| decider_calibration_note cal; }"
+}
+hosted="http://decider.test"
+CHALK_DECIDER=on CHALK_DECIDER_URL="$hosted"
+
+gate
+check "with no database, the gate is unknown" test "$(judged status)" = unknown
+check "... and on is held to shadow" test "${| decider_mode 2>/dev/null; }" = shadow
+gate
+check "... saying why, once per run" \
+  test "$(decider_mode 2>&1; decider_mode 2>&1)" = "warning: CHALK_DECIDER=on records in shadow mode only: the decider at $hosted: its calibration could not be read from the telemetry database (see: chalk doctor)"
+gate ""
+check "a decider never recorded is not calibrated, with nothing judged" test "$(judged status judged)" = "uncalibrated 0"
+gate "$hosted fake-decider 0.95:19:19:3"
+check "19 runs right of 19 is too few" test "$(judged status judged correct waiting)" = "uncalibrated 19 19 3"
+check "... and on is held to shadow" test "${| decider_mode 2>/dev/null; }" = shadow
+gate "$hosted fake-decider 0.95:19:19:3"
+check "... saying how far it is, once" \
+  test "$(decider_mode 2>&1; decider_mode 2>&1)" = "warning: CHALK_DECIDER=on records in shadow mode only: fake-decider at $hosted is not calibrated yet: 19 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.9, 19 right (100%), 3 not settled yet; it needs 90% right over at least 20 (see: chalk doctor)"
+gate "$hosted fake-decider 0.95:20:17:0"
+check "17 right of 20 (85%) is not right often enough" test "$(judged status)" = uncalibrated
+gate "$hosted fake-decider 0.95:20:18:0"
+check "18 right of 20 (90%) is calibrated" test "$(judged status)" = calibrated
+check "... and on acts, saying nothing" test "$(decider_mode 2>&1):${| decider_mode; }" = ":on"
+check "... in words" test "$(note)" = \
+  "fake-decider at $hosted is calibrated: 20 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.9, 18 right (90%)"
+
+# The levels are the confidences it said "stuck" at; a threshold takes the
+# lowest one at or above it. Here it was right at 0.75 and above, wrong below.
+gate "$hosted fake-decider 0.6:26:20:0 0.75:20:20:0 0.8:12:12:0"
+check "at 0.9 nothing it said counts, and the lowest threshold that would pass is suggested" \
+  test "$(judged status judged suggested)" = "uncalibrated 0 0.75"
+check "... in words" test "${| decider_hold; }" = \
+  "CHALK_DECIDER=on records in shadow mode only: fake-decider at $hosted is not calibrated yet: 0 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.9; it needs 90% right over at least 20; it would be at CHALK_DECIDER_THRESHOLD=0.75 (see: chalk doctor)"
+CHALK_DECIDER_THRESHOLD=0.7
+gate "$hosted fake-decider 0.6:26:20:0 0.75:20:20:0 0.8:12:12:0"
+check "at 0.7 the answers at 0.75 and above count, and it is calibrated" test "$(judged status judged)" = "calibrated 20"
+CHALK_DECIDER_THRESHOLD=0.6
+gate "$hosted fake-decider 0.6:26:20:0 0.75:20:20:0 0.8:12:12:0"
+check "at 0.6 the false stops below 0.75 count too (77%), and it is not" test "$(judged status judged correct)" = "uncalibrated 26 20"
+CHALK_DECIDER_THRESHOLD=0.9
+
+# A provider is its URL and its model's revision.
+gate "http://other.test fake-decider 0.95:30:30:0
+$hosted other-model 0.95:30:30:0
+$hosted fake-decider 0.95:3:3:0"
+check "before any answer, a hosted decider is judged by the latest model recorded at its URL" \
+  test "$(judged status model)" = "calibrated other-model"
+DECIDER_ANSWERED_BY="fake-decider"
+check "... once one answers, by that model: another URL's or model's calibration does not count" \
+  test "$(judged status model judged)" = "uncalibrated fake-decider 3"
+gate "http://other.test fake-decider 0.95:30:30:0
+$hosted fake-decider 0.95:3:3:0"
+CHALK_DECIDER_URL="http://user:pw@decider.test/"
+check "the URL is judged without its credentials or a trailing slash" test "$(judged url judged)" = "$hosted 3"
+CHALK_DECIDER_URL="$hosted"
+
+CHALK_DECIDER_URL="$DECIDER_LOCAL_URL"
 installed 153
-check "on stays on where the local decider is fast enough" test "${| decider_mode; }" = on
+gate "$DECIDER_LOCAL_URL fake-decider@0123456 0.95:25:25:0"
+check "before any answer, the local decider is judged by the revision installed" \
+  test "$(judged status model)" = "calibrated fake-decider@0123456"
+check "on stays on where the local decider is fast enough and calibrated" test "${| decider_mode; }" = on
+installed 153 abcdef0123456789
+gate "$DECIDER_LOCAL_URL fake-decider@0123456 0.95:25:25:0"
+check "a new revision starts again, in shadow" \
+  test "$(judged status model judged)" = "uncalibrated ${DECIDER_MODEL#*/}@abcdef0 0"
+DECIDER_ANSWERED_BY="fake-decider@abcdef0"
+check "... and so do its answers" test "$(judged status model)" = "uncalibrated fake-decider@abcdef0"
+gate "$DECIDER_LOCAL_URL fake-decider@abcdef0 0.9:2:2:0
+$DECIDER_LOCAL_URL fake-decider@0123456 0.95:25:25:0"
+check "... however the old one did" test "$(judged status judged)" = "uncalibrated 2"
+installed 153
+gate "$DECIDER_LOCAL_URL fake-decider@0123456 0.95:25:25:0
+$hosted fake-decider 0.95:25:25:0 0.97:25:25:0"
 installed 1400
 check "on is held to shadow where the local decider took over 1 s" test "${| decider_mode; }" = shadow 2>/dev/null
 check "... and that is said once" test "$(decider_mode 2>&1; decider_mode 2>&1)" = ""
@@ -235,6 +344,29 @@ check "every decision is kept for the loop's call, acted or not" \
     '[["stuck","yes",0.95,true,"on",null],["stuck","yes",0.95,false,"on",null],["stuck","yes",0.95,false,"shadow",null],["stuck",null,null,false,"on","unreachable"]]'
 check "... with the threshold and how long it took" \
   jq -se 'all(.[]; .threshold == 0.9 or .threshold == 0.96) and all(.[]; .latency_ms >= 0)' "$RUN_IO/decisions.jsonl"
+check "... and the URL asked, which with the model names the provider" \
+  jq -se --arg url "$hosted" 'all(.[]; .url == $url)' "$RUN_IO/decisions.jsonl"
+rm -f "$RUN_IO/decisions.jsonl"
+gate "$hosted fake-decider 0.95:5:5:0"
+export FAKE_DECIDER_ANSWERS="stuck=0.97"
+decider_budget_reset
+decider_stuck "state" 2>"$tmp/held.err"
+check "on, not calibrated: a confident yes does not act" test -z "$REPLY"
+check "... it is recorded as a shadow answer, which the gate counts" \
+  test "$(jq -c '[.answer, .mode, .acted, .model]' "$RUN_IO/decisions.jsonl")" = '["yes","shadow",false,"fake-decider"]'
+check "... and the run is told why, with the numbers" \
+  grep -q '^warning: CHALK_DECIDER=on records in shadow mode only: fake-decider at http://decider.test is not calibrated yet: 5 shadow run(s) judged' "$tmp/held.err"
+gate "$hosted fake-decider 0.95:5:5:0"
+decider_budget_reset
+check "... but not after a call that got no answer: a decider that is down stays quiet" \
+  test -z "$(FAKE_DECIDER_DOWN=1 decider_stuck "state" 2>&1)"
+gate "$hosted fake-decider 0.95:5:5:0"
+CHALK_DECIDER=shadow
+decider_budget_reset
+check "shadow says nothing about the gate" test -z "$(decider_stuck "state" 2>&1)"
+CHALK_DECIDER=on
+unset FAKE_DECIDER_ANSWERS
+gate "$hosted fake-decider 0.95:25:25:0"
 long="$(printf 'x%.0s' {1..9000})"
 decider_budget_reset
 decider_stuck "$long" >/dev/null
