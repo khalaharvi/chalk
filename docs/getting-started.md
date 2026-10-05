@@ -6,7 +6,8 @@ This page installs Chalk, sets up one repository and runs a first ticket.
 
 ```sh
 brew install khalaharvi/chalk/chalk
-export CLAUDE_CODE_OAUTH_TOKEN=...   # or ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL for a gateway
+claude setup-token                   # once, with a Claude plan: prints a token
+export CLAUDE_CODE_OAUTH_TOKEN=...   # that token; see "Sign in to Claude" for an API key or a gateway
 chalk doctor
 ```
 
@@ -20,6 +21,40 @@ You also need:
   `CHALK_FORGE=github` for GitHub Enterprise.
 - **bash 5.3 or newer** on your machine. Homebrew installs it with Chalk.
 - `git`, `jq` and `openssl`.
+
+### Sign in to Claude
+
+Every agent call goes to Claude with a credential you export. Chalk passes
+it into each sandbox by name, so the value never appears in `ps` or in the
+repository. Use one of these:
+
+| You have | Export | You pay |
+| :-- | :-- | :-- |
+| A Claude Pro, Max, Team or Enterprise plan: run `claude setup-token` once | `CLAUDE_CODE_OAUTH_TOKEN` | Your plan; runs count against its usage limits |
+| An Anthropic API account: create a key in the Claude Console | `ANTHROPIC_API_KEY` | Per call, at API prices |
+| A gateway in front of Claude: ask its administrator | `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` | Whatever the gateway charges |
+
+**With a subscription:**
+
+- `claude setup-token` needs [Claude Code](https://code.claude.com/docs)
+  installed on your machine. It opens a browser to sign in and prints a
+  token that lasts a year. It does not save the token, so put the
+  `export` line in your shell profile or a secrets manager.
+- Runs count against your plan's usage limits: a rolling session limit and
+  a weekly one. `chalk fleet` runs several agents at once
+  (`CHALK_MAX_PARALLEL`), so it reaches them sooner than one ticket would.
+  Check what is left at [claude.ai/settings/usage](https://claude.ai/settings/usage).
+- The costs Chalk shows, in the run log and on the report card, are what
+  Claude Code reports for each call. On a subscription they measure use;
+  they are not a bill.
+- Chalk has not yet been tested against a run that reaches a plan limit.
+  If loops start failing with agent errors partway through, check your
+  usage first.
+
+**If more than one is set,** Claude Code uses `ANTHROPIC_API_KEY` before
+`CLAUDE_CODE_OAUTH_TOKEN`. A key left in your environment from other work
+bills the API account even when you meant to use your plan; run
+`unset ANTHROPIC_API_KEY` to use the subscription.
 
 ### Without Homebrew
 

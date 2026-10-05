@@ -41,7 +41,7 @@ Other environment variables Chalk reads:
 
 | Variable | Meaning |
 | :-- | :-- |
-| `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN` | Agent credentials; one is required. Passed into each sandbox by name, so the value never appears in `ps`. |
+| `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN` | Agent credentials; one is required. `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token` and uses your Claude subscription; `ANTHROPIC_API_KEY` wins when both are set. Passed into each sandbox by name, so the value never appears in `ps`. See [Sign in to Claude](../../getting-started.md#sign-in-to-claude). |
 | `ANTHROPIC_BASE_URL` | Passed into the sandbox when set, for a gateway (usually with `ANTHROPIC_AUTH_TOKEN`). |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Passed into the sandbox when set, for a collector that needs credentials. |
 | `CHALK_BASH` | The bash 5.3 or newer to re-run Chalk under, when the one that started it is older. |
