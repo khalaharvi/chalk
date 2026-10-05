@@ -57,7 +57,6 @@ cmd_office_hours() {
   lesson="$(office_hours_distill "$note" || true)"
   db_resolve_lesson "$RUN_TICKET" "$note" "$(git config user.email || whoami)" "$lesson"
   if [ -n "$lesson" ]; then info "lesson: $lesson"; fi
-  { memory_up && memory_sync; } || warn "lesson saved, but not yet stored in memory; retry with: chalk memory sync"
 
   RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"

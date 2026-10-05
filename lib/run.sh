@@ -37,12 +37,14 @@ run_context() {
 run_log() { info "[$RUN_TICKET] $*"; }
 
 # A short hash of every prompt in effect, so the dashboard can compare the
-# results of one prompt set against another.
+# results of one prompt set against another. The form of the retry
+# feedback (CHALK_FP_FEEDBACK) is part of the prompt, so it is hashed too.
 run_prompts_version() {
   local name
   {
     for name in "${CHALK_PROMPTS[@]}"; do cat "${| prompt_file "$RUN_WT" "$name"; }"; done
     cat "$RUN_WT/$CHALK_TEXTBOOK" 2>/dev/null || true
+    printf 'fp-feedback=%s\n' "$CHALK_FP_FEEDBACK"
   } | git hash-object --stdin | cut -c1-8
 }
 
@@ -74,35 +76,29 @@ run_claim() {
   mkdir -p "$RUN_IO"
 }
 
-# run_start_services [--memory]: starts the telemetry database, the sandbox
-# image and, with --memory, lesson memory, all at once. Memory is best
-# effort; anything else failing stops the run.
+# run_start_services: starts the telemetry database and the sandbox image
+# side by side. Either failing stops the run.
 run_start_services() {
   local -A started
   local name failed=""
   jobs_init "$RUN_IO/startup"
   jobs_spawn database db_up
   jobs_spawn image sandbox_ensure_image
-  if [[ ${1:-} == --memory ]] && memory_enabled; then jobs_spawn memory memory_up; fi
   jobs_wait started && return 0
 
-  if (( ${started[memory]:-0} )); then
-    warn "continuing without lesson memory"
-    unset 'started[memory]'
-  fi
   for name in "${!started[@]}"; do
     (( started[$name] == 0 )) || failed+=" $name"
   done
   [[ -z $failed ]] || die "could not start:$failed (see $RUN_IO/startup)"
 }
 
-# run_open_sandbox [--memory]: starts the services this run needs, then its
-# sandbox with the branch cloned inside it.
+# run_open_sandbox: starts the services this run needs, then its sandbox
+# with the branch cloned inside it.
 run_open_sandbox() {
   echo $$ > "$RUN_DIR/pid"
   trap run_teardown EXIT
 
-  run_start_services "$@"
+  run_start_services
   agent_write_system "$RUN_IO" "$RUN_WT"
 
   RUN_SANDBOX="${| sandbox_name "$RUN_TICKET"; }"
@@ -112,15 +108,24 @@ run_open_sandbox() {
   sandbox_clone "$RUN_SANDBOX" "$RUN_BRANCH"
 }
 
-# run_build_prompt MODE FEEDBACK FINDINGS: context first, in tags, so that
-# test output and lessons are read as data; the instructions come last.
+# run_build_prompt MODE FEEDBACK FINDINGS [RECALL]: context first, in tags,
+# so that test output and lessons are read as data; the instructions come
+# last. RECALL names an associative array filled by run_recall; while it is
+# empty, as before the first failure, lessons are recalled for the spec.
 run_build_prompt() {
   local mode="$1" feedback="$2" findings="$3" lessons
+  local -A __no_recall=()
+  local -n __recall="${4:-__no_recall}"
   printf '<spec_file>specs/%s.md</spec_file>\n' "$RUN_TICKET"
   printf '<notes_file>specs/%s.notes.md</notes_file>\n' "$RUN_TICKET"
   printf '<rubric_command>%s</rubric_command>\n' "$CHALK_TEST_CMD"
 
-  lessons="$(memory_recall "${feedback:-$(<"$RUN_SPEC")}")"
+  if [[ -n ${__recall[mode]-} ]]; then
+    lessons="$(memory_recall "${__recall[mode]}" "${__recall[query]-}" \
+      "${__recall[fingerprint]-}" "${__recall[first_error]-}")"
+  else
+    lessons="$(memory_recall spec "$(<"$RUN_SPEC")")"
+  fi
   RUN_LESSONS="$(printf '%s\n' "$lessons" | grep -c '^- ' || true)"
   if [ -n "$lessons" ]; then printf '<lessons>\n%s\n</lessons>\n' "$lessons"; fi
   if [ -n "$findings" ]; then printf '<review_findings>\n%s\n</review_findings>\n' "$findings"; fi
@@ -171,6 +176,43 @@ run_verdict() {
   local key
   RUN_FP_BASE=()
   for key in "${!__verdict_fp[@]}"; do RUN_FP_BASE[$key]="${__verdict_fp[$key]}"; done
+}
+
+# run_fp_feedback REASON FP -> REPLY: the retry feedback for a failed rubric
+# with CHALK_FP_FEEDBACK=true. FP names an array filled by fp_compute. In
+# place of the last 60 lines of output: the failing tests (T), the first
+# error (E), both normalized, and only the last 20 lines.
+run_fp_feedback() {
+  local -n __feedback_fp=$2
+  local tests="${__feedback_fp[tests]-UNKNOWN}"
+  if [[ $tests == UNKNOWN ]]; then
+    tests="unknown (the output names none)"
+  else
+    tests="$(printf '%s\n' "$tests" | sed 's/^/- /')"
+  fi
+  REPLY="$1
+failing tests:
+$tests
+first error: ${__feedback_fp[first_error]:-none found}
+last 20 lines of output:
+$(tail -n 20 "$RUN_IO/rubric.log" 2>/dev/null || true)"
+}
+
+# run_recall VAR TEXT FP: fills VAR with what the next loop recalls lessons
+# by (see memory_recall). After a failed rubric whose fingerprint (FP) says
+# something: the fingerprint and E, with E and T as the query. Otherwise
+# the failure as TEXT, which is how recall worked before fingerprints.
+run_recall() {
+  local -n __recall_var=$1 __recall_fp=$3
+  local tests="${__recall_fp[tests]-UNKNOWN}" error="${__recall_fp[first_error]-}"
+  [[ $tests != UNKNOWN ]] || tests=""
+  if [[ -n ${__recall_fp[fingerprint]-} || -n $error ]]; then
+    __recall_var=(["mode"]="failure" ["fingerprint"]="${__recall_fp[fingerprint]-}"
+                  ["first_error"]="$error" ["query"]="$error${tests:+
+$tests}")
+  else
+    __recall_var=(["mode"]="text" ["query"]="$2")
+  fi
 }
 
 # Brings commits made in the sandbox onto the host branch (fast-forward only).
@@ -327,7 +369,7 @@ cmd_run() {
   fi
 
   RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
-  run_open_sandbox --memory
+  run_open_sandbox
   if [ -n "$CHALK_SETUP_CMD" ]; then
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
       die "setup command failed in sandbox; see $RUN_IO/setup.log"
@@ -340,7 +382,7 @@ cmd_run() {
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended
   local open remaining result agent_status rubric_exit progressed
   local -a lesson
-  local -A usage fp
+  local -A usage fp recall=()
   result="$RUN_IO/loop.json"
   while :; do
     open="$(spec_open_count "$RUN_SPEC")"
@@ -370,7 +412,7 @@ cmd_run() {
       return 1
     fi
 
-    run_build_prompt "$mode" "$feedback" "$findings" > "$RUN_IO/prompt.md"
+    run_build_prompt "$mode" "$feedback" "$findings" recall > "$RUN_IO/prompt.md"
     agent_status="ok"
     run_call loop "$CHALK_MODEL" "${CHALK_SCHEMA[loop]}" write < "$RUN_IO/prompt.md" || agent_status="error"
     if [ -n "$(agent_error "$result")" ]; then agent_status="$(agent_error "$result")"; fi
@@ -423,6 +465,7 @@ cmd_run() {
       failures=0
       feedback=""
       findings=""
+      recall=()
       continue
     fi
 
@@ -443,6 +486,11 @@ cmd_run() {
     fi
     feedback="$reason
 $(tail -n 60 "$RUN_IO/rubric.log" 2>/dev/null || true)"
+    # Recall goes by the failure itself, whatever form the feedback takes.
+    run_recall recall "$feedback" fp
+    if [[ $CHALK_FP_FEEDBACK == true && -v fp[tests] ]]; then
+      feedback="${| run_fp_feedback "$reason" fp; }"
+    fi
   done
 }
 

@@ -125,7 +125,7 @@ docs/
       configuration.md        Every .chalk/config key, from the template
       permissions.md          Auto mode, what the sandbox allows, compliance note
       prompts.md              Listing and ejecting prompts
-      lesson-memory.md        Hindsight
+      lesson-memory.md        The recall ladder (Hindsight was removed)
     operating/
       merge-request-gates.md  The GitLab CI gates
       report-card.md          Dashboard, OpenTelemetry
@@ -166,7 +166,7 @@ Three Mermaid diagrams, unstyled, each followed by a numbered prose version:
    human fix, office hours, distilled lesson, tutoring branch, resume.
 3. **Architecture** (`develop/architecture.md`): host with `chalk` and the
    worktree; sandbox container with the RAM-disk clone, `claude` and the
-   rubric; `chalk-db` Postgres; optional Hindsight; GitLab reached only from
+   rubric; `chalk-db` Postgres, which also holds lessons; GitLab reached only from
    the host.
 
 ## Build and deploy

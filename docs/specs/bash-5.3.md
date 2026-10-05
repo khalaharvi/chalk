@@ -179,7 +179,7 @@ document contributors use. In summary:
 | `declare -A` | 4.0 | `CHALK_CONFIG_DEFAULTS`, `CHALK_SCHEMA`, usage fields, job table | `CHALK_CONFIG_KEYS` string + `case` + 23 `: ${X:=…}` lines; four schema globals; positional `read a b c …` |
 | Indexed arrays for lists | — | `CHALK_PROMPTS`, `CHALK_AUTH_VARS`, cleanup ref patterns, container ids | Space-separated strings and two `shellcheck disable=SC2086` |
 | `local -n` | 4.3 | Fill functions (C1) | Functions that write to fixed globals (`SANDBOX_OTEL_ARGS`) |
-| `mapfile -t` | 4.0 | `memory_sync`, `cmd_fleet`, `cmd_cleanup`, `cmd_status` | `while read … <<ROWS $(…)`, `wc -l \| tr -d ' '` |
+| `mapfile -t` | 4.0 | `fp_compute`, `cmd_fleet`, `cmd_cleanup`, `cmd_status` | `while read … <<ROWS $(…)`, `wc -l \| tr -d ' '` |
 | `[[ -v name ]]` | 4.2 | `load_config` | `${!key+set}` |
 | `${v@U}` | 5.1 | `sandbox_otel_args` | `tr` |
 | `${v@Q}` | 4.4 | Detention instructions in `run_detain` | Unquoted values in copy-paste commands |
