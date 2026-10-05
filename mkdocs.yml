@@ -1,0 +1,130 @@
+# The Chalk documentation site, built with MkDocs Material and published to
+# GitHub Pages by .github/workflows/docs.yml. Build it locally with:
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r docs/requirements.txt
+#   .venv/bin/mkdocs serve        # or: make docs
+#
+# Design: docs/superpowers/specs/2026-10-03-docs-and-visuals-design.md
+site_name: Chalk
+site_description: >-
+  Runs Claude Code agents in disposable sandboxes, one checkpoint at a time,
+  with a spend cap per loop, a test gate and a human escalation path.
+site_url: https://khalaharvi.github.io/chalk/
+repo_url: https://github.com/khalaharvi/chalk
+repo_name: khalaharvi/chalk
+edit_uri: edit/main/docs/
+copyright: Apache-2.0
+
+strict: true
+
+# Working notes and specs stay in the repository but off the site; pages
+# link to them by full GitHub URL. includes/ holds snippets, not pages.
+exclude_docs: |
+  superpowers/
+  designs/
+  specs/
+  includes/
+  requirements.txt
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+# Generates the configuration and command references from
+# share/templates/config, lib/config.sh and bin/chalk at build time.
+hooks:
+  - scripts/mkdocs_hooks.py
+
+theme:
+  name: material
+  # Fonts are self-hosted in docs/assets/fonts (see stylesheets/extra.css).
+  font: false
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - content.code.copy
+    - search.highlight
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.snippets:
+      check_paths: true
+      # Every page gets the glossary as hover definitions.
+      auto_append:
+        - docs/includes/abbreviations.md
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guide:
+      - Running:
+          - The workflow: guide/running/workflow.md
+          - Detention and office hours: guide/running/failures.md
+          - Fleet runs: guide/running/fleet.md
+      - Configuring:
+          - Configuration: guide/configuring/configuration.md
+          - Permissions: guide/configuring/permissions.md
+          - Prompts: guide/configuring/prompts.md
+          - Lesson recall: guide/configuring/lesson-memory.md
+      - Operating:
+          - Verdicts and the report card: guide/operating/dashboard.md
+          - Pull and merge request gates: guide/operating/merge-request-gates.md
+          - Troubleshooting: guide/operating/troubleshooting.md
+  - Reference:
+      - Commands: reference/commands.md
+      - Glossary: reference/glossary.md
+      - Roadmap: roadmap.md
+  - Develop:
+      - Architecture: develop/architecture.md
+      - The sandbox: develop/sandbox.md
+      - The database: develop/database.md
+      - Testing and style:
+          - Testing: develop/testing.md
+          - Bash style: bash-style.md
+      - Releasing: develop/releasing.md

@@ -1,0 +1,138 @@
+/* The report card palette (share/dashboard.html), shared by the site, the
+   README banner and the demo recording. Contrast ratios are against the
+   background of the same scheme; see the design in
+   docs/superpowers/specs/2026-10-03-docs-and-visuals-design.md. */
+
+@font-face {
+  font-family: "Courier Prime";
+  src: url("../assets/fonts/CourierPrime-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --chalk-display: "American Typewriter", "Courier Prime", "Courier New", serif;
+  --md-text-font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --md-code-font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+/* Light: background #eef2ee, text #1c342d (11.8:1), muted #5c6f66 (4.7:1),
+   accent #735b00 (5.8:1), waste #b3402e (5.0:1). */
+[data-md-color-scheme="default"] {
+  --chalk-bg: #eef2ee;
+  --chalk-text: #1c342d;
+  --chalk-muted: #5c6f66;
+  --chalk-accent: #735b00;
+  --chalk-waste: #b3402e;
+  --chalk-rule: rgba(28, 52, 45, 0.2);
+
+  --md-primary-fg-color: #1c342d;
+  --md-primary-fg-color--light: #2c4a41;
+  --md-primary-fg-color--dark: #142822;
+  --md-primary-bg-color: #f1eee3;
+  --md-primary-bg-color--light: rgba(241, 238, 227, 0.7);
+  --md-accent-fg-color: #735b00;
+  --md-accent-fg-color--transparent: rgba(115, 91, 0, 0.1);
+
+  --md-default-bg-color: var(--chalk-bg);
+  --md-default-fg-color: rgba(28, 52, 45, 0.87);
+  --md-default-fg-color--light: #5c6f66;
+  --md-default-fg-color--lighter: rgba(28, 52, 45, 0.32);
+  --md-default-fg-color--lightest: rgba(28, 52, 45, 0.12);
+  --md-typeset-color: var(--chalk-text);
+  --md-typeset-a-color: var(--chalk-accent);
+  --md-code-bg-color: #e2e8e2;
+  --md-code-fg-color: #1c342d;
+  --md-footer-bg-color: #1c342d;
+  --md-footer-bg-color--dark: #142822;
+}
+
+/* Dark: background #1c342d, text #f1eee3 (11.5:1), muted #a9b9ae (6.5:1),
+   accent #f0d878 (9.4:1), waste #eba39b (6.5:1). */
+[data-md-color-scheme="slate"] {
+  --chalk-bg: #1c342d;
+  --chalk-text: #f1eee3;
+  --chalk-muted: #a9b9ae;
+  --chalk-accent: #f0d878;
+  --chalk-waste: #eba39b;
+  --chalk-rule: rgba(241, 238, 227, 0.22);
+
+  --md-hue: 160;
+  --md-primary-fg-color: #142822;
+  --md-primary-fg-color--light: #1c342d;
+  --md-primary-fg-color--dark: #0f1f1a;
+  --md-primary-bg-color: #f1eee3;
+  --md-primary-bg-color--light: rgba(241, 238, 227, 0.7);
+  --md-accent-fg-color: #f0d878;
+  --md-accent-fg-color--transparent: rgba(240, 216, 120, 0.1);
+
+  --md-default-bg-color: var(--chalk-bg);
+  --md-default-fg-color: rgba(241, 238, 227, 0.87);
+  --md-default-fg-color--light: #a9b9ae;
+  --md-default-fg-color--lighter: rgba(241, 238, 227, 0.32);
+  --md-default-fg-color--lightest: rgba(241, 238, 227, 0.12);
+  --md-typeset-color: var(--chalk-text);
+  --md-typeset-a-color: var(--chalk-accent);
+  --md-code-bg-color: #142822;
+  --md-code-fg-color: #f1eee3;
+  --md-footer-bg-color: #142822;
+  --md-footer-bg-color--dark: #0f1f1a;
+}
+
+/* Typewriter headings, as on the report card. h3 and below use the body
+   face so they are not mistaken for code. */
+.md-typeset h1,
+.md-typeset h2,
+.md-header__topic,
+.md-nav__title {
+  font-family: var(--chalk-display);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.md-typeset h1 { color: var(--chalk-text); }
+.md-typeset h2 {
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--chalk-rule);
+}
+.md-typeset h3,
+.md-typeset h4 {
+  font-family: var(--md-text-font-family);
+  font-weight: 600;
+}
+
+/* Links stay underlined in body text, so colour is not the only cue. */
+.md-typeset a:not(.headerlink):not(.md-button) {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  text-decoration-thickness: 1px;
+}
+
+/* Glossary terms carry a hover definition (abbr); a dotted underline
+   marks them. */
+.md-typeset abbr {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--chalk-muted);
+  cursor: help;
+  border-bottom: none;
+}
+
+/* Notes and collapsible blocks in the palette instead of Material's blue. */
+.md-typeset .admonition.note,
+.md-typeset details.info {
+  border-color: var(--chalk-muted);
+}
+.md-typeset .note > .admonition-title,
+.md-typeset .info > summary {
+  background-color: var(--md-accent-fg-color--transparent);
+}
+.md-typeset .note > .admonition-title::before,
+.md-typeset .info > summary::before {
+  background-color: var(--chalk-accent);
+}
+
+/* The demo recording keeps its own dark terminal colours in both schemes. */
+.md-typeset img.chalk-demo {
+  display: block;
+  max-width: 100%;
+  height: auto;

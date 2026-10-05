@@ -177,4 +177,4 @@ success, stderr on failure. `die` inside a job ends only that job.
 - `tests/e2e.sh` runs the whole workflow against the fakes in
   `tests/fakes/`.
 - How to run them, and what a change needs, is in
-  [CONTRIBUTING.md](../CONTRIBUTING.md).
+  [CONTRIBUTING.md](https://github.com/khalaharvi/chalk/blob/main/CONTRIBUTING.md).
