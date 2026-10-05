@@ -1,0 +1,21 @@
+name: PR title
+
+# The pull request title becomes the squashed commit on main and a line in
+# CHANGELOG.md, so it must be a Conventional Commits header.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bash
+      # The title goes through the environment, never into the script text.
+      - run: scripts/check-commit-title.sh "$TITLE"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
