@@ -54,7 +54,8 @@ repository. Use one of these:
 **If more than one is set,** Claude Code uses `ANTHROPIC_API_KEY` before
 `CLAUDE_CODE_OAUTH_TOKEN`. A key left in your environment from other work
 bills the API account even when you meant to use your plan; run
-`unset ANTHROPIC_API_KEY` to use the subscription.
+`unset ANTHROPIC_API_KEY` to use the subscription. `chalk doctor` says
+which account your calls bill, and flags this case.
 
 ### Without Homebrew
 

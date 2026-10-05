@@ -76,6 +76,16 @@ check "doctor: auto mode is not checked when CHALK_PERMISSION_MODE=bypass" \
 if CHALK_MODEL=haiku chalk doctor > "$tmp/doctor5.log" 2>&1; then fail "doctor must refuse Haiku in auto mode"; fi
 check "doctor: Haiku is refused for auto mode without asking the CLI" \
   grep -q 'auto mode does not support Haiku' "$tmp/doctor5.log"
+check "doctor: says which account an API key bills" \
+  grep -qx '  ok    agent calls bill the API account (ANTHROPIC_API_KEY)' "$tmp/doctor1.log"
+CLAUDE_CODE_OAUTH_TOKEN=test-token chalk doctor > "$tmp/doctor6.log" 2>&1 ||
+  { cat "$tmp/doctor6.log"; fail "doctor must pass with both an API key and a subscription token"; }
+check "doctor: an API key set next to a subscription token is flagged, with the fix" \
+  grep -q '^  --    agent calls bill the API account, not your Claude plan: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set, and the API key wins; to use your plan, run: unset ANTHROPIC_API_KEY' "$tmp/doctor6.log"
+env -u ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN=test-token chalk doctor > "$tmp/doctor7.log" 2>&1 ||
+  { cat "$tmp/doctor7.log"; fail "doctor with only a subscription token"; }
+check "doctor: says a subscription token bills the Claude plan" \
+  grep -qx '  ok    agent calls use your Claude plan (CLAUDE_CODE_OAUTH_TOKEN)' "$tmp/doctor7.log"
 
 # next_step LOG TEXT: LOG has exactly one "what to do next" line, and it
 # starts with TEXT.
