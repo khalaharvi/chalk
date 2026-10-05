@@ -1,9 +1,22 @@
 # Contributing
 
 Thanks for helping. Chalk is small on purpose: one Bash CLI, no build step.
-It needs bash 5.3: `brew install bash`, or build one with
-`scripts/install-bash.sh ~/.local/bash` and set
-`CHALK_BASH=~/.local/bash/bin/bash`.
+
+## Set up
+
+You need:
+
+- **bash 5.3 or newer, first on your `PATH`.** The tests run plain `bash`,
+  so the macOS `/bin/bash` (3.2) fails. Use `brew install bash`, or build
+  one with `scripts/install-bash.sh ~/.local/bash` and run
+  `export PATH=~/.local/bash/bin:$PATH`.
+- **ShellCheck 0.11.0** (`brew install shellcheck`). CI pins this version.
+  Older ones do not understand bash 5.3 syntax.
+- **git, jq and make.**
+- For `make test-db` only: `psql`, and a Postgres where the `pg_trgm`
+  extension is available.
+
+Check with `bash --version` and `shellcheck --version`.
 
 ## Run the checks
 
@@ -11,40 +24,63 @@ It needs bash 5.3: `brew install bash`, or build one with
 make check
 ```
 
-That runs ShellCheck (0.11.0 or newer, for bash 5.3 syntax), the convention
-lint, unit tests for each module, and an end-to-end test of the whole
-workflow using fake `docker`, `claude`, `gh`, `glab` and `curl` (in
-`tests/fakes/`), so it needs no Docker and spends nothing. To run the same test with the SQL executed
-against a real Postgres:
+That runs ShellCheck, the convention lint (`scripts/lint-conventions.sh`),
+the unit tests in `tests/unit/`, and an end-to-end test of the whole
+workflow. The end-to-end test uses the fake `docker`, `claude`, `gh`,
+`glab`, `curl` and `timeout` in `tests/fakes/`, so it needs no Docker and
+spends nothing. Each check prints `ok   …`; the first failure prints
+`FAIL …` and stops. A full pass ends with `all tests passed`.
+
+To run the end-to-end test with its SQL executed against a real Postgres:
 
 ```sh
 FAKE_PG_URL=postgresql://user:pass@127.0.0.1:5432/db make test-db
 ```
 
-## Ground rules
+CI also runs `make lint-sandbox`, which parses the sandbox scripts with
+bash 5.2. It needs a bash 5.2 at `/usr/bin/bash` (Linux), so on macOS
+leave it to CI.
 
-- Follow [docs/bash-style.md](docs/bash-style.md): bash 5.3 on the host,
-  bash 5.2 in `share/sandbox/scripts/`, bash 3.2 only in
+## Rules
+
+- Follow [the bash style guide](docs/bash-style.md). In short: bash 5.3 on
+  the host, bash 5.2 in `share/sandbox/scripts/`, and bash 3.2 only in
   `lib/core/guard.sh`.
 - A change to behaviour comes with a test in `tests/unit/` or
-  `tests/e2e.sh`.
-- Prompts live in `share/prompts/`. If you change one, say in the pull
-  request what you observed before and after on a real run.
-- Say what you tested against real Docker and the real `claude` CLI, and
-  what you did not. The fakes cannot catch a wrong CLI flag.
+  `tests/e2e.sh`. A new external program the harness calls gets a fake in
+  `tests/fakes/`.
+- Prompts live in `share/prompts/`. Changing one changes what every agent
+  does, so the pull request needs the before-and-after on a real run (see
+  below).
+
+## Open a pull request
+
+1. Branch from `main`.
+2. Make `make check` pass.
+3. Write the commit message as one imperative sentence in sentence case,
+   for example "Read go test -json reports". The body says why.
+4. In the pull request, say:
+   - what you tested against real Docker and the real `claude` CLI, and
+     what you did not. The fakes cannot catch a wrong CLI flag. If you
+     could not run it for real, say so; a maintainer can, and labels the
+     issue `real-run`;
+   - for a prompt change, what the agent did before and after.
+
+The [roadmap](docs/roadmap.md) lists planned work. Each roadmap issue links
+to its design notes.
 
 ## Layout
 
 | Path | What it holds |
 | :-- | :-- |
 | `bin/chalk` | Entry point: finds bash 5.3, loads modules, dispatches commands |
-| `lib/core/` | Shell runtime: messages, strict settings and traps, background jobs, the bash guard |
-| `lib/` | One file per concern: repository, state, config, database, memory, sandbox, agent calls, the loop, fleet, lifecycle, dashboard, setup |
+| `lib/core/` | Shell runtime: messages, strict settings and traps, background jobs, host profile and locks, the bash guard |
+| `lib/` | One file per concern; see [Layers](docs/bash-style.md#layers) for the load order |
 | `share/sandbox/` | The default sandbox image and the scripts that run inside it (bash 5.2) |
 | `share/prompts/` | Every prompt the agents receive |
 | `share/templates/` | Files `chalk init` adds to a repository |
-| `share/schema.sql`, `share/dashboard.sql` | Telemetry schema and the dashboard query |
+| `share/*.sql`, `share/dashboard.html` | Database schema, CI audit schema, the report-card query and page |
 | `packaging/`, `scripts/release.sh`, `scripts/update-tap.sh` | Homebrew formula template and release scripts |
 | `scripts/install-bash.sh`, `scripts/lint-conventions.sh`, `scripts/check-sandbox-syntax.sh` | Toolchain and lint |
-| `tests/unit/`, `tests/e2e.sh`, `tests/fakes/` | Tests |
-| `docs/` | Style guide and design specs |
+| `tests/unit/`, `tests/e2e.sh`, `tests/fakes/` | Tests and the fake external programs |
+| `docs/` | Style guide, roadmap, design notes and specs |

@@ -4,12 +4,15 @@ Chalk is written for **bash 5.3 on the host** and **bash 5.2 inside the
 sandbox**. This guide says how Chalk uses what those versions offer, so
 that every feature has one idiom and the code reads the same everywhere.
 The reasoning and the verification behind each rule are in
-[`specs/bash-5.3.md`](specs/bash-5.3.md).
+[the bash 5.3 spec](https://github.com/khalaharvi/chalk/blob/main/docs/specs/bash-5.3.md).
 
 Rules marked **(lint)** are checked by `scripts/lint-conventions.sh`, which
-`make lint` runs. ShellCheck 0.11.0 covers the rest.
+`make lint` runs on `bin/chalk` and `lib/`. ShellCheck checks every shell
+file. Rules without the mark are checked in review, and apply to
+`scripts/` and `tests/` as well. Lint messages cite the rule number, such
+as `(C1)`.
 
-## Where each version applies
+## Where each version applies (C8)
 
 | Code | Bash | Why |
 | :-- | :-- | :-- |
@@ -17,19 +20,24 @@ Rules marked **(lint)** are checked by `scripts/lint-conventions.sh`, which
 | `share/sandbox/scripts/*.sh` | 5.2 | Runs inside the sandbox container. Debian 12, the default image, ships 5.2. |
 | Everything else | 5.3 | Host code: `bin/chalk`, `lib/`, `scripts/`, `tests/`. |
 
-The first line of `guard.sh` and of each sandbox script names its version
-**(lint)**. CI parses the sandbox scripts with a real bash 5.2
+The first line of `guard.sh` is `# bash 3.2 syntax`, and the first line of
+each sandbox script is `# bash 5.2 syntax` **(lint)**. CI parses the sandbox scripts with a real bash 5.2
 (`make lint-sandbox`) and runs the guard under macOS's bash 3.2.
 
 ## Layers
 
-```
-lib/core/   shell runtime: log, runtime (options, traps), jobs, system (host profile, locks), guard
-lib/        Chalk domain: repo, state, config, db, memory, sandbox, fingerprint, agent
-lib/        commands (cmd_*): run, fleet, lifecycle, dashboard, setup
-```
+`bin/chalk` sources `lib/core/guard.sh` first, on its own, because it must
+run under any bash. Then it loads three layers, in this order:
 
-A file uses what is loaded before it, never after. `bin/chalk` loads each
+1. **Shell runtime** (`lib/core/`): log, runtime (options, traps), jobs,
+   system (host profile, locks).
+2. **Chalk domain** (`lib/`): repo, forge, state, config, db, memory,
+   sandbox, fingerprint, agent.
+3. **Commands** (`lib/`, the `cmd_*` functions): run, fleet, lifecycle,
+   dashboard, setup.
+
+A file uses what is loaded before it, never after. Function names start
+with their module's name, such as `repo_`, `db_` or `jobs_`. `bin/chalk` loads each
 layer with `source -p DIR NAME.sh`, which looks only in `DIR`. (`source -p`
 does not accept a name containing `/`, hence one loop per directory.)
 
@@ -41,15 +49,48 @@ does not accept a name containing `/`, hence one loop per directory.)
 | **Fill** | writing a caller-named variable | `agent_usage "$file" usage` | Several values at once |
 | **Stream** | printing to stdout | piped, redirected, or `$( )` | Text for files, `jq`, `psql`, `git` |
 
-- A value function's header comment ends with `-> REPLY`.
-- **A value function never returns non-zero (lint).** "No value" is an
-  empty `REPLY`, which the caller tests. In bash 5.3 with `inherit_errexit`,
-  a `${| … }` whose function fails ends the shell even inside `&&`, `||` or
+- A value function's header comment has the form
+  `# name ARGS -> REPLY: what it returns`.
+- **A value function never returns non-zero.** "No value" is an empty
+  `REPLY`, which the caller tests. In bash 5.3 with `inherit_errexit`, a
+  `${| … }` whose function fails ends the shell even inside `&&`, `||` or
   `if`, and fires the ERR trap; `$( )` in the same place does not.
   `die` is still fine: it ends Chalk on purpose.
+- The lint catches an explicit `return 1` or `return "$x"` **(lint)**. It
+  cannot catch a last command that fails, so end a value function with an
+  assignment to `REPLY` or with `:`.
 - Value functions run in the calling shell, so they can cache.
   `git_common_dir` asks git once per working directory; with `$( )` the
   cache would vanish with the subshell.
+
+A value function, from `lib/repo.sh`:
+
+```bash
+# repo_name -> REPLY
+repo_name() {
+  main_root
+  REPLY="${REPLY##*/}"
+}
+```
+
+Called as `name="${| repo_name; }"`. Do not write it like this:
+
+```bash
+# Wrong: when $dir is empty, [[ ]] fails, the function returns 1, and
+# ${| ticket_dir; } ends Chalk.
+ticket_dir() {
+  [[ -n $dir ]] && REPLY="$dir/specs"
+}
+```
+
+Write the same thing so it always succeeds:
+
+```bash
+ticket_dir() {
+  REPLY=""
+  if [[ -n $dir ]]; then REPLY="$dir/specs"; fi
+}
+```
 
 ## C2. `${ … }` and `${| … }`
 
@@ -61,6 +102,12 @@ They run in the current shell, not a subshell. So:
   `read -r var < file` for a line or `$(<file)` for a whole file.
 - Use them for Chalk's own functions. For external commands, `$( )` is
   just as good: the command forks either way.
+
+```bash
+branch="${| current_branch; }"      # right: runs in this shell, can use caches
+head="$(git rev-parse HEAD)"        # right: an external command
+root="${ cd "$dir" && pwd; }"       # wrong: moves Chalk itself into $dir
+```
 
 ## C3. Namerefs
 
@@ -125,8 +172,9 @@ success, stderr on failure. `die` inside a job ends only that job.
 
 ## Tests
 
-- `tests/unit/*_test.sh` test one module each. They source
+- `tests/unit/*_test.sh` each test one module. They source
   `tests/unit/testlib.sh` and load modules with `load core/log repo …`.
 - `tests/e2e.sh` runs the whole workflow against the fakes in
   `tests/fakes/`.
-- A change to behaviour comes with a test in one of them.
+- How to run them, and what a change needs, is in
+  [CONTRIBUTING.md](../CONTRIBUTING.md).

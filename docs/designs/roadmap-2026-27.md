@@ -79,7 +79,8 @@ without updating the issues that link to them.
    (`share/dashboard.sql`, `lib/dashboard.sh`).
 6. **House rules:** bash 5.3 on the host and 5.2 in the sandbox
    ([the bash style guide](../bash-style.md)), a fake in `tests/fakes/` for
-   every external program, and a unit test or e2e case (`tests/e2e.sh`)
+   every external service the harness drives (today `docker`, `claude`,
+   `gh`, `glab`, `curl`; not local tools such as `git` or `jq`), and a unit test or e2e case (`tests/e2e.sh`)
    with every behaviour change. `make check` and `make test-db` stay green.
 
 ## Milestones
