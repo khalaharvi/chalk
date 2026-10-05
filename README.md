@@ -96,6 +96,11 @@ $EDITOR .chalk/config     # set CHALK_TEST_CMD (the rubric) and CHALK_SETUP_CMD,
 git add -A && git commit -m "Add Chalk"
 ```
 
+The default sandbox image is Node 22. For Python, Go or another stack,
+build an image `FROM chalk-sandbox:local` with your toolchain, set
+`CHALK_IMAGE`, and set `CHALK_CI_IMAGE` for the CI rubric gate: see
+[Use your own stack](https://khalaharvi.github.io/chalk/guide/configuring/your-stack/).
+
 Then, for each ticket, create a worktree and write the spec:
 
 ```sh
@@ -293,7 +298,8 @@ team compliant. See [Pull and merge request gates](https://khalaharvi.github.io/
 - **Guide:** [the workflow](https://khalaharvi.github.io/chalk/guide/running/workflow/),
   [detention and office hours](https://khalaharvi.github.io/chalk/guide/running/failures/),
   [configuration](https://khalaharvi.github.io/chalk/guide/configuring/configuration/)
-  (every `.chalk/config` key), [permissions](https://khalaharvi.github.io/chalk/guide/configuring/permissions/),
+  (every `.chalk/config` key), [your own stack](https://khalaharvi.github.io/chalk/guide/configuring/your-stack/),
+  [permissions](https://khalaharvi.github.io/chalk/guide/configuring/permissions/),
   [prompts](https://khalaharvi.github.io/chalk/guide/configuring/prompts/),
   [lesson recall](https://khalaharvi.github.io/chalk/guide/configuring/lesson-memory/),
   [verdicts and the report card](https://khalaharvi.github.io/chalk/guide/operating/dashboard/),

@@ -71,6 +71,20 @@ check alone. `CHALK_SPEC_CHECK=false` skips it.
 newer. Use an image based on Debian 12 or later, or install a newer bash
 in your image.
 
+**The agent reports it cannot install a package.** The sandbox runs as
+you, not root, with no capabilities, so it cannot install system packages,
+and Debian's Python refuses `pip` outside a virtual environment. Put the
+tool or library in the sandbox image, or install it into `$HOME` with
+`CHALK_SETUP_CMD`. See
+[Use your own stack](../configuring/your-stack.md#what-the-sandbox-can-install).
+
+**Every pull or merge request fails the rubric gate with "not found".**
+The CI rubric runs in `CHALK_CI_IMAGE`, `node:22` unless you set it, so
+`go`, `pytest` and the like are missing. Set it to a registry image with
+your toolchain and bash. "CHALK_CI_IMAGE needs bash" means the image has
+none, as Alpine images do. See
+[The CI image](../configuring/your-stack.md#the-ci-image).
+
 **"chalk-db runs Postgres 16".** Runs keep working; run
 `chalk db upgrade` when no runs are active. Runs print this warning at
 most once a day; `chalk doctor` reports it every time.

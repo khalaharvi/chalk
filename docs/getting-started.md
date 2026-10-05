@@ -103,8 +103,10 @@ run:
 - **`CHALK_SETUP_CMD`**, run once in each fresh sandbox before the rubric,
   for example `npm ci`.
 
-The default sandbox image is Node 22. For other stacks, see
-[custom sandbox images](guide/configuring/configuration.md#custom-sandbox-images).
+The default sandbox image is Node 22. For Python, Go or any other stack,
+build a sandbox image with your toolchain, set `CHALK_IMAGE`, and set
+`CHALK_CI_IMAGE` for the CI rubric before the first run: see
+[Use your own stack](guide/configuring/your-stack.md).
 
 ## Run a first ticket
 

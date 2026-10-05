@@ -50,10 +50,12 @@ Other environment variables Chalk reads:
 ## Custom sandbox images
 
 The default image, `chalk-sandbox:local`, is built from
-`share/sandbox/Dockerfile` on the first run: Node 22 on Debian 12, with
-git, jq, ripgrep and the `claude` CLI. For other stacks, build an image
-with your toolchain plus the `claude` CLI, for example starting `FROM`
-that Dockerfile, and set `CHALK_IMAGE`.
+`share/sandbox/Dockerfile` by `chalk sandbox build` or the first run:
+Node 22 on Debian 12, with git, jq, ripgrep and the `claude` CLI. For
+other stacks, build an image `FROM chalk-sandbox:local` with your
+toolchain and set `CHALK_IMAGE`, and set `CHALK_CI_IMAGE` for the CI
+rubric. [Use your own stack](your-stack.md) has worked Python and Go
+examples.
 
 A sandbox image needs bash 5.2 or newer, git, coreutils and `claude` on
 `PATH`. Chalk checks the bash version when a sandbox starts, and

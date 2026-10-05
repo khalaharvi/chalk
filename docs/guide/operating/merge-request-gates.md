@@ -17,13 +17,33 @@ and the approval rule records that a person reviewed it.
 The ticket is read from the branch name, so a branch must carry a key
 like `PROJ-123`.
 
+## The rubric's image
+
+The rubric job runs in the image named by `CHALK_CI_IMAGE`, `node:22`
+unless you set it. On any other stack, set it before the first pull or
+merge request, or every one fails the rubric gate with an error like
+`go: not found`. The image must:
+
+- Come from a registry CI can pull from. The sandbox image Chalk runs
+  locally is not there unless you push it.
+- Have your toolchain, and whatever `CHALK_SETUP_CMD` does not install.
+- Have bash and sed. The job runs `CHALK_SETUP_CMD` and `CHALK_TEST_CMD`
+  with `bash -c`, as the sandbox does, so a rubric that relies on bash
+  passes or fails the same way in both. Debian and Ubuntu based images
+  have bash; Alpine images do not, and the job stops with
+  "CHALK_CI_IMAGE needs bash".
+
+[Use your own stack](../configuring/your-stack.md#the-ci-image) covers
+choosing the image, with examples.
+
 ## GitHub
 
 - In a branch protection rule (or ruleset) for the base branch, make
   `chalk / spec` and `chalk / rubric` required status checks, and require
   an approving review.
-- Set the repository variable `CHALK_CI_IMAGE` to an image with your
-  toolchain. The rubric job runs in it; the default is `node:22`.
+- For a stack other than Node, set the repository variable
+  `CHALK_CI_IMAGE`, for example
+  `gh variable set CHALK_CI_IMAGE --body golang:1.23-bookworm`.
 - For the audit trail, add the secret `CHALK_AUDIT_DB_URL`.
 
 ## GitLab
@@ -31,8 +51,9 @@ like `PROJ-123`.
 - Turn on merge request approval rules.
 - The jobs use the built-in `test` and `.post` stages; if you define your
   own `stages:`, keep `test`.
-- `CHALK_CI_IMAGE` is a variable in the included file (default `node:22`);
-  override it for your toolchain.
+- For a stack other than Node, change `CHALK_CI_IMAGE` under `variables:`
+  in `.gitlab/chalk.gitlab-ci.yml`, or set a CI/CD variable of the same
+  name, which takes precedence.
 - For the audit trail, add `CHALK_AUDIT_DB_URL` as a masked CI/CD
   variable.
 

@@ -18,7 +18,10 @@ when a required check fails. See
 
 **`chalk init`** adds `.chalk/config`, `.chalk/textbook.md`, `specs/`, a
 section in `CLAUDE.md` and the CI gates for the repository's forge. Files
-that exist are kept. See [Getting started](../getting-started.md#set-up-a-repository).
+that exist are kept. Its closing message says where to set `CHALK_IMAGE`
+and `CHALK_CI_IMAGE` for a stack other than Node 22, as an action when
+`CHALK_IMAGE` is already set. See [Getting started](../getting-started.md#set-up-a-repository)
+and [Use your own stack](../guide/configuring/your-stack.md).
 
 **`chalk db up | down | psql | upgrade [--cleanup]`** manages the local
 telemetry database, the `chalk-db` container. `up` starts it (runs start it

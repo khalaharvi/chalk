@@ -9,10 +9,12 @@ CHALK_BASE_BRANCH=main
 # GitHub Enterprise.
 CHALK_FORGE=auto
 
-# The rubric. Must exit 0 only when the work is acceptable. Runs in the
-# sandbox after every agent loop and again in CI.
+# The rubric. Must exit 0 only when the work is acceptable. Runs with
+# bash -c in the sandbox after every agent loop, and again in CI.
 CHALK_TEST_CMD=
-# Runs once in a fresh sandbox (and in CI) before the rubric, e.g. npm ci
+# Runs once in a fresh sandbox (and in CI) before the rubric, e.g. npm ci.
+# The sandbox runs as you, not root: it can install into the repository or
+# $HOME (npm ci, go mod download, a Python venv), never system packages.
 CHALK_SETUP_CMD=
 # Seconds before a hung rubric is killed.
 CHALK_RUBRIC_TIMEOUT=900
@@ -51,6 +53,9 @@ CHALK_MAX_PARALLEL=auto
 CHALK_SANDBOX_MEM_MB=2048
 
 # Sandbox image. Needs bash 5.2 or newer, git, coreutils and the claude CLI.
+# The default is Node 22. For another stack, build an image FROM
+# chalk-sandbox:local (chalk sandbox build) with your toolchain, and set
+# CHALK_CI_IMAGE in CI as well: see "Use your own stack" in the docs.
 CHALK_IMAGE=chalk-sandbox:local
 # RAM disk size for the working copy and its dependencies.
 CHALK_TMPFS_SIZE=4g
