@@ -77,6 +77,19 @@ SELECT json_build_object(
       'without', count(*) FILTER (WHERE lessons = 0),
       'without_passed', count(*) FILTER (WHERE lessons = 0 AND progressed))
     FROM r WHERE kind = 'retry'),
+  -- The tests that failed in the most loops, up to ten per repository, from
+  -- the failing test IDs stored with each failed loop (runs.failing_tests).
+  'failing_tests', (SELECT coalesce(json_agg(f ORDER BY f.repo, f.n), '[]') FROM (
+      SELECT repo, test, loops, tickets,
+             to_char(last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last, n
+        FROM (SELECT repo, t.test, count(*) AS loops, count(DISTINCT ticket) AS tickets,
+                     max(created_at) AS last,
+                     row_number() OVER (PARTITION BY repo
+                                        ORDER BY count(*) DESC, max(created_at) DESC, t.test) AS n
+                FROM r CROSS JOIN LATERAL regexp_split_to_table(r.failing_tests, E'\n') AS t(test)
+               WHERE is_loop AND t.test <> ''
+               GROUP BY repo, t.test) ranked
+       WHERE n <= 10) f),
   -- The verdict ledger, per run (run_id): what CHALK_FP_RULES=on would have
   -- done. It detains a run at its first stopping verdict (deja_vu, repeat,
   -- no_change), so the loops after that one are what it would have saved.

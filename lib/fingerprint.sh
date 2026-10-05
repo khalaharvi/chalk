@@ -79,6 +79,27 @@ END {
   }
 }'
 
+# Where the repository is checked out in the sandbox. jest --json names test
+# files by absolute path; IDs use the path relative to this.
+FP_SANDBOX_REPO=/work/repo
+
+# Prints the failing tests in a `jest --json` report as FILE::TITLES: FILE
+# relative to the repository, TITLES the describe blocks and the test's
+# title joined with " › ", as jest prints them in its output (and as
+# FP_TEST_PATTERNS reads them). A suite that failed to run names no test.
+FP_JEST_JQ='.testResults[]? | ((.name // "") | ltrimstr($root)) as $file
+  | .assertionResults[]? | select(.status == "failed")
+  | ([(.ancestorTitles // [])[], .title] | map(strings) | join(" › ")) as $name
+  | (if $file == "" then $name else "\($file)::\($name)" end) | gsub("[\r\n]+"; " ")'
+
+# Prints the failing tests in `go test -json` output as PACKAGE::TEST, the
+# IDs go-junit-report gives as classname::name. Read one line at a time, so
+# lines that are not JSON (such as a build error on stderr) are skipped. A
+# fail event without a Test is a package's, which names no test.
+FP_GO_JQ='fromjson? | objects | select(.Action == "fail" and (.Test | strings) != "")
+  | (.Package | strings // "") as $pkg
+  | (if $pkg == "" then .Test else "\($pkg)::\(.Test)" end) | gsub("[\r\n]+"; " ")'
+
 # Run in the sandbox's repo (bash 5.2) with the test report's path as $1:
 # the tree ID of everything in the working tree, untracked files included,
 # except the notes file, which the prompts tell the agent to update every
@@ -100,13 +121,34 @@ fp_sha256() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
 }
 
+# fp_report_tests REPORT: prints the failing test IDs in a test report,
+# unsorted. The format is told by content, not by file name: XML is JUnit;
+# a single JSON object with testResults is `jest --json`; anything else is
+# read as `go test -json`'s stream of events, one per line. Fails when a
+# jest report cannot be read whole.
+fp_report_tests() {
+  local first
+  first="$(LC_ALL=C awk 'NR == 1 { sub(/^\357\273\277/, "") }
+    match($0, /[^[:space:]]/) { print substr($0, RSTART, 1); exit }' "$1")"
+  if [[ $first == '<' ]]; then
+    LC_ALL=C awk "$FP_JUNIT_AWK" "$1"
+  elif jq -e -n '[inputs] | length == 1 and (.[0] | type == "object" and has("testResults"))' \
+       "$1" >/dev/null 2>&1; then
+    jq -r --arg root "$FP_SANDBOX_REPO/" "$FP_JEST_JQ" "$1"
+  else
+    jq -R -r "$FP_GO_JQ" "$1"
+  fi
+}
+
 # fp_failing_tests LOG [REPORT] -> REPLY: T, one test ID per line, sorted.
-# From the JUnit REPORT when there is one, otherwise from the runner's
-# output in LOG. Finding no test IDs means UNKNOWN, never zero failures.
+# From the REPORT (JUnit XML, `go test -json` or `jest --json`) when there
+# is one, otherwise from the runner's output in LOG. Finding no test IDs,
+# or a report that cannot be read, means UNKNOWN, never zero failures.
 fp_failing_tests() {
-  local log="$1" report="${2:-}"
+  local log="$1" report="${2:-}" ids
   if [[ -n $report && -s $report && -r $report ]]; then
-    REPLY="$(LC_ALL=C awk "$FP_JUNIT_AWK" "$report" | LC_ALL=C sort -u || true)"
+    ids="$(fp_report_tests "$report" 2>/dev/null)" || ids=""
+    REPLY="$(printf '%s' "$ids" | LC_ALL=C sort -u || true)"
   else
     REPLY="$(fp_clean "$log" 2>/dev/null | LC_ALL=C sed -n -E "${FP_TEST_PATTERNS[@]}" | LC_ALL=C sort -u || true)"
   fi

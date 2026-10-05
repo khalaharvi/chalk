@@ -269,6 +269,134 @@ compute unknown "$tmp/report.xml"
 check "JUnit: testcases with a failure or error child, as classname::name" \
   test "${fp[tests]}" = $'tests.test_io::test_read[a&b]\ntests.test_math::test_add'
 check "JUnit: the report wins over the log" test "${fp[failing]}" = 2
+{ printf '\357\273\277  \n'; cat "$tmp/report.xml"; } > "$tmp/report-bom.xml"
+compute unknown "$tmp/report-bom.xml"
+check "JUnit: a byte order mark and blank lines before the XML are skipped" test "${fp[failing]}" = 2
+
+# --- go test -json and jest --json reports ---------------------------------
+
+# fields LOG REPORT: every field fp_compute fills, for the fixture LOG and REPORT.
+fields() {
+  compute "$1" "$2"
+  local key
+  for key in tests tests_hash failing first_error generic fingerprint tree_id; do
+    printf '%s=%s\n' "$key" "${fp[$key]}"
+  done
+}
+
+# go-junit-report's view of a go test run: classname is the package.
+cat > "$tmp/go-junit.xml" <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites><testsuite name="example.com/app" tests="5" failures="3">
+  <testcase classname="example.com/app" name="TestOk" time="0.000"></testcase>
+  <testcase classname="example.com/app" name="TestParse" time="0.000"><failure message="Failed">got 3, want 4</failure></testcase>
+  <testcase classname="example.com/app" name="TestServe" time="0.010"><failure message="Failed"></failure></testcase>
+  <testcase classname="example.com/app" name="TestServe/empty" time="0.010"><failure message="Failed"></failure></testcase>
+  <testcase classname="example.com/app" name="TestServe/full" time="0.000"></testcase>
+</testsuite></testsuites>
+XML
+# The same run as go test -json writes it, with a line from stderr mixed in
+# and a passing package. Saved as .xml: the content decides, not the name.
+cat > "$tmp/go-json.xml" <<'JSON'
+{"Time":"2026-10-04T10:00:00Z","Action":"start","Package":"example.com/app"}
+{"Action":"run","Package":"example.com/app","Test":"TestOk"}
+{"Action":"pass","Package":"example.com/app","Test":"TestOk","Elapsed":0}
+{"Action":"run","Package":"example.com/app","Test":"TestParse"}
+{"Action":"output","Package":"example.com/app","Test":"TestParse","Output":"    parse_test.go:12: got 3, want 4\n"}
+{"Action":"fail","Package":"example.com/app","Test":"TestParse","Elapsed":0}
+{"Action":"run","Package":"example.com/app","Test":"TestServe"}
+{"Action":"run","Package":"example.com/app","Test":"TestServe/empty"}
+{"Action":"fail","Package":"example.com/app","Test":"TestServe/empty","Elapsed":0.01}
+{"Action":"run","Package":"example.com/app","Test":"TestServe/full"}
+{"Action":"pass","Package":"example.com/app","Test":"TestServe/full","Elapsed":0}
+{"Action":"fail","Package":"example.com/app","Test":"TestServe","Elapsed":0.01}
+go: downloading example.com/dep v1.2.3
+{"Action":"output","Package":"example.com/app","Output":"FAIL\texample.com/app\t0.214s\n"}
+{"Action":"fail","Package":"example.com/app","Elapsed":0.214}
+{"Action":"start","Package":"example.com/lib"}
+{"Action":"pass","Package":"example.com/lib","Test":"TestLib","Elapsed":0}
+{"Action":"pass","Package":"example.com/lib","Elapsed":0.1}
+JSON
+compute go "$tmp/go-json.xml"
+check "go -json: failed tests and subtests, as package::test" \
+  test "${fp[tests]}" = $'example.com/app::TestParse\nexample.com/app::TestServe\nexample.com/app::TestServe/empty'
+check "go -json: the same fingerprint fields as the JUnit report" \
+  test "$(fields go "$tmp/go-json.xml")" = "$(fields go "$tmp/go-junit.xml")"
+
+# A build failure: only the package fails, so no test is named.
+cat > "$tmp/go-build.json" <<'JSON'
+{"ImportPath":"example.com/app","Action":"build-output","Output":"./main.go:3:5: undefined: x\n"}
+{"ImportPath":"example.com/app","Action":"build-fail"}
+{"Action":"start","Package":"example.com/app"}
+{"Action":"output","Package":"example.com/app","Output":"FAIL\texample.com/app [build failed]\n"}
+{"Action":"fail","Package":"example.com/app","Elapsed":0,"FailedBuild":"example.com/app"}
+JSON
+compute build "$tmp/go-build.json"
+check "go -json: a package-level failure only gives UNKNOWN" \
+  test "${fp[tests]}:${fp[failing]}:${fp[tests_hash]}" = "UNKNOWN::"
+
+# jest-junit set up to name tests as jest prints them: the file, then the
+# describe blocks and title joined with " › ".
+cat > "$tmp/jest-junit.xml" <<'XML'
+<testsuites name="jest tests" tests="4" failures="2">
+  <testsuite name="src/sum.test.js" tests="4" failures="2">
+    <testcase classname="src/sum.test.js" name="Math › adds numbers" time="0.002">
+      <failure>Error: expect(received).toBe(expected)</failure>
+    </testcase>
+    <testcase classname="src/sum.test.js" name="Math › multiplies" time="0.001"/>
+    <testcase classname="src/sum.test.js" name="Math › nested › subtracts" time="0.001">
+      <failure>Error: expect(received).toBe(expected)</failure>
+    </testcase>
+    <testcase classname="src/sum.test.js" name="later" time="0"><skipped/></testcase>
+  </testsuite>
+</testsuites>
+XML
+# The same run as jest --json writes it, plus a passing file. Saved as .txt.
+cat > "$tmp/jest-report.txt" <<'JSON'
+{"numFailedTests":2,"numPassedTests":2,"success":false,"testResults":[
+  {"name":"/work/repo/src/sum.test.js","status":"failed","message":"","assertionResults":[
+    {"ancestorTitles":["Math"],"fullName":"Math adds numbers","title":"adds numbers","status":"failed",
+     "failureMessages":["Error: expect(received).toBe(expected)"]},
+    {"ancestorTitles":["Math"],"fullName":"Math multiplies","title":"multiplies","status":"passed","failureMessages":[]},
+    {"ancestorTitles":["Math","nested"],"fullName":"Math nested subtracts","title":"subtracts","status":"failed",
+     "failureMessages":["Error: expect(received).toBe(expected)"]},
+    {"ancestorTitles":[],"fullName":"later","title":"later","status":"todo","failureMessages":[]}]},
+  {"name":"/work/repo/src/ok.test.js","status":"passed","message":"","assertionResults":[
+    {"ancestorTitles":[],"fullName":"works","title":"works","status":"passed","failureMessages":[]}]}
+]}
+JSON
+compute jest "$tmp/jest-report.txt"
+check "jest --json: failed tests as file::describe › title" \
+  test "${fp[tests]}" = $'src/sum.test.js::Math › adds numbers\nsrc/sum.test.js::Math › nested › subtracts'
+check "jest --json: the same fingerprint fields as the JUnit report" \
+  test "$(fields jest "$tmp/jest-report.txt")" = "$(fields jest "$tmp/jest-junit.xml")"
+
+# A test file that failed to run (say, a syntax error) names no test.
+cat > "$tmp/jest-suite.json" <<'JSON'
+{"numFailedTests":0,"numFailedTestSuites":1,"success":false,"testResults":[
+  {"name":"/work/repo/src/broken.test.js","status":"failed","assertionResults":[],
+   "message":"SyntaxError: Unexpected token (3:5)"}]}
+JSON
+compute unknown "$tmp/jest-suite.json"
+check "jest --json: a suite that failed to run, alone, gives UNKNOWN" test "${fp[tests]}:${fp[failing]}" = "UNKNOWN:"
+
+# Malformed reports name nothing, even when the log does.
+head -c 120 "$tmp/jest-report.txt" > "$tmp/jest-cut.json"
+compute jest "$tmp/jest-cut.json"
+check "jest --json: a report cut short gives UNKNOWN" test "${fp[tests]}:${fp[tests_hash]}" = "UNKNOWN:"
+printf '{"testResults": [{"name": "/work/repo/a.test.js", "assertionResults": [}\n' > "$tmp/bad.json"
+compute jest "$tmp/bad.json"
+check "malformed JSON gives UNKNOWN" test "${fp[tests]}" = UNKNOWN
+printf '%s\n' '{"testResults": [{"name": "/work/repo/a.test.js", "assertionResults": [
+  {"ancestorTitles": [], "title": "a", "status": "failed"}, 5]}]}' > "$tmp/odd.json"
+compute jest "$tmp/odd.json"
+check "jest --json: a report jq cannot read to the end gives UNKNOWN, not part of T" test "${fp[tests]}" = UNKNOWN
+printf '{"Action":"fail","Package":"example.com/app","Test":"TestParse"\n' > "$tmp/go-cut.json"
+compute go "$tmp/go-cut.json"
+check "go -json: a malformed event gives UNKNOWN" test "${fp[tests]}" = UNKNOWN
+printf 'not a report\n' > "$tmp/text.report"
+compute go "$tmp/text.report"
+check "a report in no known format gives UNKNOWN" test "${fp[tests]}" = UNKNOWN
 
 # --- The report in the sandbox: a stale one is never read -----------------
 

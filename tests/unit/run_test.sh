@@ -30,16 +30,24 @@ declare -A fp=(["tests"]=$'demo::a\ndemo::b' ["first_error"]="AssertionError: BR
                ["fingerprint"]="f00d")
 feedback="${| run_fp_feedback "rubric failed (exit 1)" fp; }"
 check "fp feedback starts with the reason" test "$(head -n 1 <<<"$feedback")" = "rubric failed (exit 1)"
+check "fp feedback says how many tests still fail" \
+  test "$(sed -n 2p <<<"$feedback")" = "these 2 tests still fail:"
 check "fp feedback lists each failing test" \
-  sh -c 'printf "%s\n" "$1" | grep -qx -- "- demo::a" && printf "%s\n" "$1" | grep -qx -- "- demo::b"' _ "$feedback"
+  test "$(sed -n 3,4p <<<"$feedback")" = $'- demo::a\n- demo::b'
 check "fp feedback names the first error" grep -qx "first error: AssertionError: BROKEN exists" <<<"$feedback"
 check "fp feedback keeps only the last 20 lines of output" \
   sh -c 'printf "%s\n" "$1" | grep -qx line-22 && ! printf "%s\n" "$1" | grep -qx line-21' _ "$feedback"
 
+declare -A one=(["tests"]="demo::a" ["first_error"]="boom")
+feedback="${| run_fp_feedback "rubric failed (exit 1)" one; }"
+check "fp feedback names a single failing test in the singular" \
+  test "$(sed -n 2,3p <<<"$feedback")" = $'this test still fails:\n- demo::a'
+
 declare -A unknown=(["tests"]="UNKNOWN" ["first_error"]="")
 feedback="${| run_fp_feedback "rubric failed (exit 2)" unknown; }"
 check "fp feedback says when no failing tests or error were found" \
-  sh -c 'printf "%s\n" "$1" | grep -q "^unknown" && printf "%s\n" "$1" | grep -qx "first error: none found"' _ "$feedback"
+  sh -c 'printf "%s\n" "$1" | grep -qx "failing tests: unknown (the output names none)" &&
+    printf "%s\n" "$1" | grep -qx "first error: none found"' _ "$feedback"
 
 # --- run_recall: what the next loop recalls lessons by ---------------------
 
