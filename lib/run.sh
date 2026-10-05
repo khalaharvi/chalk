@@ -2,6 +2,10 @@
 # only when the rubric passes, reviewed once at the end, and sent to detention
 # when it cannot progress.
 
+# The baseline for loop verdicts (fp_verdict): the latest fingerprinted loop
+# of the current non-progress streak.
+declare -gA RUN_FP_BASE=()
+
 # Resolves the run for the current worktree into RUN_* globals.
 run_context() {
   need git
@@ -19,6 +23,9 @@ run_context() {
   RUN_REVIEW_FINDINGS=""
   RUN_LESSONS=0
   RUN_CALL_SECONDS=0
+  # Set by cmd_run when the loop starts; calls outside a run record none.
+  RUN_ID=""
+  RUN_FP_BASE=()
   load_config "$RUN_WT"
   RUN_PROMPTS="$(run_prompts_version)"
 
@@ -124,8 +131,46 @@ run_build_prompt() {
 }
 
 run_rubric() {
+  if [[ $CHALK_FP_RULES != off ]]; then fp_report_clear "$RUN_SANDBOX"; fi
   docker exec -w /work/repo "$RUN_SANDBOX" \
     timeout "$CHALK_RUBRIC_TIMEOUT" bash -c "$CHALK_TEST_CMD" > "$RUN_IO/rubric.log" 2>&1
+}
+
+# run_fingerprint VAR RUBRIC_EXIT: fills VAR with this loop's fingerprint,
+# which must be taken before anything is committed. A passing rubric needs
+# only the tree ID. A failing one is also checked against open lessons for
+# other tickets (CUR[open_match], see fp_verdict).
+run_fingerprint() {
+  local -n __loop_fp=$1
+  __loop_fp=()
+  [[ $CHALK_FP_RULES != off ]] || return 0
+  if (( $2 == 0 )); then
+    __loop_fp=(["tree_id"]="${| fp_tree_id "$RUN_SANDBOX"; }")
+    return 0
+  fi
+  fp_report_fetch "$RUN_SANDBOX" "$RUN_IO/report.xml"
+  fp_compute "$1" "$RUN_SANDBOX" "$RUN_IO/rubric.log" "$RUN_IO/report.xml"
+  if [[ ${__loop_fp[tests]} != UNKNOWN ]]; then
+    __loop_fp["open_match"]="${| db_open_match "$RUN_TICKET" "${__loop_fp[fingerprint]}"; }"
+  fi
+}
+
+# run_verdict VAR WHY: sets VAR[verdict] for a loop that ended as WHY
+# (blocked, agent_error, failed, passed or progressed; see fp_verdict), and
+# moves the streak's baseline on. Progress ends the streak.
+run_verdict() {
+  local -n __verdict_fp=$1
+  [[ $CHALK_FP_RULES != off ]] || return 0
+  if [[ $2 == progressed ]]; then
+    RUN_FP_BASE=()
+    return 0
+  fi
+  __verdict_fp["verdict"]="${| fp_verdict "$2" RUN_FP_BASE "$1"; }"
+  # A loop the agent did not finish has no fingerprint, so never becomes the baseline.
+  [[ $2 == @(failed|passed) ]] || return 0
+  local key
+  RUN_FP_BASE=()
+  for key in "${!__verdict_fp[@]}"; do RUN_FP_BASE[$key]="${__verdict_fp[$key]}"; done
 }
 
 # Brings commits made in the sandbox onto the host branch (fast-forward only).
@@ -195,10 +240,12 @@ run_review() {
   if [ -z "$verdict" ]; then warn "final review returned no verdict; continuing without it"; fi
 }
 
-# run_detain REASON [DETAIL]: parks the sandbox's work on a local detention
-# branch, logs the failure as an open lesson, and halts this run.
+# run_detain REASON [DETAIL] [FINGERPRINT] [FIRST_ERROR]: parks the sandbox's
+# work on a local detention branch, logs the failure as an open lesson, and
+# halts this run. FINGERPRINT and FIRST_ERROR are given only when the loop
+# that detained the run failed its rubric.
 run_detain() {
-  local reason="$1" detail="${2:-}" branch signature
+  local reason="$1" detail="${2:-}" fingerprint="${3:-}" first_error="${4:-}" branch signature
   branch="detention/$RUN_TICKET-$EPOCHSECONDS"
 
   sandbox_commit "$RUN_SANDBOX" "detention($RUN_TICKET): $reason" --allow-empty
@@ -213,7 +260,7 @@ $detail"
     signature="$signature
 $(tail -n 40 "$RUN_IO/rubric.log")"
   fi
-  db_open_lesson "$RUN_TICKET" "$signature"
+  db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$signature" "$RUN_ID" "$fingerprint" "$first_error"
   db_event "$RUN_TICKET" detention
 
   run_log "DETENTION: $reason"
@@ -279,6 +326,7 @@ cmd_run() {
     return 0
   fi
 
+  RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
   run_open_sandbox --memory
   if [ -n "$CHALK_SETUP_CMD" ]; then
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
@@ -289,9 +337,10 @@ cmd_run() {
       die "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
   fi
 
-  local failures=0 failed_reviews=0 feedback="" findings="" mode reason
+  local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended
   local open remaining result agent_status rubric_exit progressed
-  local -A usage
+  local -a lesson
+  local -A usage fp
   result="$RUN_IO/loop.json"
   while :; do
     open="$(spec_open_count "$RUN_SPEC")"
@@ -328,33 +377,42 @@ cmd_run() {
 
     # A reported blocker goes straight to an engineer; retrying cannot fix it.
     if [ "$(agent_field "$result" '.status')" = "blocked" ]; then
-      db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result"
+      fp=()
+      run_verdict fp blocked
+      db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
       run_detain "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
       return 1
     fi
 
     rubric_exit=0
     run_rubric || rubric_exit=$?
+    fp=()
+    if [ "$agent_status" = "ok" ]; then run_fingerprint fp "$rubric_exit"; fi
 
     reason=""
     progressed="false"
     if [ "$agent_status" != "ok" ]; then
       reason="agent stopped early ($agent_status)"
+      ended="agent_error"
     elif [ "$rubric_exit" -ne 0 ]; then
       reason="rubric failed (exit $rubric_exit)"
+      ended="failed"
     else
       sandbox_commit "$RUN_SANDBOX" "chalk($RUN_TICKET): $mode, loop $RUN_LOOP"
       run_sync
       remaining="$(spec_open_count "$RUN_SPEC")"
       if [ "$mode" = "fix-review" ] || [ "$remaining" -lt "$open" ]; then
         progressed="true"
+        ended="progressed"
       else
         reason="rubric passed but no checkpoint was ticked in the spec"
+        ended="passed"
       fi
     fi
+    run_verdict fp "$ended"
 
     db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
-      "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result"
+      "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (\$$(agent_cost "$result"), ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
     agent_usage "$result" usage
     if (( usage[denials] > 0 )); then
@@ -368,9 +426,19 @@ cmd_run() {
       continue
     fi
 
+    # A lesson carries the fingerprint only of a loop whose rubric failed.
+    lesson=("" "")
+    if [ "$ended" = "failed" ]; then lesson=("${fp[fingerprint]-}" "${fp[first_error]-}"); fi
+    # With CHALK_FP_RULES=on, a loop that repeats itself, changes nothing, or
+    # fails like an open detention on another ticket is detained at once.
+    if [ "$CHALK_FP_RULES" = "on" ] && fp_stops "${fp[verdict]-}"; then
+      run_detain "${fp[verdict]}: $reason" "" "${lesson[@]}"
+      return 1
+    fi
+
     failures=$((failures + 1))
     if [ "$failures" -gt "$CHALK_MAX_RETRIES" ]; then
-      run_detain "$reason"
+      run_detain "$reason" "" "${lesson[@]}"
       return 1
     fi
     feedback="$reason

@@ -138,6 +138,10 @@ function grade(t) {
     <span>per finished checkpoint, counting every call Chalk made.</span></p>`;
 }
 
+// A dotted list of [label, value] pairs.
+const markList = (rows) =>
+  `<dl class="marks">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
+
 function marks(d) {
   const t = d.totals;
   const input = t.input_tokens + t.cache_read_tokens + t.cache_write_tokens;
@@ -151,7 +155,7 @@ function marks(d) {
     ["Input read from cache", input ? pct(share(t.cache_read_tokens, input)) : "no data"],
     ["Actions refused by permissions", count(t.denials)],
   ];
-  return `<dl class="marks">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
+  return markList(rows);
 }
 
 function spendByKind(d) {
@@ -227,6 +231,21 @@ function notes(d) {
       without one. ${withRate > withoutRate ? "Office-hours notes are paying off." :
       "Lessons are not helping yet; check that the notes describe the fix, not just the symptom."}`);
   }
+  // The bar for turning the verdict rules on: enough detained runs, enough
+  // saved, and at most one run that a stop would have cut short of progress.
+  const g = d.ledger;
+  if (g && g.detained_runs >= 20 && share(g.saved, g.no_progress_cost) >= 0.2 && g.false_stops <= 1) {
+    out.push(`Over ${plural(g.detained_runs, "detained run")}, stopping at the first repeated failure, unchanged
+      tree or failure already in detention would have saved ${pct(share(g.saved, g.no_progress_cost))} of their
+      spend with no progress, with ${plural(g.false_stops, "false stop")}. Set <code>CHALK_FP_RULES=on</code>.`);
+  }
+  for (const u of (g && g.unknown_tests) || []) {
+    if (u.loops >= 10 && share(u.unknown, u.loops) > 0.5) {
+      out.push(`In ${esc(u.repo)}, ${pct(share(u.unknown, u.loops))} of failed loops named no failing tests, so
+        their verdicts lean on the error text alone. Have the rubric write a JUnit XML report and set
+        <code>CHALK_TEST_REPORT</code> to its path.`);
+    }
+  }
   if (!out.length) {
     out.push(t.loops < 20
       ? "Too few loops so far to recommend changes. The notes appear once there are about twenty."
@@ -277,6 +296,38 @@ function budget(d) {
        ? `; caps ranged from ${money(b.cap_min)} to ${money(b.cap)}` : ""}.</p>`;
 }
 
+const STOPS = {
+  "deja_vu": "Fails like an open detention", "repeat": "Same failure, same tree", "no_change": "Tree unchanged",
+};
+
+// The verdict ledger: what CHALK_FP_RULES=on would have saved, and cost.
+function ledger(d) {
+  const g = d.ledger;
+  if (!g || !g.runs.length) return "";
+  const stop = (v) => esc(STOPS[v] || v);
+  const outcome = (x) => x.false_stop ? "Progressed after the stop"
+    : x.converging ? "Detained while improving" : x.detained ? "Detained" : "Not detained";
+  const verdicts = g.by_verdict.map((v) => [stop(v.verdict), count(v.runs), money(v.saved)]);
+  const runs = g.runs.map((x) => [
+    esc(x.run_id), esc(x.repo), x.stop_verdict ? `${stop(x.stop_verdict)}, loop ${count(x.stop_loop)}` : "none",
+    money(x.after_cost), esc(outcome(x)), esc(localTime(x.last)),
+  ]);
+  return `<h2>Would stopping early have paid?</h2>
+    <p>Each loop that makes no progress gets a verdict. With <code>CHALK_FP_RULES=on</code>, a run stops at its
+       first repeated failure, unchanged tree, or failure that matches an open detention on another ticket.
+       These are the runs where that would have made a difference.</p>
+    ${markList([
+      ["Detained runs with verdicts", count(g.detained_runs)],
+      ["Their spend with no progress", money(g.no_progress_cost)],
+      ["Stopping early would have saved", `${money(g.saved)} (${pct(share(g.saved, g.no_progress_cost))})`],
+      ["False stops", `${count(g.false_stops)}, before ${money(g.false_stop_cost)} that led to progress`],
+      ["Detained while still improving", count(g.converging)],
+    ])}
+    ${verdicts.length ? "<h3>Savings by first stop</h3>" + table(["First stop", "Runs", "Would have saved"], verdicts) : ""}
+    <h3>Runs</h3>
+    ${table(["Run", "Repository", "First stop", "Spend after it", "Outcome", "Last activity"], runs, [0, 1, 2, 4])}`;
+}
+
 function tickets(d) {
   const rows = d.tickets.map((t) => [
     esc(t.ticket), esc(t.repo), count(t.loops), money(t.cost), count(t.detentions),
@@ -295,7 +346,7 @@ function render(d) {
       <code>chalk run</code>, then open this page again.</span></p>`;
   }
   return head + grade(d.totals) + marks(d) + notes(d) + spendByKind(d) + spendByDay(d) +
-    budget(d) + strategies(d) + checks(d) + tickets(d);
+    budget(d) + strategies(d) + checks(d) + ledger(d) + tickets(d);
 }
 
 document.getElementById("app").innerHTML = render(DATA);

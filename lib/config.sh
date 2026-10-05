@@ -30,6 +30,8 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_CHEAP_MODEL]=haiku
   [CHALK_DISTILL]=true
   [CHALK_PERMISSION_MODE]=auto
+  [CHALK_FP_RULES]=shadow
+  [CHALK_TEST_REPORT]=""
 )
 
 # Machine-level settings: environment only, never read from the repository.
@@ -82,6 +84,10 @@ load_config() {
   case "$CHALK_MEMORY" in
     builtin|hindsight) ;;
     *) die "CHALK_MEMORY must be 'builtin' or 'hindsight' (got '$CHALK_MEMORY')" ;;
+  esac
+  case "$CHALK_FP_RULES" in
+    off|shadow|on) ;;
+    *) die "CHALK_FP_RULES must be 'off', 'shadow' or 'on' (got '$CHALK_FP_RULES')" ;;
   esac
   [[ $CHALK_MAX_PARALLEL == auto || $CHALK_MAX_PARALLEL =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_MAX_PARALLEL must be 'auto' or a positive whole number (got '$CHALK_MAX_PARALLEL')"

@@ -25,7 +25,7 @@ The first line of `guard.sh` and of each sandbox script names its version
 
 ```
 lib/core/   shell runtime: log, runtime (options, traps), jobs, system (host profile, locks), guard
-lib/        Chalk domain: repo, state, config, db, memory, sandbox, agent
+lib/        Chalk domain: repo, state, config, db, memory, sandbox, fingerprint, agent
 lib/        commands (cmd_*): run, fleet, lifecycle, dashboard, setup
 ```
 
