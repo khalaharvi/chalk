@@ -125,9 +125,9 @@ hours, to a merged change. The demo is recorded against the test fakes. CI
 checks links.
 
 - Add `roadmap.md` to the site navigation.
-- Decide whether `docs/designs/` is published. It holds working notes,
-  including personal ones, so the default is to exclude it next to
-  `docs/superpowers/`.
+- Exclude `docs/designs/` and `docs/specs/` from the build, next to
+  `docs/superpowers/`. They hold working notes. Pages on the site link to
+  them by full GitHub URL, so `mkdocs build --strict` does not fail.
 - **Done when:** the site rebuilds on every push to `main`.
 
 ### Test reports

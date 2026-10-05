@@ -6,7 +6,7 @@ items move when the numbers say they should. Quarters are calendar
 quarters, so Q4 2026 means October to December.
 
 Each item links to its design notes in the
-[detailed roadmap](designs/roadmap-2026-27.md). Progress is tracked on the
+[detailed roadmap](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md). Progress is tracked on the
 [GitHub project board](https://github.com/users/khalaharvi/projects/1), and
 the pinned [roadmap issue](https://github.com/khalaharvi/chalk/issues/53)
 is the place to comment on priorities.
@@ -29,43 +29,43 @@ Postgres 17 with pgvector and `chalk db upgrade`.
 
 ## Q4 2026: Make it trustworthy (v0.7)
 
-- **[Real runs](designs/roadmap-2026-27.md#real-runs).** Use Chalk on
+- **[Real runs](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#real-runs).** Use Chalk on
   itself and on Node, Python and Go repositories, on both GitHub and
   GitLab. Fix what breaks.
-- **[Docs site](designs/roadmap-2026-27.md#docs-site)** with a glossary of
+- **[Docs site](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#docs-site)** with a glossary of
   the school terms (rubric, detention, office hours, report card) and a
   recorded demo.
-- **[More test report formats](designs/roadmap-2026-27.md#test-reports):**
+- **[More test report formats](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#test-reports):**
   `go test -json` and `jest --json`.
-- **[chalk doctor and clearer detentions](designs/roadmap-2026-27.md#doctor).**
+- **[chalk doctor and clearer detentions](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#doctor).**
   Detention is where a run stops when it cannot make progress; each reason
   will say what to do next.
-- **[PRIVACY.md and chalk share](designs/roadmap-2026-27.md#data).** See
+- **[PRIVACY.md and chalk share](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#data).** See
   "Data" below.
 
 ## Q1 2027: Cheaper loops, open models (v0.8)
 
-- **[Lesson recall](designs/roadmap-2026-27.md#recall)** by the fingerprint
+- **[Lesson recall](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#recall)** by the fingerprint
   of a failure, replacing the optional Hindsight memory server.
-- **[Verdicts on](designs/roadmap-2026-27.md#verdicts-on):** let the
+- **[Verdicts on](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#verdicts-on):** let the
   stuck-loop verdicts stop runs early, where the shadow numbers show it
   saves money.
-- **[Resume after a crash](designs/roadmap-2026-27.md#resume)**, sleep or
+- **[Resume after a crash](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#resume)**, sleep or
   Ctrl-C without losing paid work.
-- **[Bring your own model](designs/roadmap-2026-27.md#bring-your-own-model)** inside
+- **[Bring your own model](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#bring-your-own-model)** inside
   Claude Code: a model per kind of call; Bedrock, Vertex and gateways such
   as LiteLLM; and a price table for providers that do not report cost, so
   the report card stays accurate and a run stops once it goes over budget.
 
 ## Q2 2027: Easier start, your own decider (v0.9)
 
-- **[Sandbox images](designs/roadmap-2026-27.md#stack-images)** for Python,
+- **[Sandbox images](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#stack-images)** for Python,
   Go, Rust and the JVM, and `chalk init` that detects your stack.
-- **[chalk spec draft](designs/roadmap-2026-27.md#spec-draft)** to write
+- **[chalk spec draft](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#spec-draft)** to write
   checkpoints from a ticket.
-- **[GitHub and GitLab issues](designs/roadmap-2026-27.md#ticket-sources)**
+- **[GitHub and GitLab issues](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#ticket-sources)**
   as ticket sources for `chalk fleet`.
-- **[Bring your own decider](designs/roadmap-2026-27.md#bring-your-own-decider).** A
+- **[Bring your own decider](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#bring-your-own-decider).** A
   decider is a small, fast model that answers bounded questions such as
   "is this loop stuck?" so Chalk does not have to ask Claude. You will be
   able to run the local reference service or point Chalk at a hosted one.
@@ -75,13 +75,13 @@ Postgres 17 with pgvector and `chalk db upgrade`.
 
 ## Q3 2027: Beyond Claude Code, then 1.0 (v1.0)
 
-- **[Harness adapters](designs/roadmap-2026-27.md#harnesses).** Claude Code
+- **[Harness adapters](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#harnesses).** Claude Code
   becomes one adapter; Codex CLI is the first other one. The report card
   compares cost per finished checkpoint across harnesses.
-- **[Run in CI](designs/roadmap-2026-27.md#ci-mode).** Label an issue and
+- **[Run in CI](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#ci-mode).** Label an issue and
   get a pull request. Detention becomes a comment, and replying to it does
   what `chalk office-hours` does on your machine.
-- **[1.0 stability](designs/roadmap-2026-27.md#stability):** stable config
+- **[1.0 stability](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#stability):** stable config
   keys, interfaces, schemas and flags, with a deprecation policy and a
   migration guide.
 
@@ -119,6 +119,6 @@ Chalk collects no usage data today, and that stays the default.
 
 ## Backlog
 
-See the [backlog](designs/roadmap-2026-27.md#backlog) for what comes next
+See the [backlog](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#backlog) for what comes next
 when there is time: shared lessons, hooks and extra gates, Linux and
 Podman, budget alerts, and more.
