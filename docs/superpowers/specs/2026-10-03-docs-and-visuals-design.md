@@ -33,7 +33,7 @@ Success means:
 | Demo | A failure and recovery: detention, office hours, success. Recorded against the test fakes so it is free and repeatable |
 | Site generator | MkDocs with the Material theme |
 | Hosting | GitHub Pages at https://khalaharvi.github.io/chalk, deployed by Actions |
-| Source | Markdown in `docs/`; `docs/superpowers/` is excluded from the build |
+| Source | Markdown in `docs/`; `docs/superpowers/`, `docs/designs/` and `docs/specs/` are excluded from the build |
 | Diagrams | Mermaid, unstyled, so GitHub and Material each theme them for light and dark |
 
 Rejected: Mintlify (needs an account and a hosted service), plain `docs/`
@@ -143,7 +143,7 @@ docs/
   includes/abbreviations.md   Glossary terms as abbreviations, appended to every page
   stylesheets/extra.css       Palette tokens and fonts
   assets/                     banners, demo, report card images and fixture
-  superpowers/                Design notes, not published
+  superpowers/, designs/, specs/   Design notes and specs, not published
 mkdocs.yml
 ```
 
@@ -175,7 +175,7 @@ Three Mermaid diagrams, unstyled, each followed by a numbered prose version:
   toggle, `primary: custom` and `docs/stylesheets/extra.css`; navigation tabs;
   search; `pymdownx.superfences` with the Mermaid fence; `abbr` with
   `pymdownx.snippets` auto-appending `includes/abbreviations.md`;
-  `exclude_docs: superpowers/`; `strict: true`.
+  `exclude_docs` lists `superpowers/`, `designs/` and `specs/`; `strict: true`.
 - Courier Prime is self-hosted under `docs/assets/fonts/` (SIL Open Font
   License, licence file included).
 - `docs/requirements.txt` pins `mkdocs-material`.
