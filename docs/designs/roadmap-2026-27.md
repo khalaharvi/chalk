@@ -59,7 +59,8 @@ without updating the issues that link to them.
   confidence. "System 1" is the fast, intuitive half of Kahneman's
   thinking model; Claude is System 2.
 - **Hindsight:** an optional external lesson-memory server
-  (`CHALK_MEMORY=hindsight`), removed in Q1.
+  (`CHALK_MEMORY=hindsight`), removed in
+  [#55](https://github.com/khalaharvi/chalk/pull/55).
 - **Harness:** the coding-agent CLI that runs each loop. Today it is always
   Claude Code.
 
@@ -70,7 +71,7 @@ without updating the issues that link to them.
 2. **Rules before models; shadow before on.** Anything that can change a
    run's outcome ships in shadow mode first (see `CHALK_FP_RULES`). It is
    switched on only when the report card shows it pays.
-3. **Optional services never block a run.** When a decider, memory server or
+3. **Optional services never block a run.** When a decider or
    gateway is down or slow, the run behaves as if the feature were off.
 4. **Chalk collects no usage data.** Code goes only to the model provider
    the user configures. Anything else leaves the machine only when the user
@@ -79,7 +80,8 @@ without updating the issues that link to them.
    (`share/dashboard.sql`, `lib/dashboard.sh`).
 6. **House rules:** bash 5.3 on the host and 5.2 in the sandbox
    ([the bash style guide](../bash-style.md)), a fake in `tests/fakes/` for
-   every external program, and a unit test or e2e case (`tests/e2e.sh`)
+   every external service the harness drives (today `docker`, `claude`,
+   `gh`, `glab`, `curl`; not local tools such as `git` or `jq`), and a unit test or e2e case (`tests/e2e.sh`)
    with every behaviour change. `make check` and `make test-db` stay green.
 
 ## Milestones
@@ -193,7 +195,6 @@ the machine (the `runs` and `lessons` tables, and the run logs under
 - **The model provider** (Anthropic API, Bedrock, Vertex or a gateway), on
   every agent call: the prompt, the code the agent reads in the sandbox,
   and test output;
-- **a Hindsight server and its LLM**, while that backend exists;
 - **a hosted decider or an OpenTelemetry endpoint**, when the user
   configures one;
 - **the CI audit table** (`share/ci-audit-schema.sql`), when configured;
@@ -259,7 +260,8 @@ to tune the defaults.
 ### Recall
 
 Milestone v0.8 · [#11](https://github.com/khalaharvi/chalk/issues/11) ·
-Depends on nothing
+Depends on nothing · **Shipped on `main` in
+[#55](https://github.com/khalaharvi/chalk/pull/55)**, in the next release
 
 This is PR 2 of [the decider design](system-1-decider.md).
 

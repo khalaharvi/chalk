@@ -136,10 +136,12 @@ docs/
   develop/
     architecture.md           Components diagram; what each lib/*.sh file owns;
                               a run traced through the functions it calls
-    sandbox.md                Container layout, mounts, credentials, why the RAM disk
+    style.md                  From docs/bash-style.md: the bash conventions C1-C8
+    sandbox.md                Container layout, mounts, credentials, why the RAM disk;
+                              the security policy from SECURITY.md
     database.md               Tables, what is recorded per loop, the dashboard query
-    testing.md                make check, the fakes, adding an e2e case, test-db
-    releasing.md              release.sh, the release workflow, the tap, deploy key
+    testing.md                make check, the fakes, adding an e2e case, test-db;
+                              releasing: release.sh, the workflow, the tap, deploy key
   includes/abbreviations.md   Glossary terms as abbreviations, appended to every page
   stylesheets/extra.css       Palette tokens and fonts
   assets/                     banners, demo, report card images and fixture
@@ -152,8 +154,10 @@ more than five siblings.
 
 Content comes from the current README, CONTRIBUTING.md and the code. Every
 command, flag and config key is checked against `bin/chalk` and
-`share/templates/config`. `CONTRIBUTING.md` keeps the ground rules and links
-to `develop/` instead of repeating the layout table.
+`share/templates/config`. `CONTRIBUTING.md` keeps setup, the rules and the pull-request steps, and
+links to `develop/` instead of repeating the layout table. `bash-style.md`
+and `SECURITY.md` stay where they are for GitHub; their site pages include
+them, and their relative links become full GitHub URLs.
 
 ## Diagrams
 

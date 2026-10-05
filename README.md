@@ -328,24 +328,39 @@ make check    # shellcheck, convention lint, unit tests, end-to-end test with fa
 make test-db  # the end-to-end test with SQL run against a real Postgres (FAKE_PG_URL)
 ```
 
-Chalk is written for bash 5.3 on the host and 5.2 in the sandbox; see
-[docs/bash-style.md](docs/bash-style.md).
+The tests need bash 5.3 first on your `PATH`. Setup, prerequisites and how
+to open a pull request are in [CONTRIBUTING.md](CONTRIBUTING.md); the code
+conventions are in [docs/bash-style.md](docs/bash-style.md).
 
 ## Releasing
 
+From a clean `main`, with the new version (the current one is in
+`bin/chalk` as `CHALK_VERSION`):
+
 ```sh
-scripts/release.sh 0.5.0
+scripts/release.sh 0.7.0
 ```
 
-That runs the checks, sets the version, then tags and pushes. The pushed tag
-starts the release workflow, which runs the checks again, creates the GitHub
-Release, points the formula in
+The script refuses to run off `main`, with uncommitted changes, or when
+the tag already exists. It runs the checks, commits the version bump to
+`main`, then tags and pushes both.
+
+The pushed tag starts the release workflow. It checks that the tag matches
+`CHALK_VERSION`, runs the checks again, creates the GitHub Release, points
+the formula in
 [khalaharvi/homebrew-chalk](https://github.com/khalaharvi/homebrew-chalk) at
 the new tarball, and installs it from the tap on macOS to confirm it works.
+If the workflow fails after the push, fix the cause and re-run it from the
+Actions tab; the steps are safe to repeat.
 
-The workflow pushes to the tap with a deploy key stored in this repository's
-`TAP_DEPLOY_KEY` secret. To update the tap by hand instead, run
-`scripts/update-tap.sh 0.5.0 ../homebrew-chalk` from a clone of it.
+The workflow pushes to the tap with a deploy key stored in this
+repository's `TAP_DEPLOY_KEY` secret. To update the tap by hand instead,
+clone the tap next to this repository and run, from this repository's
+root:
+
+```sh
+scripts/update-tap.sh 0.7.0 ../homebrew-chalk
+```
 
 ## Contributing and security
 
