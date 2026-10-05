@@ -37,7 +37,8 @@ It shows:
 - whether the spec check and final review are earning their cost;
 - **Would stopping early have paid?**, the verdict ledger (below);
 - **Is the decider worth asking?**, once a [decider](#the-decider) has
-  been asked anything;
+  been asked anything, or while one is wanted (`CHALK_DECIDER` is not
+  `off`) but was asked nothing, to say why;
 - **Which tests keep failing?**: the tests that failed in the most loops,
   up to ten per repository, with how many loops and tickets they failed
   in. A test that fails loop after loop, or on more than one ticket, is
@@ -122,6 +123,15 @@ would have saved at least a fifth of their spend without progress, and
 there was at most one false stop, the notes recommend turning the rules
 on.
 
+**When it counts no run.** A stopping verdict judges only a loop that
+failed its rubric or passed without ticking a checkpoint. When no
+detained run had one, the ledger says so with the numbers instead of
+showing zeros, for example "No loop failed its rubric or passed without
+ticking a checkpoint in the last 30 days (85 loop(s)), so no verdict
+could stop a run; agents that could not progress reported a blocker
+instead (4 run(s))". Runs detained for a blocker are still counted
+apart below it.
+
 ### The decider
 
 A loop the rules call `spinning` or `other` is the gray zone the
@@ -134,7 +144,11 @@ threshold.
 The report card's "Is the decider worth asking?" section shows:
 
 - how many questions it was asked, how many it answered, and why the rest
-  got no answer (unreachable, timeout, used-up budget, refused token, …);
+  got no answer (unreachable, still starting, timeout, used-up budget,
+  refused token, …). When it was asked nothing, it says why instead,
+  as `chalk doctor` does: no loop failed its rubric, none of those that
+  did was `spinning` or `other`, or there are too few resolved lessons for
+  lesson rerank (see [When nothing is asked](../configuring/decider.md#when-nothing-is-asked));
 - its median time per answer, and the model and revision that answered;
 - how many answers acted (`on` only);
 - for shadow runs: how many a confident "stuck" would have stopped, what

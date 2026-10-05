@@ -191,6 +191,8 @@ case "$cmd" in
         *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;
         # FAKE_OPEN_MATCH=TICKET: an open lesson of TICKET has the same fingerprint.
         *"SELECT ticket FROM lessons"*) echo "${FAKE_OPEN_MATCH:-}" ;;
+        # db_decider_gate: no resolved lessons, and no embedding column.
+        *"FILTER (WHERE resolution IS NOT NULL)"*) echo "0 0" ;;
       esac
       exit 0
     fi

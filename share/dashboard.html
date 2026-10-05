@@ -304,9 +304,13 @@ const STOPS = {
 };
 
 // The verdict ledger: what CHALK_FP_RULES=on would have saved, and cost.
+// With no detained run to count, it says why (d.empty.ledger) instead of
+// showing zeros.
 function ledger(d) {
   const g = d.ledger;
-  if (!g || (!g.runs.length && !g.stopped_on)) return "";
+  if (!g) return "";
+  const why = !g.detained_runs && d.empty && d.empty.ledger;
+  if (!g.runs.length && !g.stopped_on && !why) return "";
   const stop = (v) => esc(STOPS[v] || v);
   const outcome = (x) => x.false_stop ? "Progressed after the stop"
     : x.converging ? "Detained while improving"
@@ -318,34 +322,42 @@ function ledger(d) {
     money(x.after_cost), x.decider_loop ? `Stuck, loop ${count(x.decider_loop)}` : "none",
     esc(outcome(x)), esc(localTime(x.last)),
   ]);
+  const counted = [
+    ["Detained runs with verdicts", count(g.detained_runs)],
+    ["Their spend with no progress", money(g.no_progress_cost)],
+    ["Stopping early would have saved", `${money(g.saved)} (${pct(share(g.saved, g.no_progress_cost))})`],
+    ["False stops", `${count(g.false_stops)}, before ${money(g.false_stop_cost)} that led to progress`],
+    ["Detained while still improving", count(g.converging)],
+  ];
+  const apart = [
+    ...(g.blocked_only ? [["Detained runs with only blockers or agent errors (not counted above)",
+      `${count(g.blocked_only)}, ${money(g.blocked_only_cost)} with no progress`]] : []),
+    ...(g.no_verdicts ? [["Detained runs with no verdicts, under CHALK_FP_RULES=off (not counted above)",
+      count(g.no_verdicts)]] : []),
+    ...(g.stopped_on ? [["Runs stopped early under CHALK_FP_RULES=on (not counted above)", count(g.stopped_on)]] : []),
+  ];
+  const marks = why ? (apart.length ? markList(apart) : "") : markList([...counted, ...apart]);
   return `<h2>Would stopping early have paid?</h2>
     <p>Each loop that makes no progress gets a verdict. With <code>CHALK_FP_RULES=on</code>, a run stops at its
        first repeated failure, unchanged tree, or failure that matches an open detention on another ticket.
        These are the runs where that would have made a difference. Only runs in shadow mode count: there,
        verdicts are only recorded. So do only runs with a loop the rules judge: a run whose loops all ended in
        a blocker or an agent error is counted apart, since no rule could have stopped it.</p>
-    ${markList([
-      ["Detained runs with verdicts", count(g.detained_runs)],
-      ["Their spend with no progress", money(g.no_progress_cost)],
-      ["Stopping early would have saved", `${money(g.saved)} (${pct(share(g.saved, g.no_progress_cost))})`],
-      ["False stops", `${count(g.false_stops)}, before ${money(g.false_stop_cost)} that led to progress`],
-      ["Detained while still improving", count(g.converging)],
-      ...(g.blocked_only ? [["Detained runs with only blockers or agent errors (not counted above)",
-        `${count(g.blocked_only)}, ${money(g.blocked_only_cost)} with no progress`]] : []),
-      ...(g.no_verdicts ? [["Detained runs with no verdicts, under CHALK_FP_RULES=off (not counted above)",
-        count(g.no_verdicts)]] : []),
-      ...(g.stopped_on ? [["Runs stopped early under CHALK_FP_RULES=on (not counted above)", count(g.stopped_on)]] : []),
-    ])}
+    ${why ? `<p class="muted">${esc(why)}</p>` : ""}
+    ${marks}
     ${verdicts.length ? "<h3>Savings by first stop</h3>" + table(["First stop", "Runs", "Would have saved"], verdicts) : ""}
     ${g.runs.length ? "<h3>Runs</h3>" + table(["Run", "Repository", "First stop", "Spend after it", "Decider", "Outcome", "Last activity"], runs, [0, 1, 2, 4, 5]) : ""}`;
 }
 
 // The decider: what it was asked, what it answered, and whether its answers
-// matched what happened next. Only shown once it has been asked something.
+// matched what happened next. Shown once it has been asked something, or
+// when it is wanted but was asked nothing, to say why (d.empty.decider)
+// instead of showing zeros.
 function decider(d) {
   const x = d.decider;
   const gates = (x && x.gate) || [];
-  if (!x || (!x.questions && !gates.length)) return "";
+  const why = x && !x.questions && d.empty && d.empty.decider;
+  if (!x || (!x.questions && !gates.length && !why)) return "";
   const rules = x.gate_rules || {};
   const gate = gates.map((g) => [
     `${esc(g.model || "unnamed model")}<br><span class="muted">${esc(g.url || "unrecorded URL")}</span>`,
@@ -365,7 +377,7 @@ function decider(d) {
   return `<h2>Is the decider worth asking?</h2>
     <p>The decider answers the questions the verdicts cannot settle. In shadow mode it only records; with
        <code>CHALK_DECIDER=on</code> it acts on answers at its threshold or above.</p>
-    ${markList([
+    ${!x.questions ? `<p class="muted">${esc(why || "No questions in this period.")}</p>` : `${markList([
       ["Questions asked", count(x.questions)],
       ["Answered", `${count(x.answered)}${errors ? `; no answer: ${errors}` : ""}`],
       ["Median time per answer", x.median_ms === null ? "none" : `${Math.round(x.median_ms)} ms`],
@@ -375,7 +387,7 @@ function decider(d) {
       ["False stops (progress after a confident “stuck”)", count(x.false_stops)],
       ...(x.models.length ? [["Models", x.models.map(esc).join(", ")]] : []),
     ])}
-    ${table(["Question", "Asked", "Answered", "Acted on"], byKind, [0])}
+    ${table(["Question", "Asked", "Answered", "Acted on"], byKind, [0])}`}
     ${calibration.length ? `<h3>Were confident answers right?</h3>
       <p class="muted">Stuck answers in shadow mode, by confidence, once the run showed the answer: a "yes"
          is right when no later loop progressed, a "no" when one did. Answers at 0.9 or more should be right

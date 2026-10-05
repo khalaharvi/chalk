@@ -88,25 +88,42 @@ run_claim() {
 }
 
 # run_start_services: starts the telemetry database and the sandbox image
-# side by side. Either failing stops the run. The local decider, when it
-# is installed and wanted, is started too, but never waited for: until it
-# answers, loops go on without it.
+# side by side. Either failing stops the run. Then the local decider
+# (run_start_decider).
 run_start_services() {
   local -A started
   local name failed=""
   jobs_init "$RUN_IO/startup"
   decider_gate
-  if [[ $CHALK_DECIDER != off ]] && decider_autostart_ok; then
-    jobs_detach "$RUN_IO/startup/decider.log" decider_start_once
-  fi
   jobs_spawn database db_up
   jobs_spawn image sandbox_ensure_image
-  jobs_wait started && return 0
+  if jobs_wait started; then
+    run_start_decider
+    return 0
+  fi
 
   for name in "${!started[@]}"; do
     (( started[$name] == 0 )) || failed+=" $name"
   done
   [[ -z $failed ]] || die "could not start:$failed (see $RUN_IO/startup)"
+}
+
+# run_start_decider: the local decider, when it is installed and wanted, is
+# started in the background and never waited for: until it answers, loops
+# go on without it. It holds several GB, so it is started only once it can
+# be asked something: here when lesson rerank can be, from the first
+# loop's prompt on; otherwise by the first loop that fails its rubric
+# (cmd_run), since the stuck question needs a failed loop before it.
+run_start_decider() {
+  local have
+  [[ $CHALK_DECIDER != off ]] && decider_local && decider_installed || return 0
+  have="${| decider_lessons; }"
+  if [[ -n $have ]] && (( have >= CHALK_DECIDER_MIN_LESSONS )); then
+    decider_start_bg "$RUN_IO/startup/decider.log" || true
+  elif [[ -z ${| decider_pid decider; } ]]; then
+    have="${have:+this machine has $have}"
+    run_log "the local decider starts once a loop fails its rubric: until then it cannot be asked anything (lesson rerank needs $CHALK_DECIDER_MIN_LESSONS resolved lessons, ${have:-and the database did not say how many there are})"
+  fi
 }
 
 # run_open_sandbox: starts the services this run needs, then its sandbox
@@ -507,7 +524,7 @@ cmd_run() {
       die "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
   fi
 
-  local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended
+  local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke=""
   local open remaining result agent_status rubric_exit progressed output stuck key
   local -a lesson
   local -A usage fp base recall=()
@@ -589,6 +606,16 @@ cmd_run() {
     base=()
     for key in "${!RUN_FP_BASE[@]}"; do base[$key]="${RUN_FP_BASE[$key]}"; done
     run_verdict fp "$ended"
+
+    # A stuck question can follow from the next loop on, so the local
+    # decider starts now if it is not running (run_start_decider). Logged
+    # once a run; decider_start_once's lock keeps a start that is still
+    # loading from being joined by a second copy.
+    if [[ $ended == failed && $CHALK_FP_RULES != off ]] &&
+       decider_start_bg "$RUN_IO/startup/decider.log" && [[ -z $woke ]]; then
+      woke=1
+      run_log "loop $RUN_LOOP failed its rubric: starting the local decider for the stuck question"
+    fi
 
     # The gray zone: a failed loop the rules call spinning or other is put
     # to the decider. Only with fingerprints (not CHALK_FP_RULES=off).

@@ -1294,6 +1294,47 @@ if [ -n "${FAKE_PG_URL:-}" ]; then
   check "doctor: at a threshold it said nothing at, it is not calibrated, and the lowest that would pass is named" \
     grep -q '^  --    decider calibration: fake-decider at http://decider.test is not calibrated yet: 0 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.99; it needs 90% right over at least 20; it would be at CHALK_DECIDER_THRESHOLD=0.6; until it is, CHALK_DECIDER=on records in shadow mode only' \
       "$tmp/doctor-cal.log"
+  check "doctor: how many questions the decider was asked lately" \
+    grep -Eq '^  ok    decider asked [1-9][0-9]* question\(s\) in the last 30 days$' "$tmp/doctor-cal.log"
+
+  # Asked nothing (#85): every loop kept its rubric green, and the agent
+  # that could not progress reported a blocker. doctor, chalk decider
+  # status and the report card say why, rather than show zeros. In a schema
+  # of its own: four loops, one of them blocked, and four resolved lessons.
+  quiet_pg() { PGOPTIONS='-c search_path=chalk_quiet,public -c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
+  quiet_pg -c 'DROP SCHEMA IF EXISTS chalk_quiet CASCADE' -c 'CREATE SCHEMA chalk_quiet'
+  quiet_pg -f "$here/../share/schema.sql"
+  quiet_pg <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict, fp_rules)
+SELECT 'quiet', t, 'chalk/' || t, n, 'continue', s, 0, s = 'ok', 'm', 'p', 0.1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+       t || '-1', CASE WHEN s = 'ok' THEN NULL ELSE 'blocked' END, 'shadow'
+  FROM (VALUES ('Q-1', 1, 'ok'), ('Q-1', 2, 'ok'), ('Q-2', 1, 'ok'), ('Q-3', 1, 'blocked')) v(t, n, s);
+INSERT INTO lessons (repo, ticket, signature, run_id) VALUES ('quiet', 'Q-3', 'agent reported a blocker', 'Q-3-1');
+INSERT INTO lessons (repo, ticket, signature, resolution, lesson, resolved_by, resolved_at)
+SELECT 'quiet', 'OLD-' || i, 's', 'note', 'fix', 'e2e', now() FROM generate_series(1, 4) i;
+SQL
+  why="the stuck question is asked only after a loop fails its rubric, and 0 of 4 loops did (1 run(s) ended in a blocker instead); lesson rerank needs 30 resolved lessons, this machine has 4"
+  export PGOPTIONS='-c search_path=chalk_quiet,public -c client_min_messages=warning'
+  CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test chalk doctor > "$tmp/doctor-quiet.log" 2>&1 || true
+  CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test chalk decider status > "$tmp/status-quiet.log" 2>&1 ||
+    { cat "$tmp/status-quiet.log"; fail "chalk decider status"; }
+  CHALK_DECIDER=shadow chalk dashboard --no-open --days 30 --output "$tmp/quiet.html" >/dev/null
+  CHALK_DECIDER=off chalk dashboard --no-open --days 30 --output "$tmp/quiet-off.html" >/dev/null
+  export PGOPTIONS="${e2e_pgoptions:-}"
+  sed -n '/^const DATA =$/{n;p;}' "$tmp/quiet.html" > "$tmp/quiet.json"
+  sed -n '/^const DATA =$/{n;p;}' "$tmp/quiet-off.html" > "$tmp/quiet-off.json"
+  check "doctor: a decider asked nothing says why, with the numbers" \
+    grep -qxF "  --    decider asked 0 questions in the last 30 days: $why" "$tmp/doctor-quiet.log"
+  check "chalk decider status: the same" grep -qxF "questions: 0 in the last 30 days: $why" "$tmp/status-quiet.log"
+  check "report card: the decider panel says why it is empty" \
+    test "$(jq -r .empty.decider "$tmp/quiet.json")" = "0 questions in the last 30 days: $why."
+  check "report card: ... only when the decider is wanted" test "$(jq -r .empty.decider "$tmp/quiet-off.json")" = ""
+  check "report card: the verdict ledger says why it counts no run" \
+    test "$(jq -r .empty.ledger "$tmp/quiet.json")" = "No loop failed its rubric or passed without ticking a checkpoint in the last 30 days (4 loop(s)), so no verdict could stop a run; agents that could not progress reported a blocker instead (1 run(s))."
+  check "report card: ... next to the blocked run it counts apart" test "$(jq -r .ledger.blocked_only "$tmp/quiet.json")" = 1
+  quiet_pg -c 'DROP SCHEMA chalk_quiet CASCADE'
 fi
 
 # The local service: a run does not start one that `chalk decider up` never
@@ -1326,6 +1367,67 @@ if CHALK_DECIDER_URL=http://decider.test chalk decider up > "$tmp/decider-up.log
 fi
 check "chalk decider up manages only the local service, and installs nothing for another" \
   sh -c "grep -q \"manages only the local service\" '$tmp/decider-up.log' && ! grep -q installing '$tmp/decider-up.log'"
+
+# Installed, a run starts the local service only once it can be asked
+# something (#85): it holds several GB. Stand-ins for what `chalk decider
+# up` leaves: strands-decider and chalk-embed, each recording that it
+# started in $tmp/local-started; the fake curl answers for them.
+mkdir -p "$tmp/uvbin" "$tmp/uvfake"
+cat > "$tmp/uvbin/strands-decider" <<STUB
+#!/usr/bin/env bash
+echo decider >> "$tmp/local-started"
+exec sleep 60
+STUB
+cat > "$tmp/uvfake/uv" <<STUB
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "tool dir") echo "$tmp/uvbin" ;;
+  "run --script")
+    while [ \$# -gt 0 ]; do [ "\$1" = --pidfile ] && echo "\$\$" > "\$2"; shift; done
+    echo embed >> "$tmp/local-started"
+    exec sleep 60 ;;
+esac
+STUB
+chmod +x "$tmp/uvbin/strands-decider" "$tmp/uvfake/uv"
+printf 'decider_model=StrandsAgents/strands-decider-2B-hobson-v19@0123456789abcdef\nbench_ms=100\n' \
+  > "$XDG_STATE_HOME/chalk/decider/installed"
+local_started() { grep -c '^decider' "$tmp/local-started" 2>/dev/null || true; }
+local_run() {
+  : > "$tmp/local-started"
+  PATH="$tmp/uvfake:$PATH" decider_run "$@" CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://127.0.0.1:8471 \
+    FAKE_DECIDER_ANSWERS="stuck=0.97"
+  for _ in $(seq 1 50); do [ "$(local_started)" -ge 1 ] && break; sleep 0.1; done
+}
+
+# Fewer resolved lessons than CHALK_DECIDER_MIN_LESSONS, so no lesson
+# rerank; every loop passes, so no stuck question: nothing starts it.
+local_run PROJ-64 FAKE_CLAUDE_MODE= CHALK_DECIDER_MIN_LESSONS=1000
+check "too few lessons and no failed loop: a run never starts the local decider" \
+  sh -c "grep -q 'final review: pass' '$tmp/PROJ-64.log' && test \"\$(grep -c . '$tmp/local-started')\" -eq 0"
+check "... and says when it will" \
+  grep -q '\[PROJ-64\] the local decider starts once a loop fails its rubric: until then it cannot be asked anything (lesson rerank needs 1000 resolved lessons, this machine has [0-9]*)' \
+    "$tmp/PROJ-64.log"
+
+# A loop fails: that starts it, once, in time for the next loop's question.
+local_run PROJ-65 CHALK_DECIDER_MIN_LESSONS=1000
+check "a run whose loop fails its rubric starts the local decider then" \
+  sh -c "test $(local_started) -eq 1 &&
+    awk '/loop 1 failed its rubric: starting the local decider for the stuck question/ { s = NR }
+         /loop 2 \(retry\) started/ { l = NR } END { exit !(s && l && s < l) }' '$tmp/PROJ-65.log'"
+check "... once, however many loops fail" \
+  test "$(grep -c 'starting the local decider' "$tmp/PROJ-65.log")" -eq 1
+check "... and the next loops' stuck questions are answered" \
+  test "$(grep -o '"kind":"stuck","question":"[^"]*","answer":"yes"' "$tmp/PROJ-65.db" | wc -l)" -eq 2
+chalk decider down >/dev/null 2>&1
+
+# Enough lessons for rerank, which the first loop's prompt asks: a run
+# starts it at run start, as before, though no loop fails.
+local_run PROJ-66 FAKE_CLAUDE_MODE= CHALK_DECIDER_MIN_LESSONS=0
+check "enough lessons for lesson rerank: a run starts the local decider at run start" \
+  sh -c "test $(local_started) -eq 1 && test -e '$XDG_STATE_HOME/chalk/demo/runs/PROJ-66/io/startup/decider.log' &&
+    ! grep -q 'starts once a loop fails' '$tmp/PROJ-66.log'"
+chalk decider down >/dev/null 2>&1
+rm -f "$XDG_STATE_HOME/chalk/decider/installed"
 cd "$tmp/demo"
 
 # 4b. Against a real Postgres: a resolved lesson that matches the failure

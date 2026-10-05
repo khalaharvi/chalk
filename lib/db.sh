@@ -286,6 +286,37 @@ SELECT count(*) FILTER (WHERE resolution IS NOT NULL),
 SQL
 }
 
+# db_decider_reach DAYS: prints, as one JSON object, what could have put a
+# question to the decider in the last DAYS days, so that an empty record
+# can say why (decider_quiet_note): its loops (continue, retry and
+# fix-review calls); failed, those whose rubric failed after the agent
+# finished; gray, the failed ones the verdicts call spinning or other,
+# which get the stuck question; unticked, those whose rubric passed with
+# no checkpoint ticked; blocked_runs, the runs whose agent reported a
+# blocker; questions, the decider's recorded questions; and lessons, the
+# resolved lessons, of every period, that lesson rerank waits for.
+db_decider_reach() {
+  db_sql -v days="$1" <<'SQL'
+WITH l AS (
+  SELECT * FROM runs
+   WHERE kind IN ('continue', 'retry', 'fix-review')
+     AND created_at >= now() - make_interval(days => :'days'::int)
+)
+SELECT json_build_object(
+  'days', :'days'::int,
+  'loops', (SELECT count(*) FROM l),
+  'failed', (SELECT count(*) FROM l WHERE rubric_exit <> 0 AND agent_status = 'ok'),
+  'gray', (SELECT count(*) FROM l
+            WHERE rubric_exit <> 0 AND agent_status = 'ok' AND verdict IN ('spinning', 'other')),
+  'unticked', (SELECT count(*) FROM l WHERE rubric_exit = 0 AND agent_status = 'ok' AND NOT progressed),
+  'blocked_runs', (SELECT count(DISTINCT coalesce(run_id, repo || ' ' || ticket)) FROM l
+                    WHERE agent_status = 'blocked'),
+  'questions', (SELECT count(*) FROM decisions
+                 WHERE created_at >= now() - make_interval(days => :'days'::int)),
+  'lessons', (SELECT count(*) FROM lessons WHERE resolution IS NOT NULL));
+SQL
+}
+
 # db_recall_shortlist REPO MODE QUERY FINGERPRINT FIRST_ERROR QVEC SIZE:
 # prints, as one JSON array, what the decider reranks: every exact match
 # (exact: true), then up to SIZE other lessons, lexical matches first (the

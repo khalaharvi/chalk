@@ -156,6 +156,7 @@ goes on exactly as with `CHALK_DECIDER=off`:
 | What happened | Chalk records | Says so |
 | :-- | :-- | :-- |
 | Could not connect | `unreachable` | no; the decider may simply not be running |
+| Could not connect to the local service while it loads its model | `starting` | no |
 | No full answer within the time left | `timeout` | no |
 | The loop's time was already used up | `budget`, and sends nothing | no |
 | The local service was answering other loops for longer than this one could wait | `busy`, and sends nothing | no |

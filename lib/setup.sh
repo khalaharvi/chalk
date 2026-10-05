@@ -80,6 +80,20 @@ doctor_decider_calibration() {
   esac
 }
 
+# How many questions the decider was asked lately and, when none, why
+# (decider_quiet_note). Nothing without the database.
+doctor_decider_questions() {
+  local reach questions days="$DECIDER_REACH_DAYS"
+  reach="${| decider_reach; }"
+  [[ -n $reach ]] || return 0
+  questions="$(jq -r .questions <<<"$reach")"
+  if [[ $questions != 0 ]]; then
+    doctor_check optional "decider asked $questions question(s) in the last $days days" "" true
+  else
+    doctor_check optional "decider asked 0 questions in the last $days days" "${| decider_quiet_note "$reach"; }" false
+  fi
+}
+
 # The decider, all optional: uv, the service, the models and the revisions
 # `chalk decider up` resolved, its measured time per decision, and whether
 # a run may start it.
@@ -108,6 +122,7 @@ doctor_decider() {
       "not answering GET /health, nor a question without it; runs go on without it" \
       decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN
     doctor_decider_calibration
+    doctor_decider_questions
     return 0
   fi
   decider_info got
@@ -122,7 +137,7 @@ doctor_decider() {
   fi
   doctor_check optional "decider base model ${got[base_model]-?}" "" true
   doctor_check optional "embedding model ${got[embed_model]-?}" "" true
-  doctor_check optional "local decider running" "stopped; the next run starts it, or: chalk decider up" \
+  doctor_check optional "local decider running" "stopped; a run starts it once it can ask it something, or: chalk decider up" \
     decider_healthy "$DECIDER_LOCAL_URL"
   slow="${| decider_slow; }"
   if [[ -n $slow ]]; then
@@ -132,6 +147,7 @@ doctor_decider() {
     doctor_check optional "decider takes ${got[bench_ms]:-?} ms per decision (measured by chalk decider up)" "" true
   fi
   doctor_decider_calibration
+  doctor_decider_questions
   free="${| decider_headroom; }"
   if [[ $CHALK_DECIDER != on && -n $free ]] && (( free < DECIDER_HEADROOM_MB )); then
     doctor_check optional "memory beside Docker for the decider: $free MiB" \
