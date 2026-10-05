@@ -3,6 +3,7 @@
 
 # The host profile, filled once per process by system_profile:
 #   os             darwin | linux | ...
+#   arch           arm64 | x86_64 | ... (uname -m)
 #   cores          host CPUs online
 #   ram_mb         host memory, MiB
 #   docker_mem_mb  memory of the Docker VM or host, MiB
@@ -19,6 +20,8 @@ system_profile() {
   local value mem cpus
   value="$(uname -s 2>/dev/null || true)"
   [[ -z $value ]] || SYS[os]="${value@L}"
+  value="$(uname -m 2>/dev/null || true)"
+  [[ -z $value ]] || SYS[arch]="$value"
 
   value="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
   [[ ! $value =~ ^[1-9][0-9]*$ ]] || SYS[cores]="$value"

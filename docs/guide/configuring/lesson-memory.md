@@ -53,11 +53,14 @@ gets two more steps:
   (`BAAI/bge-small-en-v1.5`, from the local `chalk-embed`), with a
   similarity of at least 0.7. This needs Postgres 17 with pgvector; a
   Postgres 16 database skips it.
-- **The decider's choice:** up to 8 candidates, the similar errors first
+- **The decider's choice:** up to 5 candidates, the similar errors first
   and then those with the same meaning, go to the decider in one request,
   one yes-or-no question each: does this lesson apply? Those it answers
   yes at `CHALK_DECIDER_THRESHOLD` or above are kept, most confident
-  first.
+  first. The request is held to 4,000 characters, about 1,300 tokens, so
+  that it answers within the loop's
+  [2-second budget](decider.md#time): the current failure gets up to
+  1,500 of them, and each lesson's failure and fix share the rest.
 
 The same failure always comes first and is never dropped, and a loop
 still gets at most three lessons. In `shadow` mode the two new steps only

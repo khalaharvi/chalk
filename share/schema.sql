@@ -114,8 +114,8 @@ ALTER TABLE lessons ADD COLUMN IF NOT EXISTS scope TEXT;
 --   kind        stuck (is the loop stuck on the same root cause?) | rerank
 --               (does a lesson apply?)
 --   answer      yes | no; NULL when there was no answer, and error says why
---               (unreachable | timeout | budget | auth | rejected | server |
---               invalid | version)
+--               (unreachable | timeout | budget | busy | auth | rejected |
+--               server | invalid | version)
 --   confidence  0 to 1; threshold is CHALK_DECIDER_THRESHOLD when asked
 --   mode        shadow | on, as the decision was taken: on is held to
 --               shadow on a machine too slow for it

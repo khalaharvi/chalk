@@ -291,7 +291,8 @@ SQL
 # (exact: true), then up to SIZE other lessons, lexical matches first (the
 # same rules as db_recall_lessons), then semantic ones. Each has its id,
 # the markdown line memory_recall would print (line), and the failure and
-# fix the decider reads (text).
+# fix the decider reads (failure, fix), each at most 400 characters, which
+# decider_recall may trim further to fit DECIDER_RERANK_CHARS.
 #   semantic  only with QVEC, the query's embedding (Postgres 17): the
 #             nearest resolved lessons by cosine distance, `<=>`, which the
 #             HNSW index (vector_cosine_ops) serves, with a similarity of at
@@ -337,8 +338,8 @@ SELECT coalesce(json_agg(json_build_object(
          'id', l.id, 'exact', s.exact, 'step', s.step,
          'line', '- Seen before: ' || left(regexp_replace(l.signature, '\s+', ' ', 'g'), 240)
                  || E'\n  Fix: ' || coalesce(l.lesson, l.resolution),
-         'text', 'Past failure: ' || left(regexp_replace(coalesce(nullif(l.first_error, ''), l.signature), '\s+', ' ', 'g'), 400)
-                 || E'\nIts fix: ' || left(coalesce(l.lesson, l.resolution), 400))
+         'failure', left(regexp_replace(coalesce(nullif(l.first_error, ''), l.signature), '\s+', ' ', 'g'), 400),
+         'fix', left(coalesce(l.lesson, l.resolution), 400))
          ORDER BY s.step, s.rank_score DESC, l.id DESC), '[]')
   FROM (SELECT * FROM shortlist WHERE exact
         UNION ALL

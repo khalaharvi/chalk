@@ -21,7 +21,9 @@
 #   FAKE_DECIDER_TOKEN     the bearer token the decider requires (401 without)
 #   FAKE_EMBED_INDEX       the vectors are one-hot at this index (default 0)
 # Requests to the fake decider are kept in $FAKE_STATE/decider.log as
-# "max-time=T auth=yes|no" plus the request, never the token itself.
+# "max-time=T auth=yes|no" plus the request, never the token itself. A
+# request that arrives while another is being answered adds a line to
+# $FAKE_STATE/overlaps: the real strands-decider aborts on one (on MPS).
 set -euo pipefail
 
 url="" out="" format="" max_time="" data="" headers=()
@@ -63,7 +65,12 @@ path="/${url#*://*/}"
 case "$path" in
   /v1/systemone)
     printf 'max-time=%s auth=%s\n%s\n' "${max_time:-none}" "$([ -n "$auth" ] && echo yes || echo no)" "$body" \
-      >> "$FAKE_STATE/decider.log" ;;
+      >> "$FAKE_STATE/decider.log"
+    if mkdir "$FAKE_STATE/answering" 2>/dev/null; then
+      trap 'rmdir "$FAKE_STATE/answering"' EXIT
+    else
+      echo overlap >> "$FAKE_STATE/overlaps"
+    fi ;;
   /v1/embeddings|/health) ;;
   *) echo '{}'; exit 0 ;;
 esac
