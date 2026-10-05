@@ -2,7 +2,7 @@
 # chalk: sandboxed, budget-capped Claude Code agent harness for GitHub and GitLab repos.
 set -euo pipefail
 
-CHALK_VERSION="0.6.0"
+CHALK_VERSION="0.7.0"
 
 if [ -z "${CHALK_HOME:-}" ]; then
   src="${BASH_SOURCE[0]}"

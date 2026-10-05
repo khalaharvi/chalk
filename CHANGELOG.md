@@ -5,6 +5,37 @@ Conventional Commits titles merged since the previous release (see
 [CONTRIBUTING.md](CONTRIBUTING.md#commit-titles)). Releases before 0.7.0 were
 written by hand.
 
+## 0.7.0 (2026-10-04)
+
+### Features
+
+- **doctor:** say which account agent calls bill, and flag an API key that overrides a Claude plan ([#72](https://github.com/khalaharvi/chalk/pull/72))
+- **fingerprint:** read go test -json and jest --json reports and list the tests that keep failing ([#59](https://github.com/khalaharvi/chalk/pull/59))
+
+### Fixes
+
+- **ci:** run the CI rubric with bash and document custom stack images ([#74](https://github.com/khalaharvi/chalk/pull/74))
+- **prompts:** scope distilled lessons to their evidence and fail checkpoints that cannot pass alone ([#73](https://github.com/khalaharvi/chalk/pull/73))
+- **run:** show costs in dollars and cents in logs, requests and chalk status ([#69](https://github.com/khalaharvi/chalk/pull/69))
+- **db:** test a real Postgres 16 to 17 upgrade in CI and tighten the ledger, warning and locks ([#61](https://github.com/khalaharvi/chalk/pull/61))
+
+### Documentation
+
+- explain using a Claude subscription instead of an API key ([#71](https://github.com/khalaharvi/chalk/pull/71))
+- lead the README with an annotated run and a drawn run diagram ([#70](https://github.com/khalaharvi/chalk/pull/70))
+- add the docs site, demo and README visuals ([#62](https://github.com/khalaharvi/chalk/pull/62))
+
+### Other changes
+
+- Give same-second detentions of one ticket their own branch
+- Check auto mode in chalk doctor and say what to do after a detention
+- Test the SQL against Postgres 17 with pgvector
+- Drop the memory server from the docs now that Hindsight is gone
+- Fix the developer docs after an Impeccable review
+- Recall lessons by fingerprint and remove Hindsight
+- Keep design notes and specs off the docs site
+- Add the roadmap for October 2026 to September 2027
+
 ## 0.6.0 (2026-10-04)
 
 ### Features
