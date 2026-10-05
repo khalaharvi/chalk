@@ -298,16 +298,36 @@ decider_slow() {
   fi
 }
 
-# decider_mode -> REPLY: the mode decisions are taken in: CHALK_DECIDER,
-# except that `on` is held to shadow on a machine where the local service
-# measured slower than DECIDER_SLOW_MS (maintainer's decision on #34).
-decider_mode() {
+# decider_hold -> REPLY: why CHALK_DECIDER=on may not act yet, and so is
+# held to shadow; empty when it may act. Two reasons, in this order: the
+# local service measured slower than DECIDER_SLOW_MS on this machine
+# (maintainer's decision on #34), or the decider is not calibrated
+# (decider_calibration, #36).
+decider_hold() {
   local slow
+  local -A cal
+  REPLY=""
+  slow="${| decider_slow; }"
+  if [[ -n $slow ]]; then
+    REPLY="the local decider took ${slow} ms per decision when measured (over ${DECIDER_SLOW_MS} ms); it records in shadow mode only on this machine (see: chalk doctor)"
+    return 0
+  fi
+  decider_calibration cal
+  [[ ${cal[status]} != calibrated ]] || return 0
+  REPLY="CHALK_DECIDER=on records in shadow mode only: ${| decider_calibration_note cal; } (see: chalk doctor)"
+}
+
+# decider_mode -> REPLY: the mode decisions are taken in: CHALK_DECIDER,
+# except that `on` is held to shadow for as long as decider_hold gives a
+# reason. The reason is said once per run, and not after a call that got
+# no answer: a decider that is down stays quiet.
+decider_mode() {
+  local why
   REPLY="${CHALK_DECIDER:-off}"
   [[ $REPLY == on ]] || return 0
-  slow="${| decider_slow; }"
-  [[ -n $slow ]] || { REPLY=on; return 0; }
-  decider_warn_once slow "the local decider took ${slow} ms per decision when measured (over ${DECIDER_SLOW_MS} ms); it records in shadow mode only on this machine (see: chalk doctor)"
+  why="${| decider_hold; }"
+  [[ -n $why ]] || { REPLY=on; return 0; }
+  if [[ -z $DECIDER_ERROR ]]; then decider_warn_once "hold: $why" "$why"; fi
   REPLY=shadow
 }
 
@@ -532,13 +552,13 @@ decider_record() {
   jq -cn --arg kind "$1" --arg question "$2" --arg answer "$3" --arg confidence "$confidence" \
      --arg acted "$5" --arg lesson "${6:-}" --arg mode "${| decider_mode; }" \
      --arg threshold "$CHALK_DECIDER_THRESHOLD" --arg ms "$DECIDER_MS" \
-     --arg model "$DECIDER_ANSWERED_BY" --arg error "$DECIDER_ERROR" '
+     --arg model "$DECIDER_ANSWERED_BY" --arg error "$DECIDER_ERROR" --arg url "${| decider_url; }" '
     def num: if . == "" then null else tonumber end;
     {kind: $kind, question: $question, answer: ($answer | if . == "" then null else . end),
      confidence: ($confidence | num), threshold: ($threshold | num), mode: $mode,
      latency_ms: ($ms | num), acted: ($acted == "true"), lesson_id: ($lesson | num),
      model: ($model | if . == "" then null else . end),
-     error: ($error | if . == "" then null else . end)}' >> "$RUN_IO/decisions.jsonl"
+     error: ($error | if . == "" then null else . end), url: $url}' >> "$RUN_IO/decisions.jsonl"
 }
 
 # decider_flush: stores the current loop's decisions with its call (the
@@ -548,6 +568,145 @@ decider_flush() {
   [[ -s $file ]] || return 0
   db_record_decisions "$(jq -cs . "$file")" 2>/dev/null || warn "could not record this loop's decider answers"
   rm -f "$file"
+}
+
+# ---------------------------------------------------------------- the calibration gate
+
+# "Act at 0.9 or above" is safe only if answers at 0.9 are right about nine
+# times in ten, and that is shown per provider, not assumed (#36). A
+# provider is a decider URL and the model that answered there, with its
+# revision: a new revision is a new provider, and starts again in shadow.
+# Under CHALK_DECIDER=on a run stops at its first confident "stuck", so a
+# provider is judged by what that answer would have done in each shadow run
+# (db_decider_calibration): right when the run went on to be detained with
+# no progress after it, a false stop when a later loop progressed. It may
+# act once, at the current CHALK_DECIDER_THRESHOLD, at least
+# DECIDER_CALIBRATION_RUNS runs are judged and at least
+# DECIDER_CALIBRATION_PERCENT of them were right.
+#
+# 90%: what a 0.9 threshold promises, and the bar the report card set from
+# the start ("right about nine times in ten"). 20 runs: the sample the
+# verdict ledger asks before CHALK_FP_RULES=on (docs/designs/
+# system-1-decider.md), so both ways of stopping a run early clear the same
+# evidence; at 20 it allows two false stops, and a false stop costs a
+# detention an engineer resolves, never a wrong change. Counting runs, not
+# answers, keeps one run that is asked loop after loop from filling the
+# sample alone. These are constants, not settings: a repository's config
+# cannot lower the bar for acting on the decider.
+#
+# The gate holds `on` as a whole, the lesson rerank too: the stuck question
+# is the one whose answers the runs later prove right or wrong.
+DECIDER_CALIBRATION_RUNS=20
+DECIDER_CALIBRATION_PERCENT=90
+
+# What db_decider_calibration gave, read once per process: the gate is
+# judged once per run. DECIDER_CALIBRATION_READ is 1 once it was asked;
+# DECIDER_CALIBRATION_DATA stays empty when the database did not answer.
+DECIDER_CALIBRATION_READ=0
+DECIDER_CALIBRATION_DATA=""
+
+# decider_url -> REPLY: CHALK_DECIDER_URL as decisions record it: without a
+# trailing slash or any user:password@.
+decider_url() {
+  REPLY="${CHALK_DECIDER_URL%/}"
+  if [[ $REPLY =~ ^([a-z]+://)[^/@]*@(.*)$ ]]; then REPLY="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; fi
+}
+
+# decider_calibration_data -> REPLY: db_decider_calibration's JSON, read
+# once per process; empty when the database could not give it.
+decider_calibration_data() {
+  if (( ! DECIDER_CALIBRATION_READ )); then
+    DECIDER_CALIBRATION_READ=1
+    DECIDER_CALIBRATION_DATA="$(db_decider_calibration 2>/dev/null || true)"
+    jq -e 'type == "array"' >/dev/null 2>&1 <<<"$DECIDER_CALIBRATION_DATA" || DECIDER_CALIBRATION_DATA=""
+  fi
+  REPLY="$DECIDER_CALIBRATION_DATA"
+}
+
+# decider_calibration_judge DATA -> REPLY: every provider of DATA (as
+# db_decider_calibration prints it) judged at CHALK_DECIDER_THRESHOLD, as
+# one JSON array: url, model and last; at the threshold, judged, correct
+# and waiting; calibrated; and suggested, the lowest threshold at which it
+# would be calibrated, or null. The one place the gate is decided, for
+# runs, doctor, status and the report card alike.
+decider_calibration_judge() {
+  REPLY="$(jq -c --arg t "$CHALK_DECIDER_THRESHOLD" --argjson runs "$DECIDER_CALIBRATION_RUNS" \
+             --argjson pct "$DECIDER_CALIBRATION_PERCENT" '
+    def passes: .judged >= $runs and .correct * 100 >= $pct * .judged;
+    ($t | tonumber) as $t
+    | [.[] | ((.levels | map(select(.t >= $t)) | first) // {judged: 0, correct: 0, waiting: 0}) as $at
+       | {url, model, last, judged: $at.judged, correct: $at.correct, waiting: $at.waiting,
+          calibrated: ($at | passes),
+          suggested: ([.levels[] | select(passes) | .t] | min)}]' <<<"${1:-[]}" 2>/dev/null || echo '[]')"
+}
+
+# decider_provider_model DATA -> REPLY: the model the gate judges the
+# decider at CHALK_DECIDER_URL by: the one that just answered; before any
+# answer, the latest one recorded there in DATA, and for the local service
+# the latest of the revision `chalk decider up` installed, which is new
+# when none is recorded.
+decider_provider_model() {
+  local url rev=""
+  local -A got
+  REPLY="$DECIDER_ANSWERED_BY"
+  [[ -z $REPLY ]] || return 0
+  url="${| decider_url; }"
+  if decider_local; then
+    decider_info got
+    if [[ ${got[decider_model]-} == *@* ]]; then
+      rev="${got[decider_model]##*@}"
+      rev="${rev:0:7}"
+    fi
+  fi
+  REPLY="$(jq -r --arg url "$url" --arg rev "$rev" '
+    [.[] | select(.url == $url and ($rev == "" or (.model | endswith("@" + $rev))))][0].model // empty' \
+           <<<"${1:-[]}" 2>/dev/null || true)"
+  if [[ -z $REPLY && -n $rev ]]; then REPLY="${DECIDER_MODEL#*/}@$rev"; fi
+}
+
+# decider_calibration VAR: fills the associative array VAR with the gate's
+# judgement of the decider at CHALK_DECIDER_URL: status (calibrated,
+# uncalibrated, or unknown when the database did not answer), url, model,
+# judged, correct, waiting and suggested (empty when there is none).
+decider_calibration() {
+  local -n __cal=$1
+  local data judged line
+  __cal=(["status"]=unknown ["url"]="${| decider_url; }" ["model"]="$DECIDER_ANSWERED_BY"
+         ["judged"]=0 ["correct"]=0 ["waiting"]=0 ["suggested"]="")
+  data="${| decider_calibration_data; }"
+  [[ -n $data ]] || return 0
+  __cal["model"]="${| decider_provider_model "$data"; }"
+  judged="${| decider_calibration_judge "$data"; }"
+  line="$(jq -r --arg url "${__cal[url]}" --arg model "${__cal[model]}" '
+    (.[] | select(.url == $url and .model == $model)) // {judged: 0, correct: 0, waiting: 0, calibrated: false}
+    | [(if .calibrated then "calibrated" else "uncalibrated" end), .judged, .correct, .waiting,
+       (.suggested // "")] | @tsv' <<<"$judged" 2>/dev/null || true)"
+  [[ -n $line ]] || line=$'uncalibrated\t0\t0\t0\t'
+  IFS=$'\t' read -r '__cal[status]' '__cal[judged]' '__cal[correct]' '__cal[waiting]' '__cal[suggested]' <<<"$line" || true
+}
+
+# decider_calibration_note VAR -> REPLY: the judgement in VAR (as
+# decider_calibration fills it) in words, for doctor, status and warnings.
+decider_calibration_note() {
+  local -n __note=$1
+  local who="${__note[model]:-the decider}" counts
+  local judged="${__note[judged]:-0}" correct="${__note[correct]:-0}" waiting="${__note[waiting]:-0}"
+  who+=" at ${__note[url]}"
+  if [[ ${__note[status]} == unknown ]]; then
+    REPLY="$who: its calibration could not be read from the telemetry database"
+    return 0
+  fi
+  counts="$judged shadow run(s) judged at CHALK_DECIDER_THRESHOLD=$CHALK_DECIDER_THRESHOLD"
+  if (( judged > 0 )); then counts+=", $correct right ($((correct * 100 / judged))%)"; fi
+  if (( waiting > 0 )); then counts+=", $waiting not settled yet"; fi
+  if [[ ${__note[status]} == calibrated ]]; then
+    REPLY="$who is calibrated: $counts"
+    return 0
+  fi
+  REPLY="$who is not calibrated yet: $counts; it needs ${DECIDER_CALIBRATION_PERCENT}% right over at least ${DECIDER_CALIBRATION_RUNS}"
+  if [[ -n ${__note[suggested]} ]]; then
+    REPLY+="; it would be at CHALK_DECIDER_THRESHOLD=${__note[suggested]}"
+  fi
 }
 
 # ---------------------------------------------------------------- the stuck question
@@ -1178,10 +1337,12 @@ decider_status_hosted() {
 }
 
 decider_status() {
-  local -A got
+  local -A got cal
   local mode slow note
   mode="${| decider_mode; }"
   info "CHALK_DECIDER=$CHALK_DECIDER (acting as $mode), CHALK_DECIDER_URL=$CHALK_DECIDER_URL"
+  decider_calibration cal
+  info "calibration: ${| decider_calibration_note cal; }"
   decider_status_hosted
   if ! decider_local; then
     if ! decider_acknowledged "$CHALK_DECIDER_URL"; then :

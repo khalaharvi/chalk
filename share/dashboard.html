@@ -344,14 +344,24 @@ function ledger(d) {
 // matched what happened next. Only shown once it has been asked something.
 function decider(d) {
   const x = d.decider;
-  if (!x || !x.questions) return "";
+  const gates = (x && x.gate) || [];
+  if (!x || (!x.questions && !gates.length)) return "";
+  const rules = x.gate_rules || {};
+  const gate = gates.map((g) => [
+    `${esc(g.model || "unnamed model")}<br><span class="muted">${esc(g.url || "unrecorded URL")}</span>`,
+    g.calibrated ? "Calibrated: may act" : "Not yet: shadow only",
+    `${count(g.judged)} of ${count(rules.runs)}`,
+    g.judged ? `${count(g.correct)} (${pct(share(g.correct, g.judged))})` : "none",
+    count(g.waiting),
+    g.suggested === null || g.suggested === undefined ? "none yet" : esc(g.suggested),
+  ]);
   const kinds = { stuck: "Is the loop stuck?", rerank: "Does a lesson apply?" };
   const byKind = x.by_kind.map((k) => [esc(kinds[k.kind] || k.kind), count(k.questions), count(k.answered), count(k.acted)]);
-  const calibration = x.calibration.map((b) => [
+  const calibration = (x.calibration || []).map((b) => [
     `${b.low} to ${b.low === 0.9 ? "1" : (b.low + 0.2).toFixed(1)}`, count(b.answers),
     `${count(b.agreed)} (${pct(share(b.agreed, b.answers))})`,
   ]);
-  const errors = x.errors.map((e) => `${esc(e.error)} ${count(e.calls)}`).join(", ");
+  const errors = (x.errors || []).map((e) => `${esc(e.error)} ${count(e.calls)}`).join(", ");
   return `<h2>Is the decider worth asking?</h2>
     <p>The decider answers the questions the verdicts cannot settle. In shadow mode it only records; with
        <code>CHALK_DECIDER=on</code> it acts on answers at its threshold or above.</p>
@@ -370,7 +380,16 @@ function decider(d) {
       <p class="muted">Stuck answers in shadow mode, by confidence, once the run showed the answer: a "yes"
          is right when no later loop progressed, a "no" when one did. Answers at 0.9 or more should be right
          about nine times in ten before <code>CHALK_DECIDER=on</code> is worth it.</p>` +
-      table(["Confidence", "Answers", "Right"], calibration) : ""}`;
+      table(["Confidence", "Answers", "Right"], calibration) : ""}
+    ${gate.length ? `<h3>May it act yet?</h3>
+      <p class="muted">Each decider, by its URL and model revision, has to show it is calibrated before
+         <code>CHALK_DECIDER=on</code> may act; until then <code>on</code> records in shadow mode only. Each
+         shadow run counts once, by its first "stuck" at <code>CHALK_DECIDER_THRESHOLD</code>
+         (${esc(rules.threshold)}) or above, which is where <code>on</code> would have stopped it: right when
+         the run was detained with no progress after it, a false stop when it progressed. It may act once
+         ${count(rules.percent)}% of at least ${count(rules.runs)} such runs were right. The suggested
+         threshold is the lowest at which that holds. Over every run recorded, not only this period's.</p>` +
+      table(["Decider", "Gate", "Runs judged", "Right", "Not settled", "Suggested threshold"], gate, [0, 1]) : ""}`;
 }
 
 // The tests named most often by failed loops: a test that fails loop after

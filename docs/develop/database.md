@@ -74,8 +74,18 @@ answer.
 | `question`, `lesson_id` | What was asked; for `rerank`, about which lesson |
 | `answer`, `confidence`, `threshold` | `yes` or `no`, the confidence from 0 to 1, and `CHALK_DECIDER_THRESHOLD` at the time; NULL answer when there was none |
 | `error` | Why there was no answer: `unreachable`, `timeout`, `budget`, `busy`, `auth`, `rejected`, `server`, `invalid` or `version` |
-| `mode`, `acted` | `shadow` or `on`, as the decision was taken; whether it changed the run |
+| `mode`, `acted` | `shadow` or `on`, as the decision was taken (`on` is recorded as `shadow` while it is [held to shadow](../guide/configuring/decider.md#the-calibration-gate)); whether it changed the run |
 | `latency_ms`, `model` | How long it took; the model that answered, with the revision `chalk decider up` resolved |
+| `url` | `CHALK_DECIDER_URL`, without credentials. With `model`, the provider the calibration gate judges. Rows from before it was recorded get the local service's URL when their model carries a revision, which only the local service's does |
+
+`db_decider_calibration` (in `lib/db.sh`) reads what the
+[calibration gate](../guide/configuring/decider.md#the-calibration-gate)
+judges each provider by: for every confidence at which it said "stuck" in
+shadow mode, how many runs that answer would have stopped, how many of
+them it was right about, and how many are not settled yet.
+`decider_calibration_judge` (in `lib/decider.sh`) applies the gate's rule
+to them, for runs, `chalk doctor`, `chalk decider status` and the report
+card alike.
 
 ## The report card query
 

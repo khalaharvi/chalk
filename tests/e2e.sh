@@ -39,6 +39,32 @@ SQL
   export PGOPTIONS="$e2e_pgoptions"
 fi
 
+# calibrate URL MODEL CONFIDENCE RIGHT WRONG [MODE]: seeds the database
+# (the schema PGOPTIONS names) with RIGHT + WRONG runs in which MODEL at URL
+# said "stuck" at CONFIDENCE on loop 1, in MODE (shadow): the first RIGHT
+# runs made no progress after it and were detained, the others progressed
+# at loop 2 (false stops). Each call seeds runs of its own.
+calibrate() {
+  psql "$FAKE_PG_URL" -X -q -v ON_ERROR_STOP=1 -v url="$1" -v model="$2" -v confidence="$3" \
+    -v right="$4" -v wrong="$5" -v mode="${6:-shadow}" <<'SQL'
+SELECT 'cal-' || left(md5(clock_timestamp()::text || random()::text), 10) AS tag \gset
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id)
+SELECT 'cal', 'CAL-' || i, 'chalk/CAL-' || i, v.n, CASE v.n WHEN 1 THEN 'continue' ELSE 'retry' END,
+       'ok', CASE WHEN v.p THEN 0 ELSE 1 END, v.p, 'm', 'p', 0.10, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+       :'tag' || '-' || i
+  FROM generate_series(1, :'right'::int + :'wrong'::int) i,
+       LATERAL (VALUES (1, false), (2, i > :'right'::int)) v(n, p);
+INSERT INTO lessons (repo, ticket, signature, run_id)
+SELECT 'cal', 'CAL-' || i, 'seeded', :'tag' || '-' || i FROM generate_series(1, :'right'::int) i;
+INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode,
+                       latency_ms, model, url)
+SELECT c.id, c.run_id, 'stuck', 'q', 'yes', :'confidence'::numeric, 0.9, :'mode', 100, :'model', :'url'
+  FROM runs c WHERE c.run_id LIKE :'tag' || '-%' AND c.loop = 1;
+SQL
+}
+
 # A repository with a remote and a rubric that rejects a file named BROKEN.
 git init -q --bare "$tmp/origin.git"
 # Like GitHub, the remote answers a push with a hint to open a pull request,
@@ -685,6 +711,47 @@ SQL
   check "ledger: each run says where the decider would have stopped it" \
     test "$(jq -r '[.ledger.runs[] | "\(.run_id):\(.decider_loop)"] | sort | join(" ")' "$tmp/decider.json")" \
       = "D-1-1:2 D-2-1:1"
+
+  # The calibration gate, per provider (URL and model revision), as the
+  # report card shows it and runs judge it (CHALK_DECIDER_THRESHOLD=0.9):
+  #   a.test m@1111111  20 runs right at 0.95, each also "stuck" at loop 2,
+  #                     which a run under on never reaches: calibrated
+  #   a.test m@2222222  a new revision: 2 right in shadow, 30 under on that
+  #                     prove nothing: not yet
+  #   b.test m@1111111  the same model elsewhere: 17 right of 20: not yet
+  #   c.test c-model    right at 0.75, wrong at 0.6: nothing at 0.9, and
+  #                     0.75 suggested
+  #   d.test d-model    3 runs not settled: no progress, no detention yet
+  # plus D-1 and D-2 above (fake-decider@0123456, recorded before url was:
+  # the schema names the local service), one right and one wrong.
+  export PGOPTIONS='-c search_path=chalk_e2e,public -c client_min_messages=warning'
+  calibrate http://a.test m@1111111 0.95 20 0
+  pg -c "INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode, model, url)
+         SELECT c.id, c.run_id, 'stuck', 'q', 'yes', 0.99, 0.9, 'shadow', d.model, d.url
+           FROM decisions d JOIN runs c ON c.run_id = d.run_id AND c.loop = 2 WHERE d.url = 'http://a.test'"
+  calibrate http://a.test m@2222222 0.95 2 0
+  calibrate http://a.test m@2222222 0.95 30 0 on
+  calibrate http://b.test m@1111111 0.95 17 3
+  calibrate http://c.test c-model 0.75 20 0
+  calibrate http://c.test c-model 0.6 0 5
+  calibrate http://d.test d-model 0.95 3 0
+  pg -c "DELETE FROM lessons WHERE run_id IN (SELECT run_id FROM decisions WHERE url = 'http://d.test')"
+  chalk dashboard --no-open --days 30 --output "$tmp/gate.html" >/dev/null
+  export PGOPTIONS="${e2e_pgoptions:-}"
+  sed -n '/^const DATA =$/{n;p;}' "$tmp/gate.html" > "$tmp/gate.json"
+  check "the schema names the local service as the URL of answers recorded before url was" \
+    test "$(pg -c "SELECT DISTINCT url FROM decisions WHERE model = 'fake-decider@0123456'")" = http://127.0.0.1:8471
+  check "calibration gate: each provider judged at the threshold, with the lowest threshold that would pass" \
+    test "$(jq -r '[.decider.gate[] | "\(.url) \(.model) \(.judged)/\(.correct)/\(.waiting) \(.calibrated) \(.suggested)"]
+                   | sort | join(", ")' "$tmp/gate.json")" = "$(printf '%s, ' \
+      "http://127.0.0.1:8471 fake-decider@0123456 2/1/0 false null" \
+      "http://a.test m@1111111 20/20/0 true 0.95" \
+      "http://a.test m@2222222 2/2/0 false null" \
+      "http://b.test m@1111111 20/17/0 false null" \
+      "http://c.test c-model 0/0/0 false 0.75" \
+      "http://d.test d-model 0/0/3 false null" | sed 's/, $//')"
+  check "calibration gate: the report card says what it was judged by" \
+    test "$(jq -c .decider.gate_rules "$tmp/gate.json")" = '{"threshold":0.9,"runs":20,"percent":90}'
   pg -c 'DROP SCHEMA chalk_e2e CASCADE'
 fi
 
@@ -998,14 +1065,18 @@ check "decider shadow: the answers are recorded with their loops, none acted on"
     grep -q '\"answer\":\"yes\",\"confidence\":0.970,\"threshold\":0.9,\"mode\":\"shadow\"' '$tmp/PROJ-51.db' &&
     ! grep -q '\"acted\":true' '$tmp/PROJ-51.db'"
 
+# Every provider starts uncalibrated (decider_calibration): until enough
+# shadow runs show its confident answers right, on records as shadow.
+# Without a database (make test) its calibration cannot be read; with one
+# (make test-db) it has only PROJ-51's run. Either way it does not act.
 decider_run PROJ-52 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97"
-check "decider on: a confident stuck detains the run at loop 2" \
-  sh -c "grep -q 'DETENTION: stuck: rubric failed (exit 1)' '$tmp/PROJ-52.log' && ! grep -q 'loop 3' '$tmp/PROJ-52.log'"
-check "next step when the decider stopped the run: fix the cause yourself" \
-  next_step "$tmp/PROJ-52.log" "the decider judged the agent stuck on the same root cause as the loop before (confidence 0.97)"
-check "decider on: the answer that acted is recorded as such" grep -q '"acted":true' "$tmp/PROJ-52.db"
-check "decider on: the lesson carries the failing loop's fingerprint" \
-  grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/PROJ-52.db"
+check "decider on, not calibrated: the run is unchanged, nothing detained early" detained_as_usual PROJ-52
+check "decider on, not calibrated: the answers are recorded in shadow mode, none acted on" \
+  sh -c "test \"\$(grep -c 'INSERT INTO decisions' '$tmp/PROJ-52.db')\" -eq 2 &&
+    grep -q '\"answer\":\"yes\",\"confidence\":0.970,\"threshold\":0.9,\"mode\":\"shadow\"' '$tmp/PROJ-52.db' &&
+    ! grep -q '\"acted\":true' '$tmp/PROJ-52.db'"
+check "decider on, not calibrated: the run says why, once" \
+  test "$(grep -c '^warning: CHALK_DECIDER=on records in shadow mode only: fake-decider at http://decider.test' "$tmp/PROJ-52.log")" -eq 1
 
 decider_run PROJ-53 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.6"
 check "decider on: an answer below the threshold changes nothing" detained_as_usual PROJ-53
@@ -1027,7 +1098,7 @@ check "CHALK_FP_RULES=off: the run goes as with the decider off" detained_as_usu
 
 decider_run PROJ-57 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" \
   CHALK_DECIDER_TOKEN=tok-e2e-secret FAKE_DECIDER_TOKEN=tok-e2e-secret
-check "a hosted decider gets CHALK_DECIDER_TOKEN, and answers" grep -q 'DETENTION: stuck:' "$tmp/PROJ-57.log"
+check "a hosted decider gets CHALK_DECIDER_TOKEN, and answers" grep -q '"answer":"yes","confidence":0.970' "$tmp/PROJ-57.db"
 check "the token is never logged or stored" \
   sh -c "! grep -rq 'tok-e2e-secret' '$FAKE_STATE' '$XDG_STATE_HOME' '$tmp/PROJ-57.log' '$tmp/PROJ-57.db'"
 decider_run PROJ-58 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" \
@@ -1035,6 +1106,32 @@ decider_run PROJ-58 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" \
 check "a refused token: the run goes as with the decider off, with one warning" \
   sh -c "grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/PROJ-58.log' &&
     test \"\$(grep -c '^warning: the decider at http://decider.test refused the request' '$tmp/PROJ-58.log')\" -eq 1"
+
+# Once 20 shadow runs show its confident "stuck" right nine times in ten,
+# the same decider acts. Only with a database to show it (make test-db).
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  calibrate http://decider.test fake-decider 0.95 19 1
+  decider_run PROJ-63 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97"
+  check "decider on, calibrated: a confident stuck detains the run at loop 2, quietly" \
+    sh -c "grep -q 'DETENTION: stuck: rubric failed (exit 1)' '$tmp/PROJ-63.log' && ! grep -q 'loop 3' '$tmp/PROJ-63.log' &&
+      ! grep -q 'records in shadow mode only' '$tmp/PROJ-63.log'"
+  check "next step when the decider stopped the run: fix the cause yourself" \
+    next_step "$tmp/PROJ-63.log" "the decider judged the agent stuck on the same root cause as the loop before (confidence 0.97)"
+  check "decider on, calibrated: the answer that acted is recorded as such" \
+    grep -q '"mode":"on","latency_ms":[0-9]*,"acted":true' "$tmp/PROJ-63.db"
+  check "decider on, calibrated: the lesson carries the failing loop's fingerprint" \
+    grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/PROJ-63.db"
+  CHALK_DECIDER=on CHALK_DECIDER_URL=http://decider.test chalk decider status > "$tmp/decider-status-cal.log" 2>&1 ||
+    { cat "$tmp/decider-status-cal.log"; fail "chalk decider status"; }
+  check "chalk decider status: on acts, and the numbers it was judged by" \
+    sh -c "grep -q '(acting as on)' '$tmp/decider-status-cal.log' &&
+      grep -q '^calibration: fake-decider at http://decider.test is calibrated: 2[0-9] shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.9' '$tmp/decider-status-cal.log'"
+  CHALK_DECIDER=on CHALK_DECIDER_URL=http://decider.test CHALK_DECIDER_THRESHOLD=0.99 chalk doctor > "$tmp/doctor-cal.log" 2>&1 || true
+  # Its answers at 0.6 (PROJ-53) were right too, so 0.6 would pass.
+  check "doctor: at a threshold it said nothing at, it is not calibrated, and the lowest that would pass is named" \
+    grep -q '^  --    decider calibration: fake-decider at http://decider.test is not calibrated yet: 0 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.99; it needs 90% right over at least 20; it would be at CHALK_DECIDER_THRESHOLD=0.6; until it is, CHALK_DECIDER=on records in shadow mode only' \
+      "$tmp/doctor-cal.log"
+fi
 
 # The local service: a run does not start one that `chalk decider up` never
 # installed, and doctor says so.
@@ -1219,6 +1316,8 @@ $error" TEXT-FIX
   sem="$(rpg -c "SELECT id FROM lessons WHERE lesson = 'SEM-FIX'")"
   decider_env=(CHALK_DECIDER_MIN_LESSONS=3 CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test
                FAKE_DECIDER_ANSWERS="lesson_$sem=0.97 lesson_$lex=0.93 lesson_*=0.2")
+  # The fake decider is calibrated here, so that on may act (decider_calibration).
+  calibrate http://decider.test fake-decider 0.95 20 0
   rm -f "$FAKE_STATE/curl.log"
   : > "$FAKE_STATE/decider.log"
   recall_run PROJ-60 CHALK_DECIDER=on "${decider_env[@]}"

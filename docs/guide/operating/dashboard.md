@@ -131,6 +131,14 @@ The report card's "Is the decider worth asking?" section shows:
   the run did next. A "yes" is right when no later loop progressed, a
   "no" when one did. Answers at 0.9 or more should be right about nine
   times in ten before `CHALK_DECIDER=on` is worth it.
+- **May it act yet?**: the [calibration gate](../configuring/decider.md#the-calibration-gate)
+  for each decider, by its URL and model revision: whether it is
+  calibrated at `CHALK_DECIDER_THRESHOLD`, how many shadow runs it is
+  judged by out of the 20 it needs, how many of those it was right about,
+  how many are not settled yet, and the **suggested threshold**, the
+  lowest at which it would be calibrated. Over every run recorded, not
+  only the report card's period. When the suggested threshold is below
+  yours, lowering `CHALK_DECIDER_THRESHOLD` to it lets `on` act.
 
 ### Better fingerprints
 

@@ -64,6 +64,22 @@ doctor_auto_mode() {
   esac
 }
 
+# Whether the decider is calibrated (decider_calibration): the numbers it
+# is judged by, and what CHALK_DECIDER=on does until it is.
+doctor_decider_calibration() {
+  local -A cal
+  local note
+  decider_calibration cal
+  note="${| decider_calibration_note cal; }"
+  case "${cal[status]}" in
+    calibrated) doctor_check optional "decider calibration: $note" "" true ;;
+    unknown)    doctor_check optional "decider calibration" \
+                  "${note#*: }, so CHALK_DECIDER=on records in shadow mode only (start the database: chalk db up)" false ;;
+    *)          doctor_check optional "decider calibration" \
+                  "$note; until it is, CHALK_DECIDER=on records in shadow mode only" false ;;
+  esac
+}
+
 # The decider, all optional: uv, the service, the models and the revisions
 # `chalk decider up` resolved, its measured time per decision, and whether
 # a run may start it.
@@ -91,6 +107,7 @@ doctor_decider() {
     doctor_check optional "decider at $CHALK_DECIDER_URL (CHALK_DECIDER=$CHALK_DECIDER)" \
       "not answering GET /health, nor a question without it; runs go on without it" \
       decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN
+    doctor_decider_calibration
     return 0
   fi
   decider_info got
@@ -114,6 +131,7 @@ doctor_decider() {
   else
     doctor_check optional "decider takes ${got[bench_ms]:-?} ms per decision (measured by chalk decider up)" "" true
   fi
+  doctor_decider_calibration
   free="${| decider_headroom; }"
   if [[ $CHALK_DECIDER != on && -n $free ]] && (( free < DECIDER_HEADROOM_MB )); then
     doctor_check optional "memory beside Docker for the decider: $free MiB" \
