@@ -1,5 +1,4 @@
 ---
-title: Chalk harness
 description: Runs Claude Code agents in disposable sandboxes, one checkpoint at a time, with a spend cap per loop, a test gate and a human escalation path.
 ---
 
