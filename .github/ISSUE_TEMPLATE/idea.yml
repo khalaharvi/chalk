@@ -1,0 +1,16 @@
+name: Idea
+description: Something Chalk should do. Check the roadmap (docs/roadmap.md) first.
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you were trying to do, and where Chalk got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: Optional. How you would solve it.

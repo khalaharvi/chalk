@@ -156,7 +156,7 @@ Extend `cmd_doctor` in `lib/setup.sh`, using its `doctor_check` helper:
 
 - **Auto mode:** check that it is available for `CHALK_MODEL`. Without it,
   a headless run starts in manual mode and every edit is refused. That is
-  the most confusing failure today (see "Permissions" in the README).
+  the most confusing failure today (see [Permissions](https://khalaharvi.github.io/chalk/guide/configuring/permissions/)).
 - **Next step on detention:** every detention reason (`blocked`, loop
   limit, retries exhausted, review failed, and each verdict) prints one
   line saying what to do next. This is `run_detain` in `lib/run.sh`.

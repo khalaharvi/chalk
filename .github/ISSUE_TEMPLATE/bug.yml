@@ -1,0 +1,32 @@
+name: Bug report
+description: Something Chalk did that it should not have, or did not do.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The run log (`chalk logs TICKET`) or the error. Remove anything secret.
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: chalk doctor
+      description: The output of `chalk doctor`.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: forge
+    attributes:
+      label: Forge
+      options: [GitHub, GitHub Enterprise, GitLab, Not relevant]
+    validations:
+      required: true
