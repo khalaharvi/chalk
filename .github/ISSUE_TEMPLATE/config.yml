@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/khalaharvi/chalk/blob/main/SECURITY.md
+    about: Please report security issues privately, as SECURITY.md describes.
+  - name: Roadmap and priorities
+    url: https://github.com/khalaharvi/chalk/issues/53
+    about: Comment on what should come next.

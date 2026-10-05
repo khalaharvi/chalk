@@ -108,4 +108,5 @@ change:
 | :-- | :-- |
 | The demo recording, `docs/assets/demo.{cast,txt,svg}` and `demo-poster.svg` | `make demo`: `scripts/demo.sh` runs the real `chalk` against the fakes and records it, then `scripts/render-demo.py` draws it |
 | The report card, `docs/assets/report-card-{light,dark}.png` | `scripts/screenshots.sh`, from the sample in `docs/assets/report-card.json` (needs Chrome or Chromium) |
-| The README banner, `docs/assets/banner-{light,dark}.svg` | `scripts/render-banner.py` (needs `fonttools` and `brotli`) |
+| The site banner, `docs/assets/banner-{light,dark}.svg` | `scripts/render-banner.py` (needs `fonttools` and `brotli`) |
+| The README art, `docs/assets/run-banner.svg`, `run-diagram.svg` and `social-preview.png` | `scripts/render-readme-art.py` (needs `fonttools` and `brotli`; `rsvg-convert` for the PNG). Keep its transcript in step with the log format in `lib/run.sh` |

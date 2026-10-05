@@ -115,10 +115,10 @@ cmd_fleet() {
   elif [ ! -f "$saved" ]; then
     info "asking Claude to break down $epic"
     fleet_plan "$epic" > "$saved.tmp" ||
-      die "could not generate a plan; write one by hand and pass --plan (format: README, 'Fleet plans')"
+      die "could not generate a plan; write one by hand and pass --plan (format: https://khalaharvi.github.io/chalk/guide/running/fleet/)"
     mv "$saved.tmp" "$saved"
   fi
-  fleet_validate "$saved" || die "invalid plan: $saved (format: README, 'Fleet plans')"
+  fleet_validate "$saved" || die "invalid plan: $saved (format: https://khalaharvi.github.io/chalk/guide/running/fleet/)"
 
   info "plan for $epic ($saved):"
   jq -r '.workstreams[] | "  \(.ticket)  \(.title)  (\(.checkpoints | length) checkpoints)"' "$saved"

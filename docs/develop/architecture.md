@@ -90,7 +90,7 @@ Outside `lib/`:
 | `scripts/check-commit-title.sh` | The Conventional Commits check on pull request titles |
 | `scripts/ci-db-upgrade.sh` | A real Postgres 16 to 17 upgrade test, run in CI |
 | `scripts/install-bash.sh`, `scripts/lint-conventions.sh`, `scripts/check-sandbox-syntax.sh` | Toolchain and lint |
-| `scripts/demo.sh`, `scripts/render-demo.py`, `scripts/render-banner.py`, `scripts/screenshots.sh` | The recording and images on this site and in the README |
+| `scripts/demo.sh`, `scripts/render-demo.py`, `scripts/render-banner.py`, `scripts/render-readme-art.py`, `scripts/screenshots.sh` | The recording and images on this site and in the README |
 | `scripts/mkdocs_hooks.py`, `scripts/check-links.sh`, `mkdocs.yml`, `docs/` | This site |
 | `tests/unit/`, `tests/e2e.sh`, `tests/fakes/` | Tests; see [Testing](testing.md) |
 
