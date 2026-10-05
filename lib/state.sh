@@ -25,3 +25,13 @@ run_is_alive() {
   pid="${| run_pid "$1"; }"
   [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
 }
+
+# state_live_runs -> REPLY: how many runs are alive, in every repository
+# on this machine.
+state_live_runs() {
+  local dir
+  REPLY=0
+  for dir in "${XDG_STATE_HOME:-$HOME/.local/state}"/chalk/*/runs/*/; do
+    if run_is_alive "${dir%/}"; then REPLY=$((REPLY + 1)); fi
+  done
+}

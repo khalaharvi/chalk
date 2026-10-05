@@ -24,7 +24,7 @@ chalk_guard ${1+"$@"}  # ${1+...}: safe for empty arguments under set -u in any 
 # Modules load by layer: the shell runtime, then the Chalk domain, then the
 # commands. A module may use anything loaded before it. `source -p` looks
 # only in the directory given, never on PATH or in the working directory.
-for module in log runtime jobs; do
+for module in log runtime jobs system; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
@@ -42,6 +42,7 @@ Setup
   chalk doctor                 Check tools, auth, database and sandbox image
   chalk init                   Add Chalk config, textbook and CI gates to this repo
   chalk db up|down|psql        Manage the local telemetry database
+  chalk db upgrade [--cleanup] Move the database to Postgres 17, then drop the old one
   chalk sandbox build          Build the default sandbox image
   chalk memory up|down|sync    Manage the optional Hindsight lesson memory
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit

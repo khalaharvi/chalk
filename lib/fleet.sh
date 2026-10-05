@@ -59,6 +59,28 @@ fleet_validate() {
   ' "$1" >/dev/null 2>&1
 }
 
+# fleet_parallel -> REPLY: how many agents fleet runs at once. A number in
+# CHALK_MAX_PARALLEL is used as given. auto takes the smallest of 8, half of
+# Docker's CPUs, and Docker's memory less 1 GiB for everything else divided
+# by CHALK_SANDBOX_MEM_MB; at least 1, and 4 when Docker cannot be asked.
+fleet_parallel() {
+  if [[ $CHALK_MAX_PARALLEL != auto ]]; then
+    REPLY="$CHALK_MAX_PARALLEL"
+    return 0
+  fi
+  system_profile
+  if [[ ! -v SYS[docker_cpus] || ! -v SYS[docker_mem_mb] ]]; then
+    REPLY=4
+    return 0
+  fi
+  local cpus="${SYS[docker_cpus]}" mem="${SYS[docker_mem_mb]}"
+  local by_cpu=$((cpus / 2)) by_mem=$(((mem - 1024) / CHALK_SANDBOX_MEM_MB))
+  REPLY=8
+  if (( by_cpu < REPLY )); then REPLY="$by_cpu"; fi
+  if (( by_mem < REPLY )); then REPLY="$by_mem"; fi
+  if (( REPLY < 1 )); then REPLY=1; fi
+}
+
 fleet_running_count() {
   local dir count=0
   for dir in "${| state_dir; }"/runs/*/; do
@@ -107,9 +129,10 @@ cmd_fleet() {
     case "$answer" in y|Y|yes) ;; *) die "aborted; edit the plan and re-run" ;; esac
   fi
 
-  local item ticket dir slots
+  local item ticket dir slots parallel
   local -a items
-  slots=$((CHALK_MAX_PARALLEL - $(fleet_running_count)))
+  parallel="${| fleet_parallel; }"
+  slots=$((parallel - $(fleet_running_count)))
   mapfile -t items < <(jq -c '.workstreams[]' "$saved")
   for item in "${items[@]}"; do
     ticket="$(jq -r '.ticket' <<<"$item")"
@@ -118,7 +141,7 @@ cmd_fleet() {
       continue
     fi
     if [ "$slots" -le 0 ]; then
-      info "$ticket: waiting (CHALK_MAX_PARALLEL=$CHALK_MAX_PARALLEL); re-run 'chalk fleet $epic --yes' when a slot frees up"
+      info "$ticket: waiting ($parallel at once, CHALK_MAX_PARALLEL=$CHALK_MAX_PARALLEL); re-run 'chalk fleet $epic --yes' when a slot frees up"
       continue
     fi
 

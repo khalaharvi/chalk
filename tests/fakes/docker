@@ -8,22 +8,90 @@ rewrite() {
   printf '%s' "$1" | sed -E "s#(^|[ \"'=])/(src\.git|work|chalk)#\1$root/\2#g"
 }
 
+# With FAKE_DB_MODEL=1 the database containers (chalk-db*) and volumes are
+# modelled: each container is a directory under $FAKE_STATE/dbs holding its
+# image, volume and running state, and each volume one under
+# $FAKE_STATE/volumes. Without it, every container exists and is running.
+dbs="$FAKE_STATE/dbs"
+volumes="$FAKE_STATE/volumes"
+modelled() {
+  [ -n "${FAKE_DB_MODEL:-}" ] || return 1
+  case "$1" in chalk-db|chalk-db-*) return 0 ;; esac
+  return 1
+}
+no_such() { echo "Error response from daemon: No such container: $1" >&2; exit 1; }
+
 case "$cmd" in
-  info|start|stop|build) exit 0 ;;
+  info|build) exit 0 ;;
+  start|stop)
+    name="${*: -1}"
+    modelled "$name" || exit 0
+    [ -d "$dbs/$name" ] || no_such "$name"
+    if [ "$cmd" = start ]; then echo true > "$dbs/$name/running"; else echo false > "$dbs/$name/running"; fi ;;
   ps) exit 0 ;;
   image) exit 0 ;;
-  inspect) echo true ;;
-  rm) rm -rf "${FAKE_STATE:?}/${*: -1}" ;;
+  inspect)
+    format=""
+    if [ "$1" = "-f" ]; then format="$2"; shift 2; fi
+    name="$1"
+    if ! modelled "$name"; then echo true; exit 0; fi
+    [ -d "$dbs/$name" ] || no_such "$name"
+    case "$format" in
+      *Running*) cat "$dbs/$name/running" ;;
+      *Image*)   cat "$dbs/$name/image" ;;
+      *Mounts*)  cat "$dbs/$name/volume" ;;
+      *)         echo "[{\"Name\": \"/$name\"}]" ;;
+    esac ;;
+  rename)
+    printf 'rename %s\n' "$*" >> "$FAKE_STATE/docker.log"
+    [ -d "$dbs/$1" ] || no_such "$1"
+    [ ! -e "$dbs/$2" ] || { echo "Error response from daemon: name \"$2\" is already in use" >&2; exit 1; }
+    mv "$dbs/$1" "$dbs/$2" ;;
+  volume)
+    sub="$1" name="$2"
+    case "$sub" in
+      inspect) [ -d "$volumes/$name" ] || { echo "Error: no such volume: $name" >&2; exit 1; } ;;
+      rm) printf 'volume rm %s\n' "$name" >> "$FAKE_STATE/docker.log"
+          rmdir "$volumes/$name" ;;
+      *) echo "fake docker: unsupported volume command $sub" >&2; exit 1 ;;
+    esac ;;
+  rm)
+    name="${*: -1}"
+    if modelled "$name"; then
+      printf 'rm %s\n' "$name" >> "$FAKE_STATE/docker.log"
+      [ -d "$dbs/$name" ] || no_such "$name"
+      rm -rf "${dbs:?}/$name"
+    else
+      rm -rf "${FAKE_STATE:?}/$name"
+    fi ;;
   run)
     printf '%s\n' "$*" >> "$FAKE_STATE/docker.log"
-    name="" mounts=()
+    name="" mounts=() image=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --name) name="$2"; shift ;;
         -v) mounts+=("$2"); shift ;;
+        -e|--restart) shift ;;
+        -*) ;;
+        *) image="$1" ;;
       esac
       shift
     done
+    if modelled "$name"; then
+      # mkdir is atomic, like docker's own check on container names.
+      mkdir -p "$dbs" "$volumes"
+      if ! mkdir "$dbs/$name" 2>/dev/null; then
+        echo "docker: Error response from daemon: Conflict. The container name \"/$name\" is already in use." >&2
+        exit 125
+      fi
+      volume="${mounts[0]%%:*}"
+      mkdir -p "$volumes/$volume"
+      echo "$image" > "$dbs/$name/image"
+      echo "$volume" > "$dbs/$name/volume"
+      echo true > "$dbs/$name/running"
+      echo "fake-$name"
+      exit 0
+    fi
     root="$FAKE_STATE/$name"
     mkdir -p "$root/work" "$root/home"
     for mount in "${mounts[@]}"; do
@@ -43,11 +111,23 @@ case "$cmd" in
     done
     name="$1"; shift
     if [ "$name" = "chalk-db" ]; then
+      if modelled "$name" && [ "$(cat "$dbs/$name/running" 2>/dev/null)" != true ]; then
+        echo "Error response from daemon: container $name is not running" >&2
+        exit 1
+      fi
+      if [ "$1" = "pg_dumpall" ]; then
+        printf -- '--\n-- PostgreSQL database cluster dump\n--\n'
+        exit 0
+      fi
       [ "$1" = "psql" ] || exit 0
       # FAKE_DB_BROKEN=1 makes every query fail.
       [ -z "${FAKE_DB_BROKEN:-}" ] || exit 1
       sql="$(cat)"
       printf '%s\n---\n%s\n' "$*" "$sql" >> "$FAKE_STATE/db.log"
+      # FAKE_DB_RESTORE_FAIL=1 makes restoring a dump fail.
+      case "$sql" in
+        *"database cluster dump"*) [ -z "${FAKE_DB_RESTORE_FAIL:-}" ] || exit 3 ;;
+      esac
       # With FAKE_PG_URL set, the SQL runs against a real Postgres instead of
       # returning canned answers.
       if [ -n "${FAKE_PG_URL:-}" ]; then
@@ -62,6 +142,7 @@ case "$cmd" in
       fi
       case "$sql" in
         *"FROM runs WHERE"*) echo "2 0.5000 0" ;;
+        *"chalk db upgrade: row counts"*) echo "3 1 2" ;;
         *"'generated_at'"*)
           echo '{"generated_at":"2026-01-01 00:00","days":30,"submitted":0,"detentions":0,"totals":{"calls":0},"note":"</script>"}' ;;
         *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;

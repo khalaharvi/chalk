@@ -14,7 +14,8 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_BUDGET_USD]=1.00
   [CHALK_MAX_LOOPS]=20
   [CHALK_MAX_RETRIES]=2
-  [CHALK_MAX_PARALLEL]=4
+  [CHALK_MAX_PARALLEL]=auto
+  [CHALK_SANDBOX_MEM_MB]=2048
   [CHALK_TMPFS_SIZE]=4g
   [CHALK_MODEL]=""
   [CHALK_TEXTBOOK]=.chalk/textbook.md
@@ -41,6 +42,8 @@ declare -gA CHALK_ENV_DEFAULTS=(
   [CHALK_OTEL_ENDPOINT]=""
   [CHALK_OTEL_PROTOCOL]=grpc
   [CHALK_OTEL_SIGNALS]=traces
+  # Seconds to wait for the database; auto adapts to the machine.
+  [CHALK_DB_TIMEOUT]=auto
 )
 
 # load_config ROOT: sets every CHALK_* setting for the repository at ROOT.
@@ -86,4 +89,10 @@ load_config() {
     off|shadow|on) ;;
     *) die "CHALK_FP_RULES must be 'off', 'shadow' or 'on' (got '$CHALK_FP_RULES')" ;;
   esac
+  [[ $CHALK_MAX_PARALLEL == auto || $CHALK_MAX_PARALLEL =~ ^[1-9][0-9]*$ ]] ||
+    die "CHALK_MAX_PARALLEL must be 'auto' or a positive whole number (got '$CHALK_MAX_PARALLEL')"
+  [[ $CHALK_SANDBOX_MEM_MB =~ ^[1-9][0-9]*$ ]] ||
+    die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
+  [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
+    die "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"
 }

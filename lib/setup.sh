@@ -21,6 +21,25 @@ doctor_repo_configured() {
   root="$(git rev-parse --show-toplevel)" && grep -q '^CHALK_TEST_CMD=.' "$root/.chalk/config"
 }
 
+doctor_db_current() {
+  [[ ${| db_major; } == 17 ]]
+}
+
+# The host profile and the values Chalk derives from it. Informational:
+# when a probe fails, Chalk uses its fixed defaults.
+doctor_profile() {
+  local locks=mkdir
+  system_profile
+  [[ ${SYS[has_flock]} != 1 ]] || locks=flock
+  doctor_check optional "host: ${SYS[os]:-?}, ${SYS[cores]:-?} CPUs, ${SYS[ram_mb]:-?} MiB RAM, $locks locks" \
+    "could not read the host's CPUs or memory" test -n "${SYS[cores]:-}" -a -n "${SYS[ram_mb]:-}"
+  doctor_check optional "docker: ${SYS[docker_cpus]:-?} CPUs, ${SYS[docker_mem_mb]:-?} MiB" \
+    "docker info gave no resources; Chalk uses its fixed defaults" \
+    test -n "${SYS[docker_cpus]:-}" -a -n "${SYS[docker_mem_mb]:-}"
+  doctor_check optional "fleet runs ${| fleet_parallel; } at once (CHALK_MAX_PARALLEL=$CHALK_MAX_PARALLEL)" "" true
+  doctor_check optional "database wait ${| system_timeout 30 "$CHALK_DB_TIMEOUT"; }s (CHALK_DB_TIMEOUT=$CHALK_DB_TIMEOUT)" "" true
+}
+
 cmd_doctor() {
   load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   info "chalk $CHALK_VERSION"
@@ -38,6 +57,11 @@ cmd_doctor() {
   doctor_check required "agent credentials" "export one of: ${CHALK_AUTH_VARS[*]}"     agent_auth_present
   doctor_check optional "claude on host"    "only needed for 'chalk fleet' planning" command -v claude
   doctor_check optional "telemetry database" "starts on first run, or: chalk db up" db_running
+  if db_exists; then
+    doctor_check optional "database on Postgres ${| db_major; } (${| db_volumes; })" \
+      "run: chalk db upgrade (semantic recall is off until then)" doctor_db_current
+  fi
+  doctor_profile
   doctor_check optional "sandbox image"     "built on first run, or: chalk sandbox build" docker image inspect "$CHALK_IMAGE"
   doctor_check optional "sandbox bash ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]}+" \
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok

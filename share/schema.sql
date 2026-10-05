@@ -1,6 +1,15 @@
 -- Local Chalk telemetry. Applied idempotently on every `chalk db up`.
 SET client_min_messages = warning;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- pgvector ships with the Postgres 17 image. A Postgres 16 database, not
+-- yet moved by `chalk db upgrade`, goes without it.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+        CREATE EXTENSION IF NOT EXISTS vector;
+    END IF;
+END
+$$;
 
 -- One row per agent call: what it cost, what it used and what came of it.
 --   kind          continue | retry | fix-review | spec-check | review | distill
