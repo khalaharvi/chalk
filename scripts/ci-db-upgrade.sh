@@ -69,14 +69,33 @@ gone() { ! docker inspect "$1" >/dev/null 2>&1; }
 volume_gone() { ! docker volume inspect "$1" >/dev/null 2>&1; }
 same() { [[ $1 == "$2" ]]; }
 
-# snapshot: row counts and a digest of every row of runs, events and lessons.
+# The columns runs, events and lessons have before the upgrade. The digests
+# cover only these, so a column the schema adds on Postgres 17 (such as
+# lessons.embedding, which needs pgvector) is not mistaken for changed data.
+declare -A columns=()
+columns_now() {
+  local table
+  for table in runs events lessons; do
+    columns[$table]="$(sql -v table="$table" <<'SQL'
+SELECT string_agg(column_name, ',' ORDER BY ordinal_position)
+  FROM information_schema.columns WHERE table_schema = 'public' AND table_name = :'table';
+SQL
+)"
+  done
+}
+
+# snapshot: row counts and a digest of every row of runs, events and lessons,
+# over the columns they had before the upgrade.
 snapshot() {
-  sql <<'SQL'
+  sql -v runs="${columns[runs]}" -v events="${columns[events]}" -v lessons="${columns[lessons]}" <<'SQL'
 SELECT concat_ws(' ',
   (SELECT count(*) FROM runs), (SELECT count(*) FROM events), (SELECT count(*) FROM lessons),
-  (SELECT md5(string_agg(t::text, E'\n' ORDER BY id)) FROM runs t),
-  (SELECT md5(string_agg(t::text, E'\n' ORDER BY id)) FROM events t),
-  (SELECT md5(string_agg(t::text, E'\n' ORDER BY id)) FROM lessons t));
+  (SELECT md5(string_agg((SELECT jsonb_object_agg(k, v) FROM jsonb_each(to_jsonb(t)) e(k, v)
+                           WHERE k = ANY (string_to_array(:'runs', ',')))::text, E'\n' ORDER BY id)) FROM runs t),
+  (SELECT md5(string_agg((SELECT jsonb_object_agg(k, v) FROM jsonb_each(to_jsonb(t)) e(k, v)
+                           WHERE k = ANY (string_to_array(:'events', ',')))::text, E'\n' ORDER BY id)) FROM events t),
+  (SELECT md5(string_agg((SELECT jsonb_object_agg(k, v) FROM jsonb_each(to_jsonb(t)) e(k, v)
+                           WHERE k = ANY (string_to_array(:'lessons', ',')))::text, E'\n' ORDER BY id)) FROM lessons t));
 SQL
 }
 
@@ -132,6 +151,7 @@ VALUES ('demo', 'PROJ-2', E'rubric failed (exit 1)\nAssertionError: BROKEN exist
        ('demo', 'UNI-1', :'unicode', 'note', :'unicode', 'エンジニア', now(), NULL, NULL, NULL),
        ('demo', 'OPEN-1', 'rubric failed (exit 2)', NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 SQL
+columns_now
 before="$(snapshot)"
 check "the rows are written" same "${before%% *}" 3003
 check "non-ASCII text reads back as written" same "$(lesson_text)" "$unicode|$unicode"
