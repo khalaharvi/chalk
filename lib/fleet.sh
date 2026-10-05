@@ -31,6 +31,7 @@ What is being built and why. Link the ticket. Name the files or modules involved
 
 ## Checkpoints
 Each checkpoint must be small enough for one agent loop and provable by a test.
+Each must leave the tests passing: put a test and the code that makes it pass in one checkpoint.
 - [ ] First checkpoint
 - [ ] Second checkpoint
 SPEC

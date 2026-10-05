@@ -102,3 +102,8 @@ ALTER TABLE lessons ADD COLUMN IF NOT EXISTS run_id TEXT;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fingerprint TEXT;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS first_error TEXT;
 CREATE INDEX IF NOT EXISTS lessons_fingerprint_idx ON lessons (repo, fingerprint);
+-- Where a lesson is recalled: repo (only in its own repository, for a
+-- lesson about that repository, or a note no lesson came of) or general.
+-- NULL, for lessons from before scopes and when nothing was distilled, is
+-- recalled anywhere, as general.
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS scope TEXT;

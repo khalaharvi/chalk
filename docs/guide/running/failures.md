@@ -3,7 +3,8 @@
 When a run cannot make progress, it stops and waits for a person instead
 of spending more. That stop is **detention**. The person fixes the
 blocker and explains it in **office hours**; the explanation becomes a
-**lesson** that later loops are given, in any repository on your machine.
+**lesson** that later loops are given, in any repository on your machine
+unless it holds only in its own.
 
 ## What sends a run to detention
 
@@ -64,9 +65,20 @@ chalk office-hours -m "Payments client needs the sandbox base URL in tests"
    merge request reports.
 2. **Distils a lesson.** With `CHALK_DISTILL=true` (the default), a cheap
    model in a short-lived, read-only sandbox reads the failure, your note
-   and your fix (the diff since the detention commit), and writes a
-   general rule. If that fails, your note is still kept and used as the
-   lesson.
+   and your fix: the diff since the detention commit or, when you
+   committed nothing, the fact that the fix was made outside the
+   repository. Your note is the source of truth about what changed where.
+   The model writes a rule and gives it a scope:
+    - `general`: it holds in any repository, and is recalled anywhere.
+    - `repo`: it depends on this repository, its sandbox image or its
+      environment, and is recalled only here.
+    - `none`: the evidence supports no rule, for example a one-off fix
+      outside the repository. No lesson is recorded; your note is kept
+      and recalled only here.
+
+    The log says which: `lesson: …`, `lesson, recalled in this repository
+    only: …` or `no lesson distilled: …`. If distillation fails, your note
+    is still kept and used as the lesson.
 3. **Moves to a tutoring branch**, `tutoring/<TICKET>-<timestamp>`, so the
    detention branch stays as it was.
 4. **Resumes the run** if the spec still has open checkpoints, or opens the
@@ -85,6 +97,13 @@ fix, not the symptom:
   `PAYMENTS_URL` in `tests/setup.ts`."
 - Less useful: "tests were failing".
 
+When part or all of the fix is outside the repository, such as a rebuilt
+sandbox image, a credential or a CI variable, say so in the note. The
+diff shows only what you committed; without the note, a small commit that
+came with an image change reads as if it were the whole fix. For example:
+"PyYAML was missing from the sandbox image, which now installs
+python3-yaml; requirements.txt also declares PyYAML."
+
 Rules that should apply to every ticket from now on belong in the
 textbook instead.
 
@@ -95,7 +114,7 @@ flowchart LR
   run[Loops] -- cannot progress --> detention[Detention: work parked on detention/ branch, open lesson logged]
   detention --> fix[A person fixes the blocker and commits]
   fix --> office[chalk office-hours -m note]
-  office --> lesson[Note resolves the lesson; a cheap model distils a general rule]
+  office --> lesson[Note resolves the lesson; a cheap model distils a rule and its scope]
   lesson --> tutoring[New tutoring/ branch]
   tutoring -- checkpoints open --> run
   tutoring -- all done --> request([Pull or merge request])
@@ -107,8 +126,8 @@ flowchart LR
    logged with the failure.
 2. A person switches to that branch, fixes the blocker and commits.
 3. `chalk office-hours -m "…"` records the note as the lesson's
-   resolution, and a cheap model distils it, with the fix, into a general
-   rule.
+   resolution, and a cheap model distils it, with the fix, into a rule
+   for any repository, a rule for this one, or no rule.
 4. Chalk moves to a new `tutoring/` branch. If checkpoints are still open,
    the loops resume there; if not, the pull or merge request opens.
 5. From then on, resolved lessons are [recalled](../configuring/lesson-memory.md)

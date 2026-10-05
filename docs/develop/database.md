@@ -44,7 +44,9 @@ referenced as `:'name'`, so psql does the quoting (`db_sql`).
 human intervention; `lesson` is that note distilled into a rule;
 `resolved_by` and `resolved_at` say who and when. `run_id`,
 `fingerprint` and `first_error` link the lesson to the run and failure it
-came from. `memory_synced_at` is no longer written: it belonged to
+came from. `scope` is where the lesson is recalled: `repo` only in its
+own repository, `general` anywhere; NULL, for lessons from before scopes
+or when nothing was distilled, is recalled anywhere. `memory_synced_at` is no longer written: it belonged to
 Hindsight, and is kept so existing databases need no migration.
 
 The trigram index on `signature` and the index on `(repo, fingerprint)`

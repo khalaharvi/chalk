@@ -205,13 +205,15 @@ SQL
 
 # Attaches the engineer's fix to the newest unresolved lesson for a ticket.
 # LESSON is the generalised rule distilled from the note; it may be empty.
+# SCOPE is where it is recalled: repo (this repository only), general, or
+# empty for anywhere, as before scopes existed.
 db_resolve_lesson() {
-  local ticket="$1" resolution="$2" who="$3" lesson="${4:-}"
+  local ticket="$1" resolution="$2" who="$3" lesson="${4:-}" scope="${5:-}"
   db_sql -v repo="${| repo_name; }" -v ticket="$ticket" -v resolution="$resolution" \
-    -v who="$who" -v lesson="$lesson" <<'SQL'
+    -v who="$who" -v lesson="$lesson" -v scope="$scope" <<'SQL'
 UPDATE lessons
    SET resolution = :'resolution', lesson = nullif(:'lesson', ''),
-       resolved_by = :'who', resolved_at = now()
+       scope = nullif(:'scope', ''), resolved_by = :'who', resolved_at = now()
  WHERE id = (SELECT id FROM lessons
               WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NULL
               ORDER BY id DESC LIMIT 1);
@@ -242,6 +244,7 @@ SQL
 #              signature), QUERY): the lesson's error appears in the spec. Plain
 #              similarity of one error line to a whole spec stays near zero.
 #     text     0.1 for similarity(signature, QUERY), as recall always did.
+# A lesson whose scope is repo is recalled only in its own repository.
 db_recall_lessons() {
   db_sql -v repo="$1" -v mode="$2" -v query="$3" -v fingerprint="${4:-}" -v first_error="${5:-}" <<'SQL'
 WITH candidates AS (
@@ -259,6 +262,7 @@ WITH candidates AS (
          END AS threshold
     FROM lessons
    WHERE resolution IS NOT NULL
+     AND (scope IS DISTINCT FROM 'repo' OR repo = :'repo')
 )
 SELECT '- Seen before: ' || left(regexp_replace(signature, '\s+', ' ', 'g'), 240)
        || E'\n  Fix: ' || fix

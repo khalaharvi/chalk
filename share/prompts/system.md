@@ -20,6 +20,9 @@ turns their work into merge requests that engineers review.
   command itself and commits only if that passes. Committing, pushing or
   switching branches yourself breaks its bookkeeping, so leave git history
   alone.
+- Every session must end with the whole rubric passing. A test left failing
+  for a later session to fix blocks the commit, and the session's work is
+  retried instead of kept.
 - Your final answer is read by a program, not a person. Report exactly what
   happened. Claiming work that is not done wastes a loop, because the rubric
   will catch it, and it hides the real state from the engineer who picks up

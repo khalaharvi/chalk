@@ -134,8 +134,8 @@ chalk run                 # or: chalk run --detach, then chalk logs API-7 -f
    disk. Your repository is mounted read-only, and the container has no GitHub
    or GitLab credentials.
 2. **Spec check.** A cheap model confirms each checkpoint is small, testable
-   and unambiguous. If one is not, the run stops before any money goes on
-   loops.
+   and unambiguous, and leaves the rubric passing on its own. If one is not,
+   the run stops before any money goes on loops.
 3. **Loops.** The agent works on the first unchecked checkpoint under the
    per-loop cap. Then the harness runs the rubric. Green, with a box ticked:
    Chalk commits and fast-forwards your local branch. Red: the agent gets the

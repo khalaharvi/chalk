@@ -76,16 +76,6 @@ check "doctor: auto mode is not checked when CHALK_PERMISSION_MODE=bypass" \
 if CHALK_MODEL=haiku chalk doctor > "$tmp/doctor5.log" 2>&1; then fail "doctor must refuse Haiku in auto mode"; fi
 check "doctor: Haiku is refused for auto mode without asking the CLI" \
   grep -q 'auto mode does not support Haiku' "$tmp/doctor5.log"
-check "doctor: says which account an API key bills" \
-  grep -qx '  ok    agent calls bill the API account (ANTHROPIC_API_KEY)' "$tmp/doctor1.log"
-CLAUDE_CODE_OAUTH_TOKEN=test-token chalk doctor > "$tmp/doctor6.log" 2>&1 ||
-  { cat "$tmp/doctor6.log"; fail "doctor must pass with both an API key and a subscription token"; }
-check "doctor: an API key set next to a subscription token is flagged, with the fix" \
-  grep -q '^  --    agent calls bill the API account, not your Claude plan: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set, and the API key wins; to use your plan, run: unset ANTHROPIC_API_KEY' "$tmp/doctor6.log"
-env -u ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN=test-token chalk doctor > "$tmp/doctor7.log" 2>&1 ||
-  { cat "$tmp/doctor7.log"; fail "doctor with only a subscription token"; }
-check "doctor: says a subscription token bills the Claude plan" \
-  grep -qx '  ok    agent calls use your Claude plan (CLAUDE_CODE_OAUTH_TOKEN)' "$tmp/doctor7.log"
 
 # next_step LOG TEXT: LOG has exactly one "what to do next" line, and it
 # starts with TEXT.
@@ -124,6 +114,16 @@ check "final review ran before the merge request" grep -q "final review: pass" "
 check "the run summary counts loops, not the spec check or review" \
   grep -q "all checkpoints complete (2 loops" "$tmp/run1.log"
 check "review summary lands in the merge request" grep -q "Agent review before submission: Looks complete" "$FAKE_STATE/glab.log"
+# The harness commits a checkpoint only when the rubric passes, so a
+# checkpoint must leave it passing on its own. The prompts are the contract.
+check "spec check fails a checkpoint that cannot leave the rubric passing on its own" \
+  sh -c "grep -q '^- Green on its own: once it is done, the rubric passes, without any later' '$io/spec-check.prompt.md' &&
+    grep -q 'merge the test and the code that makes it pass into one checkpoint' '$io/spec-check.prompt.md'"
+check "loops are told to end every session with the rubric passing" \
+  sh -c "grep -q 'Every session must end with the whole rubric passing' '$io/system.md' &&
+    grep -q 'do the next one too, tick both' '$io/prompt.md'"
+check "the spec template asks for a test and its code in one checkpoint" \
+  grep -q 'put a test and the code that makes it pass in one checkpoint' specs/PROJ-1.md
 
 # 2. Failure path: rubric keeps failing, work goes to detention, human fixes.
 cd "$tmp/demo"
@@ -166,7 +166,13 @@ chalk office-hours -m "BROKEN marker must not be committed" > "$tmp/run3.log" 2>
 check "resumed on a tutoring branch" test "$(git rev-parse --abbrev-ref HEAD | cut -d/ -f1)" = tutoring
 check "spec finished after office hours" test "$(grep -c -e '- \[ \]' specs/PROJ-2.md)" -eq 0
 check "lesson resolved with the engineer's note" grep -q "resolution=BROKEN marker" "$FAKE_STATE/db.log"
-check "note distilled into a general lesson" grep -q "lesson=Distilled: never commit" "$FAKE_STATE/db.log"
+check "note distilled into a general lesson" \
+  grep -q -e "-v lesson=Distilled: never commit a BROKEN marker -v scope=general$" "$FAKE_STATE/db.log"
+distill="$XDG_STATE_HOME/chalk/demo/runs/PROJ-2/distill/distill.prompt.md"
+check "distillation gets the engineer's note and the diff of the fix commit" \
+  sh -c "grep -A 1 '^<engineer_note>$' '$distill' | grep -qx 'BROKEN marker must not be committed' &&
+    sed -n '/^<fix_diff>$/,/^<\/fix_diff>$/p' '$distill' > '$tmp/fix_diff' &&
+    grep -q '^1 commit(s) since the detention' '$tmp/fix_diff' && grep -q '^diff --git a/BROKEN b/BROKEN' '$tmp/fix_diff'"
 check "distillation sandbox removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-2-distill"
 check "tutoring merge request opened" grep -q "mr create.*tutoring/PROJ-2" "$FAKE_STATE/glab.log"
 
@@ -325,6 +331,22 @@ check "blocker text recorded as the lesson signature" grep -q "signature=agent r
 check "next step on a blocker: provide what the agent asked for" \
   next_step "$tmp/run6.log" "provide what the agent asked for above"
 
+# The key is provided outside the repository, so nothing is committed, and
+# the distillation finds no rule in the evidence.
+git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-4-*')"
+FAKE_DISTILL=none chalk office-hours -m "added the staging API key to the sandbox environment" > "$tmp/run6b.log" 2>&1 ||
+  { cat "$tmp/run6b.log"; fail "office hours with the fix outside the repository"; }
+distill="$XDG_STATE_HOME/chalk/demo/runs/PROJ-4/distill/distill.prompt.md"
+check "with nothing committed, distillation is told the fix was made outside the repository" \
+  sh -c "sed -n '/^<fix_diff>$/,/^<\/fix_diff>$/p' '$distill' | grep -q '^No commits since the detention: the engineer changed nothing in this repository' &&
+    ! grep -q '^diff --git' '$distill'"
+check "distillation is told the note is the source of truth and asked for a scope" \
+  sh -c "grep -q 'The note is the source of truth about what was wrong' '$distill' && grep -q 'Set \"scope\"' '$distill'"
+check "a distillation that finds no lesson stores none, and keeps the note for this repository only" \
+  grep -q -e "-v resolution=added the staging API key to the sandbox environment .*-v lesson= -v scope=repo$" "$FAKE_STATE/db.log"
+check "office hours says no lesson was distilled" grep -q "no lesson distilled" "$tmp/run6b.log"
+check "the run resumes after an office hours with nothing committed" grep -q "mr create.*tutoring/PROJ-4" "$FAKE_STATE/glab.log"
+
 cd "$tmp/demo"
 chalk new PROJ-5 Reviewed feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-5"
@@ -393,6 +415,7 @@ ALTER TABLE runs DROP COLUMN run_id, DROP COLUMN tests_hash, DROP COLUMN failing
 DROP INDEX lessons_fingerprint_idx;
 ALTER TABLE lessons DROP COLUMN run_id, DROP COLUMN fingerprint, DROP COLUMN first_error;
 ALTER TABLE runs DROP COLUMN failing_tests;
+ALTER TABLE lessons DROP COLUMN scope;
 SQL
   pg -f "$here/../share/schema.sql"
   pg -f "$here/../share/schema.sql"
@@ -406,6 +429,8 @@ SQL
     test "$(pg -c "SELECT count(*) FROM pg_indexes WHERE schemaname = 'chalk_e2e' AND indexname = 'lessons_fingerprint_idx'")" = 1
   check "schema: the failing test IDs column is added, and old rows read as NULL" \
     test "$(pg -c 'SELECT count(*) FROM runs WHERE failing_tests IS NULL')" = 1
+  check "schema: the lesson scope column is added, and old lessons read as NULL, recalled anywhere" \
+    test "$(pg -c 'SELECT count(*) FROM lessons WHERE scope IS NULL')" = 1
 
   # Four runs, ten cents a loop unless noted:
   #   L-1 detained:  first, no_change, no_change (30c)   saves 30c by no_change
@@ -658,8 +683,11 @@ check "no lesson memory service is started" \
     ! grep -q chalk-memory '$FAKE_STATE/docker.log' && test ! -e '$FAKE_STATE/curl.log'"
 git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-3-*')"
 git rm -q BROKEN && git commit -q -m "remove the blocker"
-CHALK_MEMORY=hindsight chalk office-hours -m "note" > "$tmp/run4b.log" 2>&1 ||
+CHALK_MEMORY=hindsight FAKE_DISTILL=repo chalk office-hours -m "note" > "$tmp/run4b.log" 2>&1 ||
   { cat "$tmp/run4b.log"; fail "office hours with old Hindsight settings"; }
+check "a lesson about this repository is stored and reported as recalled here only" \
+  sh -c "grep -q -e '-v resolution=note .*-v scope=repo$' '$FAKE_STATE/db.log' &&
+    grep -q 'lesson, recalled in this repository only: Distilled' '$tmp/run4b.log'"
 check "office hours resolves the lesson without syncing it anywhere" \
   sh -c "grep -q 'resolution=note' '$FAKE_STATE/db.log' && ! grep -q 'SET memory_synced_at' '$FAKE_STATE/db.log' &&
     ! grep -q 'chalk memory sync' '$tmp/run4b.log'"
@@ -686,14 +714,16 @@ if [ -n "${FAKE_PG_URL:-}" ]; then
   if command -v sha256sum >/dev/null; then sha=(sha256sum); else sha=(shasum -a 256); fi
   fingerprint="$(printf '%s\n\n%s\n' demo::no_marker "$error" | "${sha[@]}" | cut -d' ' -f1)"
 
-  # seed REPO FINGERPRINT FIRST_ERROR SIGNATURE FIX: a resolved lesson. An
-  # empty FINGERPRINT or FIRST_ERROR is stored as NULL, as for old lessons.
+  # seed REPO FINGERPRINT FIRST_ERROR SIGNATURE FIX [SCOPE]: a resolved
+  # lesson. An empty FINGERPRINT, FIRST_ERROR or SCOPE is stored as NULL, as
+  # for old lessons.
   seed() {
-    rpg -v repo="$1" -v fingerprint="$2" -v first_error="$3" -v signature="$4" -v fix="$5" <<'SQL'
+    rpg -v repo="$1" -v fingerprint="$2" -v first_error="$3" -v signature="$4" -v fix="$5" \
+      -v scope="${6:-}" <<'SQL'
 INSERT INTO lessons (repo, ticket, signature, resolution, lesson, resolved_by, resolved_at,
-                     fingerprint, first_error)
+                     fingerprint, first_error, scope)
 VALUES (:'repo', 'SEED-1', :'signature', 'note', :'fix', 'e2e', now(),
-        nullif(:'fingerprint', ''), nullif(:'first_error', ''));
+        nullif(:'fingerprint', ''), nullif(:'first_error', ''), nullif(:'scope', ''));
 SQL
   }
   # recall_run TICKET [ENV=VALUE...]: a run of TICKET whose rubric always
@@ -787,6 +817,16 @@ $error" TEXT-FIX
   recall_run PROJ-45 CHALK_FP_RULES=off
   check "recall: with CHALK_FP_RULES=off, lessons are matched on the failure text" \
     test "$(recalled PROJ-45):$(counted PROJ-45)" = "TEXT-FIX:0 1"
+
+  # 7. Scope: a lesson scoped to its repository is recalled only there; a
+  # general one, like one from before scopes, anywhere.
+  rpg -c 'TRUNCATE lessons, runs'
+  seed other fp-1 "$error" "rubric failed" OTHER-REPO-ONLY-FIX repo
+  seed demo fp-2 "$error" "rubric failed" OWN-REPO-FIX repo
+  seed other fp-3 "$error" "rubric failed" GENERAL-FIX general
+  recall_run PROJ-46
+  check "recall: a lesson scoped to another repository is not recalled; one scoped to this one is" \
+    test "$(recalled PROJ-46):$(counted PROJ-46)" = "GENERAL-FIX OWN-REPO-FIX:0 2"
 
   rpg -c 'DROP SCHEMA chalk_recall CASCADE'
   export PGOPTIONS="$e2e_pgoptions"

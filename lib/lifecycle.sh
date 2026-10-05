@@ -1,10 +1,34 @@
 # What happens after the loop stops: office hours, submission, cleanup.
 
-# Turns the engineer's note and fix into a reusable rule, using a short-lived
-# sandbox. Prints the lesson, or nothing if it could not be produced; the
-# note is always kept, so this is best effort.
+# office_hours_fix: prints what the engineer changed in the repository since
+# the detention commit, for the distillation prompt: the diff, or, when there
+# is none, that the fix was made outside the repository. Said plainly, so
+# that an empty or partial diff is not read as the whole fix.
+office_hours_fix() {
+  local start count
+  start="$(git -C "$RUN_WT" log --grep='^detention(' -1 --format=%H)"
+  if [ -z "$start" ]; then
+    printf 'The detention commit was not found, so what changed in this repository is unknown. Rely on the note.\n'
+    return 0
+  fi
+  count="$(git -C "$RUN_WT" rev-list --count "$start..HEAD")"
+  if [ "$count" -eq 0 ]; then
+    printf 'No commits since the detention: the engineer changed nothing in this repository. The fix was made outside it (for example the sandbox image, the environment, a credential or access), and the note is the only record of it.\n'
+    return 0
+  fi
+  printf '%s commit(s) since the detention. They show only what changed inside this repository; the note says whether anything changed outside it.\n\n' "$count"
+  git -C "$RUN_WT" diff --stat "$start" HEAD
+  printf '\n'
+  git -C "$RUN_WT" diff "$start" HEAD | head -n 300
+}
+
+# office_hours_distill NOTE: turns the engineer's note and fix into a
+# reusable rule, using a short-lived sandbox. Prints the lesson's scope
+# (general, repo or none), a tab and the lesson, which is empty for none.
+# Prints nothing if the call gave no answer; the note is always kept, so
+# this is best effort.
 office_hours_distill() {
-  local note="$1" io sandbox signature start fix started lesson
+  local note="$1" io sandbox signature fix started lesson scope
   [ "$CHALK_DISTILL" = "true" ] && agent_auth_present || return 0
   io="$RUN_DIR/distill"
   sandbox="${| sandbox_name "$RUN_TICKET-distill"; }"
@@ -12,8 +36,7 @@ office_hours_distill() {
   mkdir -p "$io"
 
   signature="$(db_pending_signature "$RUN_TICKET")"
-  start="$(git -C "$RUN_WT" log --grep='^detention(' -1 --format=%H)"
-  fix="$(git -C "$RUN_WT" diff "${start:-HEAD}" HEAD | head -n 300)"
+  fix="$(office_hours_fix)"
 
   sandbox_ensure_image >/dev/null
   agent_write_system "$io" "$RUN_WT"
@@ -25,12 +48,23 @@ office_hours_distill() {
     printf '<engineer_note>\n%s\n</engineer_note>\n' "$note"
     printf '<fix_diff>\n%s\n</fix_diff>\n\n' "$fix"
     cat "${| prompt_file "$RUN_WT" distill; }"
-  } | agent_call "$sandbox" "$io" distill "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[lesson]}" read || true
+  } > "$io/distill.prompt.md"
+  agent_call "$sandbox" "$io" distill "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[lesson]}" read < "$io/distill.prompt.md" || true
   sandbox_stop "$sandbox"
 
   lesson="$(agent_field "$io/distill.json" '.lesson')"
+  scope="$(agent_field "$io/distill.json" '.scope')"
+  # A lesson that is empty or just says "none" is no lesson, whatever the scope.
+  if [[ $scope == none || ${lesson@L} =~ ^[[:space:]]*(none)?[.[:space:]]*$ ]]; then lesson=""; fi
   db_record_call distill "$([ -n "$lesson" ] && echo ok || echo none)" 0 false "$CHALK_CHEAP_MODEL" "$((SECONDS - started))" 0 "$io/distill.json"
-  printf '%s\n' "$lesson"
+  # No answer at all: the call failed, and the note stands alone, as before.
+  [[ -n $scope || -n $lesson ]] || return 0
+  if [[ -z $lesson ]]; then
+    scope=none
+  elif [[ $scope != general ]]; then
+    scope=repo
+  fi
+  printf '%s\t%s\n' "$scope" "$lesson"
 }
 
 cmd_office_hours() {
@@ -53,10 +87,21 @@ cmd_office_hours() {
   esac
 
   db_up
-  local lesson
-  lesson="$(office_hours_distill "$note" || true)"
-  db_resolve_lesson "$RUN_TICKET" "$note" "$(git config user.email || whoami)" "$lesson"
-  if [ -n "$lesson" ]; then info "lesson: $lesson"; fi
+  local distilled scope lesson stored
+  distilled="$(office_hours_distill "$note" || true)"
+  scope="${distilled%%$'\t'*}" lesson="${distilled#*$'\t'}"
+  # The scope says where the lesson is recalled. A repo lesson is recalled
+  # only in this repository, and so is the note when no lesson came of it.
+  # When nothing was distilled the scope stays NULL, which is recalled
+  # anywhere, as before scopes existed.
+  stored="$scope"
+  if [[ $scope == none ]]; then stored=repo; fi
+  db_resolve_lesson "$RUN_TICKET" "$note" "$(git config user.email || whoami)" "$lesson" "$stored"
+  case "$scope" in
+    general) info "lesson: $lesson" ;;
+    repo)    info "lesson, recalled in this repository only: $lesson" ;;
+    none)    info "no lesson distilled: the fix does not support a rule for other tickets; your note is recalled in this repository only" ;;
+  esac
 
   RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
