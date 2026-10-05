@@ -5,6 +5,28 @@ Conventional Commits titles merged since the previous release (see
 [CONTRIBUTING.md](CONTRIBUTING.md#commit-titles)). Releases before 0.7.0 were
 written by hand.
 
+## 0.8.0 (2026-10-05)
+
+### Features
+
+- **share:** add PRIVACY.md and print an anonymised report card that never holds identifying data ([#86](https://github.com/khalaharvi/chalk/pull/86))
+- **decider:** hold CHALK_DECIDER=on to shadow until each provider is calibrated ([#84](https://github.com/khalaharvi/chalk/pull/84))
+- **decider:** gate hosted deciders behind chalk decider trust and make /health optional ([#83](https://github.com/khalaharvi/chalk/pull/83))
+- **decider:** add CHALK_DECIDER and the local reference service ([#80](https://github.com/khalaharvi/chalk/pull/80))
+
+### Fixes
+
+- **decider:** say why nothing was asked, and start the local decider only once it can be ([#87](https://github.com/khalaharvi/chalk/pull/87))
+- **decider:** take turns at the local decider and fit the rerank in the loop budget ([#82](https://github.com/khalaharvi/chalk/pull/82))
+- **docs:** skip login-only claude.ai settings links in the link check ([#79](https://github.com/khalaharvi/chalk/pull/79))
+
+### Documentation
+
+- **designs:** add the blocker ladder design ([#88](https://github.com/khalaharvi/chalk/pull/88))
+- **decider:** document the decider protocol ([#78](https://github.com/khalaharvi/chalk/pull/78))
+- stop the home page title repeating "Chalk harness" ([#77](https://github.com/khalaharvi/chalk/pull/77))
+- qualify the name as "Chalk harness" in titles and posts ([#76](https://github.com/khalaharvi/chalk/pull/76))
+
 ## 0.7.1 (2026-10-04)
 
 ### Fixes
