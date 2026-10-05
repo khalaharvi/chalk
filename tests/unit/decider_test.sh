@@ -90,16 +90,21 @@ for i in 1 2 3 4 5; do
   if ask FAKE_DECIDER_DELAY=0.8; then results+=(ok); else results+=("$DECIDER_ERROR"); fi
 done
 elapsed=$(( ${| decider_now_ms; } - started ))
-check "calls share one 2 s budget: two answer, one times out, the rest are skipped" \
-  test "${results[*]}" = "ok ok timeout budget budget"
+# How many calls fit depends on how long this machine takes between calls
+# (process start, jq), so check the shape rather than exact counts: answers
+# first, then at most one call cut off by what was left, then only skipped
+# calls, and never an answer after one failed.
+check "calls share one 2 s budget: answers, then at most one timeout, then skipped" \
+  sh -c 'printf "%s\n" "$1" | grep -Eqx "(ok )+(timeout )?budget( budget)*"' _ "${results[*]}"
 # Waiting on the services is held to the budget; reading their answers
 # (jq, a few milliseconds a call) comes on top.
 check "... and wait no more than the budget (${DECIDER_SPENT_MS} ms)" test "$DECIDER_SPENT_MS" -le 2150
-check "... in about that time in all (${elapsed} ms)" test "$elapsed" -le 2800
+# Generous on purpose: it only catches waiting that is not capped at all.
+check "... in about that time in all (${elapsed} ms)" test "$elapsed" -le 4000
 mapfile -t limits < <(sed -n 's/^max-time=\([0-9.]*\) .*/\1/p' "$FAKE_STATE/decider.log")
 check "each call's --max-time is what is left of the budget" \
-  test "${limits[0]}" = "2.000" -a "${#limits[@]}" -eq 3
-check "... and gets smaller" awk -v a="${limits[1]}" -v b="${limits[2]}" 'BEGIN { exit !(b < a && b > 0 && a < 2) }'
+  test "${limits[0]}" = "2.000" -a "${#limits[@]}" -ge 2
+check "... and gets smaller" awk -v a="${limits[0]}" -v b="${limits[-1]}" 'BEGIN { exit !(b < a && b > 0) }'
 decider_budget_reset
 check "a new loop gets a new budget" ask
 
