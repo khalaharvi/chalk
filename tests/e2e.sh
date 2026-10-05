@@ -41,6 +41,19 @@ fi
 
 # A repository with a remote and a rubric that rejects a file named BROKEN.
 git init -q --bare "$tmp/origin.git"
+# Like GitHub, the remote answers a push with a hint to open a pull request,
+# and it refuses branches of PROJ-23, as a branch protection rule might.
+cat > "$tmp/origin.git/hooks/post-receive" <<'HOOK'
+#!/bin/sh
+echo
+echo "Create a pull request by visiting:"
+echo "     https://example.com/pull/new"
+HOOK
+cat > "$tmp/origin.git/hooks/pre-receive" <<'HOOK'
+#!/bin/sh
+if grep -q 'refs/heads/chalk/PROJ-23$'; then echo "error: pushes to chalk/PROJ-23 are not allowed"; exit 1; fi
+HOOK
+chmod +x "$tmp/origin.git/hooks/post-receive" "$tmp/origin.git/hooks/pre-receive"
 git init -q -b main "$tmp/demo"
 cd "$tmp/demo"
 git remote add origin "$tmp/origin.git"
@@ -135,7 +148,9 @@ next_step() {
 chalk new PROJ-1 Demo feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-1"
 git add -A && git commit -q -m "spec"
-chalk run > "$tmp/run1.log" 2>&1 || { cat "$tmp/run1.log"; fail "happy path run"; }
+# The agent's summary runs to several paragraphs, as real ones do.
+FAKE_SUMMARY=$'Ticked the checkpoint.\n\nTests (test/demo.test.js): wrote them first.' \
+  CHALK_SETUP_CMD='echo setting up' chalk run > "$tmp/run1.log" 2>&1 || { cat "$tmp/run1.log"; fail "happy path run"; }
 check "all checkpoints ticked on host branch" test "$(grep -c -e '- \[x\]' specs/PROJ-1.md)" -eq 2
 check "one commit per loop" test "$(git rev-list --count main..HEAD)" -eq 3
 check "branch pushed to origin" git -C "$tmp/origin.git" rev-parse chalk/PROJ-1
@@ -162,6 +177,20 @@ check "final review ran before the merge request" grep -q "final review: pass" "
 check "the run summary counts loops, not the spec check or review" \
   grep -q "all checkpoints complete (2 loops" "$tmp/run1.log"
 check "review summary lands in the merge request" grep -q "Agent review before submission: Looks complete" "$FAKE_STATE/glab.log"
+check "the run says what it is doing from the start, in order" \
+  test "$(grep -o -e 'starting the database and the sandbox image' -e 'starting sandbox ' -e 'cloning chalk/PROJ-1 into the sandbox' \
+             -e 'running the setup command: echo setting up' -e 'checking the spec with haiku' \
+             -e 'spec check passed (\$0.25, [0-9]*s)' -e 'loop 1 (continue) started' -e 'final review started' \
+             "$tmp/run1.log" | sed 's/, [0-9]*s)/, Ns)/' | paste -sd '|' -)" \
+    = 'starting the database and the sandbox image|starting sandbox |cloning chalk/PROJ-1 into the sandbox|running the setup command: echo setting up|checking the spec with haiku|spec check passed ($0.25, Ns)|loop 1 (continue) started|final review started'
+check "every line of a summary of several paragraphs carries the ticket" \
+  sh -c "test \"\$(grep -c '^\[PROJ-1\] Tests (test/demo.test.js): wrote them first.\$' '$tmp/run1.log')\" -eq 2 &&
+    test \"\$(grep -cx '\[PROJ-1\]' '$tmp/run1.log')\" -eq 2 && ! grep -q '^Tests ' '$tmp/run1.log'"
+git init -q --bare "$tmp/hint.git"
+cp "$tmp/origin.git/hooks/post-receive" "$tmp/hint.git/hooks/"
+check "the remote's hint would show in a plain push" \
+  sh -c "git push -q '$tmp/hint.git' HEAD:refs/heads/hint 2>&1 | grep -q '^remote: Create a pull request'"
+check "the remote's hint after the push is not shown" sh -c "! grep -q -e '^remote:' -e 'Create a pull request' '$tmp/run1.log'"
 # The harness commits a checkpoint only when the rubric passes, so a
 # checkpoint must leave it passing on its own. The prompts are the contract.
 check "spec check fails a checkpoint that cannot leave the rubric passing on its own" \
@@ -341,6 +370,25 @@ check "fp feedback: the retry instructions are the retry prompt, unchanged" \
   sh -c "tail -n \"\$(wc -l < '$here/../share/prompts/retry.md')\" '$prompt19' | cmp -s - '$here/../share/prompts/retry.md'"
 cd "$tmp/demo"
 
+# 2c'. A rubric that prints nothing, as `go test -json ./... > report.json`
+# does, leaves a retry nothing to read in its output. Even with the default
+# CHALK_FP_FEEDBACK=false, the retry is then told the failing tests from
+# the report, and that the rubric printed no output.
+chalk new PROJ-22 Silent rubric feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-22"
+git add -A && git commit -q -m "spec"
+if FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=1 CHALK_TEST_REPORT=out/report.json \
+   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$gojson' > out/report.json; exit 1; fi" \
+   chalk run > "$tmp/run20.log" 2>&1; then
+  fail "a failing run with a silent rubric should exit non-zero"
+fi
+sed -n '/^<failure>$/,/^<\/failure>$/p' "$XDG_STATE_HOME/chalk/demo/runs/PROJ-22/io/prompt.md" > "$tmp/failure20.txt"
+check "silent rubric: the retry is told the failing test from the report" \
+  test "$(grep -A1 -x 'this test still fails:' "$tmp/failure20.txt")" = $'this test still fails:\n- demo::TestNoMarker'
+check "silent rubric: the retry is told the rubric printed nothing" \
+  grep -qx 'the rubric printed no output' "$tmp/failure20.txt"
+cd "$tmp/demo"
+
 # 3. Fleet: a plan with two workstreams runs in parallel in the background.
 cd "$tmp/demo"
 cat > "$tmp/plan.json" <<'PLAN'
@@ -487,6 +535,10 @@ SQL
   #   L-4 detained:  first, improving, improving         converging but detained
   #   L-5 detained:  first, repeat, under CHALK_FP_RULES=on: stopped at its
   #                  first stop, so it is counted apart and changes nothing
+  #   L-6 detained:  blocked (15c)                       blocker only: apart
+  #   L-7 detained:  agent_error, blocked (5c, 5c)       no rule judged it: apart
+  #   L-8 detained:  no verdicts, under CHALK_FP_RULES=off (20c): apart
+  #   L-9 detained:  first, blocked (10c, 10c)           a judged loop: counted
   # L-1 records CHALK_FP_RULES=shadow; the others, from before it was
   # recorded, record nothing and count as shadow.
   pg -c 'TRUNCATE runs, lessons'
@@ -517,15 +569,32 @@ VALUES ('ledger-on', 'L-5', 'chalk/L-5', 1, 'continue', 'ok', 1, false, 'm', 'p'
         0, 0, 0, 0, 0, 0, 0, 'L-5-100', 1, 'first', 'on'),
        ('ledger-on', 'L-5', 'chalk/L-5', 2, 'retry', 'ok', 1, false, 'm', 'p', 0.20, 1, 1,
         0, 0, 0, 0, 0, 0, 0, 'L-5-100', 1, 'repeat', 'on');
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons,
+                  run_id, verdict, fp_rules)
+SELECT 'ledger', t, 'chalk/' || t, n, CASE n WHEN 1 THEN 'continue' ELSE 'retry' END, status,
+       CASE status WHEN 'ok' THEN 1 ELSE 0 END, false, 'm', 'p', cost, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+       t || '-100', verdict, rules
+  FROM (VALUES
+    ('L-6', 1, 'blocked', 0.15, 'blocked', 'shadow'),
+    ('L-7', 1, 'error_max_turns', 0.05, 'agent_error', 'shadow'),
+    ('L-7', 2, 'blocked', 0.05, 'blocked', 'shadow'),
+    ('L-8', 1, 'ok', 0.10, NULL, 'off'), ('L-8', 2, 'ok', 0.10, NULL, 'off'),
+    ('L-9', 1, 'ok', 0.10, 'first', 'shadow'), ('L-9', 2, 'blocked', 0.10, 'blocked', 'shadow')
+  ) v(t, n, status, cost, verdict, rules);
 INSERT INTO lessons (repo, ticket, signature, run_id)
 VALUES ('ledger', 'L-1', 's', 'L-1-100'), ('ledger', 'L-2', 's', 'L-2-100'), ('ledger', 'L-4', 's', 'L-4-100'),
-       ('ledger-on', 'L-5', 's', 'L-5-100');
+       ('ledger-on', 'L-5', 's', 'L-5-100'), ('ledger', 'L-6', 's', 'L-6-100'),
+       ('ledger', 'L-7', 's', 'L-7-100'), ('ledger', 'L-8', 's', 'L-8-100'), ('ledger', 'L-9', 's', 'L-9-100');
 SQL
   pg -v days=30 -f "$here/../share/dashboard.sql" | jq -c .ledger > "$tmp/ledger.json"
   # Amounts are compared in cents: jq may keep "0.7000" as Postgres wrote it.
   ledger() { jq -r "def c: . * 100 | round; $1" "$tmp/ledger.json"; }
-  check "ledger: no-progress spend and savings on detained runs" \
-    test "$(ledger '[.detained_runs, (.no_progress_cost | c), (.saved | c)] | join(" ")')" = "3 190 70"
+  check "ledger: no-progress spend and savings on detained runs with a judged verdict" \
+    test "$(ledger '[.detained_runs, (.no_progress_cost | c), (.saved | c)] | join(" ")')" = "4 210 70"
+  check "ledger: detentions with only blockers or agent errors, or no verdicts, are counted apart" \
+    test "$(ledger '[.blocked_only, (.blocked_only_cost | c), .no_verdicts] | join(" ")')" = "2 25 1"
   check "ledger: savings split by the first stopping verdict" \
     test "$(ledger '[.by_verdict[] | "\(.verdict)=\(.runs)/\(.saved | c)"] | join(" ")')" = "repeat=1/40 no_change=1/30"
   check "ledger: a stop followed by progress is a false stop, with the spend after it" \
@@ -533,10 +602,10 @@ SQL
   check "ledger: runs detained while improving are counted" test "$(ledger .converging)" = 1
   check "ledger: a run stopped by CHALK_FP_RULES=on is counted apart" test "$(ledger .stopped_on)" = 1
   check "ledger: one row per run" \
-    test "$(ledger '[.runs[] | "\(.run_id):\(.stop_verdict):\(.stop_loop):\(.after_cost | c):\(.false_stop):\(.converging)"] | sort | join(" ")')" \
-      = "L-1-100:no_change:2:30:false:false L-2-100:repeat:2:40:false:false L-3-100:no_change:2:50:true:false L-4-100:null:null:0:false:true"
+    test "$(ledger '[.runs[] | "\(.run_id):\(.could_stop):\(.stop_verdict):\(.stop_loop):\(.after_cost | c):\(.false_stop):\(.converging)"] | sort | join(" ")')" \
+      = "L-1-100:true:no_change:2:30:false:false L-2-100:true:repeat:2:40:false:false L-3-100:true:no_change:2:50:true:false L-4-100:true:null:null:0:false:true L-6-100:false:null:null:0:false:false L-7-100:false:null:null:0:false:false L-8-100:false:null:null:0:false:false L-9-100:true:null:null:0:false:false"
   check "ledger: failed loops that named no tests, per repository" \
-    test "$(ledger '[.unknown_tests[] | "\(.repo) \(.loops) \(.unknown)"] | join(" ")')" = "ledger 11 5 ledger-on 2 0"
+    test "$(ledger '[.unknown_tests[] | "\(.repo) \(.loops) \(.unknown)"] | join(" ")')" = "ledger 12 6 ledger-on 2 0"
 
   # Tests that keep failing: in ft, test a fails in four loops on two
   # tickets, b in two and c in one; a review naming z is not a loop. In
@@ -625,6 +694,37 @@ if FAKE_DB_BROKEN=1 chalk run > "$tmp/run11.log" 2>&1; then fail "a run without 
 check "a service that fails to start is named" grep -q "could not start: database" "$tmp/run11.log"
 check "no sandbox is started when a service fails" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-14"
 cd "$tmp/demo"
+
+# 3f'. A push the remote refuses shows the remote's reason, and stops the
+# run before any request is opened.
+chalk new PROJ-23 Refused push >/dev/null
+cd "$tmp/demo.worktrees/PROJ-23"
+git add -A && git commit -q -m "spec"
+if chalk run > "$tmp/run23.log" 2>&1; then fail "a refused push must fail the run"; fi
+check "a refused push shows what the remote said, and why the run stopped" \
+  sh -c "grep -q '^remote: error: pushes to chalk/PROJ-23 are not allowed' '$tmp/run23.log' &&
+    grep -q '^error: could not push chalk/PROJ-23 to origin' '$tmp/run23.log' &&
+    ! grep -q 'chalk/PROJ-23' '$FAKE_STATE/glab.log'"
+cd "$tmp/demo"
+
+# 3f''. chalk status gives every ticket that is not running the state it
+# was left in: submitted (PROJ-1, and PROJ-2 and PROJ-4 after office
+# hours), detained (PROJ-6 by its review), spec-blocked (PROJ-24),
+# done when the work passed review but was not submitted (PROJ-23, whose
+# push was refused), stopped when the run ended with no outcome (PROJ-8,
+# stopped by SIGTERM) and new when no call was made (PROJ-14, whose
+# database did not start).
+chalk new PROJ-24 Spec not ready >/dev/null
+cd "$tmp/demo.worktrees/PROJ-24"
+git add -A && git commit -q -m "spec"
+if FAKE_SPEC=fail chalk run > /dev/null 2>&1; then fail "a spec that is not ready must stop the run"; fi
+cd "$tmp/demo"
+chalk status > "$tmp/status.log"
+state_of() { awk -v t="$1" '$1 == t { print $2 }' "$tmp/status.log"; }
+check "status: states of tickets that are not running" \
+  test "$(for t in PROJ-1 PROJ-2 PROJ-6 PROJ-4 PROJ-24 PROJ-23 PROJ-8 PROJ-14; do printf '%s=%s ' "$t" "$(state_of "$t")"; done)" \
+    = "PROJ-1=submitted PROJ-2=submitted PROJ-6=detained PROJ-4=submitted PROJ-24=spec-blocked PROJ-23=done PROJ-8=stopped PROJ-14=new "
+check "status: no ticket is idle" sh -c "! grep -q ' idle ' '$tmp/status.log'"
 
 # 3g. Database versions and `chalk db upgrade`. With FAKE_DB_MODEL set, the
 # fake keeps chalk-db containers and volumes as state, here in a fake state

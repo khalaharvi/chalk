@@ -7,6 +7,7 @@
 #   FAKE_CLAUDE_MODE=idle      loop changes nothing and ticks nothing
 #   FAKE_CLAUDE_MODE=refused   like idle, with four actions refused by permission checks
 #   FAKE_CLAUDE_MODE=error     loop stops early on its turn limit
+#   FAKE_SUMMARY=TEXT          a loop that ticks a checkpoint summarizes it as TEXT
 #   FAKE_SPEC=fail             spec check fails
 #   FAKE_DISTILL=repo          distillation gives a lesson for this repository only
 #   FAKE_DISTILL=none          distillation finds no lesson in the evidence
@@ -64,7 +65,8 @@ case "$prompt" in
         line="$(grep -n -m 1 -e '- \[ \]' "$spec" | cut -d: -f1)"
         sed -i.bak "${line}s/- \[ \]/- [x]/" "$spec" && rm -f "$spec.bak"
         echo "work for line $line" >> work.txt
-        answer '{"status":"done","checkpoint":"next","summary":"implemented a checkpoint"}' ;;
+        answer "$(jq -cn --arg summary "${FAKE_SUMMARY:-implemented a checkpoint}" \
+          '{status: "done", checkpoint: "next", summary: $summary}')" ;;
     esac ;;
   *)
     if [ "${FAKE_SPEC:-}" = "fail" ]; then

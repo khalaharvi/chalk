@@ -274,21 +274,38 @@ SQL
 }
 
 # db_ticket_summary TICKET VAR [FALLBACK]: fills the associative array VAR
-# with the ticket's loops, total cost and human interventions (fixes). Each
-# is FALLBACK, by default "?", when the database cannot be read.
+# with the ticket's loops, total cost, human interventions (fixes) and
+# where it stands (state). Each is FALLBACK, by default "?", when the
+# database cannot be read. The state is the latest event (submitted,
+# detention, spec_blocked or ready) when no call came after it; otherwise
+# ready when the last call was a passing review, stopped when it was
+# anything else (the run was stopped, or failed before an outcome), and new
+# when there was no call. Lesson distillation at office hours does not
+# count as a call here: it follows the detention it resolves.
 db_ticket_summary() {
   local -n __summary=$2
-  local loops="${3:-?}" cost="${3:-?}" fixes="${3:-?}" row
+  local loops="${3:-?}" cost="${3:-?}" fixes="${3:-?}" state="${3:-?}" row
   if row="$(db_sql -F ' ' -v repo="${| repo_name; }" -v ticket="$1" 2>/dev/null <<'SQL'
 SELECT count(*) FILTER (WHERE kind IN ('continue', 'retry', 'fix-review')), coalesce(sum(cost_usd), 0),
        (SELECT count(*) FROM lessons
-         WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NOT NULL)
-  FROM runs WHERE repo = :'repo' AND ticket = :'ticket';
+         WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NOT NULL),
+       coalesce(
+         (SELECT ev.kind FROM events ev
+           WHERE ev.repo = :'repo' AND ev.ticket = :'ticket'
+             AND ev.created_at >= coalesce(max(r.created_at) FILTER (WHERE r.kind <> 'distill'), '-infinity')
+           ORDER BY ev.id DESC LIMIT 1),
+         (SELECT CASE WHEN last.kind = 'review' AND last.agent_status = 'pass' THEN 'ready' ELSE 'stopped' END
+            FROM runs last
+           WHERE last.repo = :'repo' AND last.ticket = :'ticket'
+             AND last.kind <> 'distill'
+           ORDER BY last.id DESC LIMIT 1),
+         'new')
+  FROM runs r WHERE repo = :'repo' AND ticket = :'ticket';
 SQL
 )" && [[ -n $row ]]; then
-    read -r loops cost fixes <<<"$row"
+    read -r loops cost fixes state <<<"$row"
   fi
-  __summary=(["loops"]="$loops" ["cost"]="$cost" ["fixes"]="$fixes")
+  __summary=(["loops"]="$loops" ["cost"]="$cost" ["fixes"]="$fixes" ["state"]="${state:-${3:-?}}")
 }
 
 # How far `chalk db upgrade` has got, for db_upgrade_rollback:

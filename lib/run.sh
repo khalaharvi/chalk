@@ -38,7 +38,12 @@ run_context() {
     die "uncommitted changes in $RUN_WT; commit them first (the sandbox only sees commits)"
 }
 
-run_log() { info "[$RUN_TICKET] $*"; }
+# run_log TEXT...: prints TEXT with the ticket in front of every line, so
+# that an agent's summary of several paragraphs still greps by ticket.
+run_log() {
+  local line
+  while IFS= read -r line; do info "[$RUN_TICKET]${line:+ $line}"; done <<<"$*"
+}
 
 # A short hash of every prompt in effect, so the dashboard can compare the
 # results of one prompt set against another. The form of the retry
@@ -102,6 +107,7 @@ run_open_sandbox() {
   echo $$ > "$RUN_DIR/pid"
   trap run_teardown EXIT
 
+  run_log "starting the database and the sandbox image"
   run_start_services
   agent_write_system "$RUN_IO" "$RUN_WT"
 
@@ -109,6 +115,7 @@ run_open_sandbox() {
   RUN_BASE="$(git -C "$RUN_WT" rev-parse HEAD)"
   run_log "starting sandbox $RUN_SANDBOX on $RUN_BRANCH"
   sandbox_start "$RUN_SANDBOX" "$RUN_TICKET" "$RUN_IO"
+  run_log "cloning $RUN_BRANCH into the sandbox"
   sandbox_clone "$RUN_SANDBOX" "$RUN_BRANCH"
 }
 
@@ -187,13 +194,14 @@ run_verdict() {
 }
 
 # run_fp_feedback REASON FP -> REPLY: the retry feedback for a failed rubric
-# with CHALK_FP_FEEDBACK=true. FP names an array filled by fp_compute. In
-# place of the last 60 lines of output: the tests that still fail (T), the
-# first error (E), both normalized, and only the last 20 lines. The retry
-# prompt points the agent at this <failure> block.
+# with CHALK_FP_FEEDBACK=true, or for one that printed nothing. FP names an
+# array filled by fp_compute. In place of the last 60 lines of output: the
+# tests that still fail (T), the first error (E), both normalized, and only
+# the last 20 lines. The retry prompt points the agent at this <failure>
+# block.
 run_fp_feedback() {
   local -n __feedback_fp=$2
-  local tests="${__feedback_fp[tests]-UNKNOWN}"
+  local tests="${__feedback_fp[tests]-UNKNOWN}" output
   local -a ids
   if [[ $tests == UNKNOWN ]]; then
     tests="failing tests: unknown (the output names none)"
@@ -204,11 +212,23 @@ run_fp_feedback() {
     fi
     tests+=$'\n'"$(printf -- '- %s\n' "${ids[@]}")"
   fi
+  output="$(tail -n 20 "$RUN_IO/rubric.log" 2>/dev/null || true)"
+  if run_blank "$output"; then
+    output="the rubric printed no output"
+  else
+    output="last 20 lines of output:
+$output"
+  fi
   REPLY="$1
 $tests
 first error: ${__feedback_fp[first_error]:-none found}
-last 20 lines of output:
-$(tail -n 20 "$RUN_IO/rubric.log" 2>/dev/null || true)"
+$output"
+}
+
+# run_blank TEXT: true when TEXT is only white space, as the output of a
+# rubric that writes everything to its test report.
+run_blank() {
+  [[ $1 != *[^[:space:]]* ]]
 }
 
 # run_recall VAR TEXT FP: fills VAR with what the next loop recalls lessons
@@ -244,8 +264,12 @@ run_spec_check() {
   local stamp="$RUN_DIR/spec-check.ok" hash passed="" verdict result="$RUN_IO/spec-check.json"
   hash="$(sed 's/- \[x\]/- [ ]/' "$RUN_SPEC" | git hash-object --stdin)"
   [[ -f $stamp ]] && read -r passed < "$stamp"
-  if [[ $passed == "$hash" ]]; then return 0; fi
+  if [[ $passed == "$hash" ]]; then
+    run_log "spec check skipped: it passed before and the checkpoints have not changed"
+    return 0
+  fi
 
+  run_log "checking the spec with $CHALK_CHEAP_MODEL"
   {
     printf '<spec_file>specs/%s.md</spec_file>\n\n' "$RUN_TICKET"
     cat "${| prompt_file "$RUN_WT" spec-check; }"
@@ -256,12 +280,14 @@ run_spec_check() {
   verdict="$(agent_field "$result" '.verdict')"
   db_record_call spec-check "${verdict:-none}" 0 false "$CHALK_CHEAP_MODEL" "$RUN_CALL_SECONDS" 0 "$result"
   case "$verdict" in
-    pass) printf '%s\n' "$hash" > "$stamp" ;;
+    pass)
+      printf '%s\n' "$hash" > "$stamp"
+      run_log "spec check passed (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s)" ;;
     fail)
       db_event "$RUN_TICKET" spec_blocked
       run_log "spec check found checkpoints that are not ready:"
-      agent_field "$result" '.problems[] | "  - \(.checkpoint)\n    problem: \(.problem)"
-        + (if .suggestion then "\n    suggestion: \(.suggestion)" else "" end)'
+      run_log "$(agent_field "$result" '.problems[] | "  - \(.checkpoint)\n    problem: \(.problem)"
+        + (if .suggestion then "\n    suggestion: \(.suggestion)" else "" end)')"
       return 1 ;;
     *) warn "spec check returned no verdict; continuing without it" ;;
   esac
@@ -274,6 +300,7 @@ run_review() {
   [ "$CHALK_REVIEW" = "true" ] || return 0
   local result="$RUN_IO/review.json" verdict
 
+  run_log "final review started"
   {
     printf '<spec_file>specs/%s.md</spec_file>\n' "$RUN_TICKET"
     printf '<base_ref>origin/%s</base_ref>\n\n' "$CHALK_BASE_BRANCH"
@@ -359,7 +386,7 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
   db_event "$RUN_TICKET" detention
 
   run_log "DETENTION: $reason"
-  if [ -n "$detail" ]; then printf '%s\n' "$detail"; fi
+  if [ -n "$detail" ]; then run_log "$detail"; fi
   run_log "next: ${| run_next_step "$kind"; }"
   run_log "work parked on local branch $branch. To unblock:"
   run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
@@ -377,6 +404,7 @@ run_graduate() {
   run_log "all checkpoints complete (${summary[loops]} loops, ${| agent_usd "${summary[cost]}"; }, ${summary[fixes]} human interventions)"
 
   if [ "$CHALK_AUTO_MR" != "true" ] && [ "${1:-}" != "--force" ]; then
+    db_event "$RUN_TICKET" ready 2>/dev/null || true
     run_log "CHALK_AUTO_MR is off; open the $request with: chalk submit"
     return 0
   fi
@@ -386,7 +414,7 @@ run_graduate() {
   fi
 
   need "${| forge_cli; }"
-  git -C "$RUN_WT" push -q -u origin "$RUN_BRANCH"
+  forge_push "$RUN_WT" "$RUN_BRANCH"
   forge_open_request "$RUN_WT" "$RUN_BRANCH" "$CHALK_BASE_BRANCH" "$(spec_title "$RUN_SPEC")" \
     "## Chalk execution summary
 
@@ -425,6 +453,7 @@ cmd_run() {
   RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
   run_open_sandbox
   if [ -n "$CHALK_SETUP_CMD" ]; then
+    run_log "running the setup command: $CHALK_SETUP_CMD"
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
       die "setup command failed in sandbox; see $RUN_IO/setup.log"
   fi
@@ -434,7 +463,7 @@ cmd_run() {
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended
-  local open remaining result agent_status rubric_exit progressed
+  local open remaining result agent_status rubric_exit progressed output
   local -a lesson
   local -A usage fp recall=()
   result="$RUN_IO/loop.json"
@@ -467,6 +496,7 @@ cmd_run() {
     fi
 
     run_build_prompt "$mode" "$feedback" "$findings" recall > "$RUN_IO/prompt.md"
+    run_log "loop $RUN_LOOP ($mode) started"
     agent_status="ok"
     run_call loop "$CHALK_MODEL" "${CHALK_SCHEMA[loop]}" write < "$RUN_IO/prompt.md" || agent_status="error"
     if [ -n "$(agent_error "$result")" ]; then agent_status="$(agent_error "$result")"; fi
@@ -539,12 +569,18 @@ cmd_run() {
       run_detain "$ended" "$reason" "" "${lesson[@]}"
       return 1
     fi
+    output="$(tail -n 60 "$RUN_IO/rubric.log" 2>/dev/null || true)"
     feedback="$reason
-$(tail -n 60 "$RUN_IO/rubric.log" 2>/dev/null || true)"
+$output"
     # Recall goes by the failure itself, whatever form the feedback takes.
     run_recall recall "$feedback" fp
-    if [[ $CHALK_FP_FEEDBACK == true && -v fp[tests] ]]; then
+    # A rubric that printed nothing, such as one that writes only its test
+    # report, gets the failing tests in place of its empty output.
+    if [[ -v fp[tests] ]] && { [[ $CHALK_FP_FEEDBACK == true ]] || run_blank "$output"; }; then
       feedback="${| run_fp_feedback "$reason" fp; }"
+    elif run_blank "$output"; then
+      feedback="$reason
+the rubric printed no output"
     fi
   done
 }
@@ -556,8 +592,13 @@ cmd_check() {
   run_open_sandbox
   rm -f "$RUN_DIR/spec-check.ok"
   run_spec_check || die "specs/$RUN_TICKET.md is not ready for an agent"
-  run_log "spec check passed"
 }
+
+# What `chalk status` calls each state of db_ticket_summary.
+declare -gA RUN_STATE_NAMES=(
+  [submitted]=submitted [detention]=detained [spec_blocked]=spec-blocked
+  [ready]="done" [stopped]=stopped [new]=new
+)
 
 cmd_status() {
   need git
@@ -567,14 +608,14 @@ cmd_status() {
   # The most recently active runs first.
   local GLOBSORT=-mtime
   runs="${| state_dir; }/runs"
-  printf '%-14s %-8s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
+  printf '%-14s %-12s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
   for dir in "$runs"/*/; do
     ticket="$(basename "$dir")"
-    state="idle"
-    if run_is_alive "${dir%/}"; then state="running"; fi
     db_ticket_summary "$ticket" summary -
+    state="${RUN_STATE_NAMES[${summary[state]}]-${summary[state]}}"
+    if run_is_alive "${dir%/}"; then state="running"; fi
     mapfile -t detentions < <(git for-each-ref --format='%(refname:short)' "refs/heads/detention/$ticket-*")
-    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${| agent_usd "${summary[cost]}"; }" "${summary[fixes]}" "${#detentions[@]}"
+    printf '%-14s %-12s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${| agent_usd "${summary[cost]}"; }" "${summary[fixes]}" "${#detentions[@]}"
   done
 }
 

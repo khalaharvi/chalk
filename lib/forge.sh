@@ -37,6 +37,21 @@ forge_request() {
   REPLY="${CHALK_FORGE_REQUEST[$REPLY]}"
 }
 
+# forge_push DIR BRANCH: pushes BRANCH of the clone at DIR to origin. On
+# success, what the remote says ("remote:" lines, such as GitHub's hint to
+# create a pull request) is left out, since Chalk opens the request itself;
+# anything else git prints is kept. A failed push shows all of it.
+forge_push() {
+  local out
+  if out="$(git -C "$1" push -q -u origin "$2" 2>&1)"; then
+    out="$(grep -v '^remote:' <<<"$out" || true)"
+    if [[ -n $out ]]; then printf '%s\n' "$out" >&2; fi
+    return 0
+  fi
+  printf '%s\n' "$out" >&2
+  die "could not push $2 to origin"
+}
+
 # forge_open_request DIR SOURCE TARGET TITLE BODY: opens a pull or merge
 # request from branch SOURCE into TARGET for the clone at DIR.
 forge_open_request() {
