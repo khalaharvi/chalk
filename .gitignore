@@ -1,2 +1,6 @@
 .DS_Store
 *.bak
+# The docs site build (mkdocs build) and its local tools
+site/
+.venv/
+__pycache__/

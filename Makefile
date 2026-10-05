@@ -1,4 +1,4 @@
-.PHONY: check lint lint-sandbox test unit test-db
+.PHONY: check lint lint-sandbox test unit test-db docs demo
 
 check: lint test
 
@@ -24,3 +24,15 @@ unit:
 test-db:
 	@test -n "$$FAKE_PG_URL" || { echo "set FAKE_PG_URL"; exit 1; }
 	bash tests/e2e.sh
+
+# Serves the docs site at http://127.0.0.1:8000. Needs the pinned tools:
+# python3 -m venv .venv && .venv/bin/pip install -r docs/requirements.txt
+MKDOCS ?= mkdocs
+docs:
+	$(MKDOCS) serve
+
+# Records the demo on the docs site and in the README against the test
+# fakes, then draws it (docs/assets/demo.*).
+demo:
+	scripts/demo.sh
+	python3 scripts/render-demo.py

@@ -1,0 +1,637 @@
+{
+ "sample": "Illustrative data for the docs; not from a real run.",
+ "generated_at": "2026-09-30T17:00:00Z",
+ "days": 30,
+ "submitted": 24,
+ "detentions": 7,
+ "totals": {
+  "cost": 59.48,
+  "calls": 244,
+  "loops": 173,
+  "checkpoints": 104,
+  "loop_cost": 51.83,
+  "wasted": 9.8477,
+  "tickets": 27,
+  "input_tokens": 1830000,
+  "output_tokens": 912000,
+  "cache_read_tokens": 21400000,
+  "cache_write_tokens": 1650000,
+  "denials": 5,
+  "loop_denials": 0
+ },
+ "by_hour": [
+  {
+   "hour": "2026-09-01T09:00:00Z",
+   "cost": 0.5886,
+   "wasted": 0.0311
+  },
+  {
+   "hour": "2026-09-01T11:00:00Z",
+   "cost": 0.9811,
+   "wasted": 0.0249
+  },
+  {
+   "hour": "2026-09-01T14:00:00Z",
+   "cost": 0.8431,
+   "wasted": 0.1079
+  },
+  {
+   "hour": "2026-09-01T16:00:00Z",
+   "cost": 0.2696,
+   "wasted": 0.0479
+  },
+  {
+   "hour": "2026-09-02T09:00:00Z",
+   "cost": 0.245,
+   "wasted": 0.0372
+  },
+  {
+   "hour": "2026-09-02T11:00:00Z",
+   "cost": 0.2838,
+   "wasted": 0.009
+  },
+  {
+   "hour": "2026-09-02T14:00:00Z",
+   "cost": 0.7094,
+   "wasted": 0.2053
+  },
+  {
+   "hour": "2026-09-02T16:00:00Z",
+   "cost": 0.3486,
+   "wasted": 0.0272
+  },
+  {
+   "hour": "2026-09-03T09:00:00Z",
+   "cost": 0.9529,
+   "wasted": 0.3161
+  },
+  {
+   "hour": "2026-09-03T11:00:00Z",
+   "cost": 0.8925,
+   "wasted": 0.1239
+  },
+  {
+   "hour": "2026-09-03T14:00:00Z",
+   "cost": 1.3715,
+   "wasted": 0.0224
+  },
+  {
+   "hour": "2026-09-03T16:00:00Z",
+   "cost": 1.2302,
+   "wasted": 0.1247
+  },
+  {
+   "hour": "2026-09-04T09:00:00Z",
+   "cost": 0.3731,
+   "wasted": 0.0154
+  },
+  {
+   "hour": "2026-09-04T11:00:00Z",
+   "cost": 0.5702,
+   "wasted": 0.1629
+  },
+  {
+   "hour": "2026-09-04T14:00:00Z",
+   "cost": 0.4169,
+   "wasted": 0.0849
+  },
+  {
+   "hour": "2026-09-04T16:00:00Z",
+   "cost": 0.9667,
+   "wasted": 0.126
+  },
+  {
+   "hour": "2026-09-05T09:00:00Z",
+   "cost": 0.8573,
+   "wasted": 0.0188
+  },
+  {
+   "hour": "2026-09-05T11:00:00Z",
+   "cost": 0.2715,
+   "wasted": 0.0196
+  },
+  {
+   "hour": "2026-09-05T14:00:00Z",
+   "cost": 1.0165,
+   "wasted": 0.1521
+  },
+  {
+   "hour": "2026-09-05T16:00:00Z",
+   "cost": 0.577,
+   "wasted": 0.1183
+  },
+  {
+   "hour": "2026-09-08T09:00:00Z",
+   "cost": 0.7438,
+   "wasted": 0.078
+  },
+  {
+   "hour": "2026-09-08T11:00:00Z",
+   "cost": 1.1533,
+   "wasted": 0.2822
+  },
+  {
+   "hour": "2026-09-08T14:00:00Z",
+   "cost": 0.4929,
+   "wasted": 0.0991
+  },
+  {
+   "hour": "2026-09-08T16:00:00Z",
+   "cost": 0.8302,
+   "wasted": 0.2543
+  },
+  {
+   "hour": "2026-09-09T09:00:00Z",
+   "cost": 1.0753,
+   "wasted": 0.1084
+  },
+  {
+   "hour": "2026-09-09T11:00:00Z",
+   "cost": 1.3762,
+   "wasted": 0.0569
+  },
+  {
+   "hour": "2026-09-09T14:00:00Z",
+   "cost": 0.7017,
+   "wasted": 0.186
+  },
+  {
+   "hour": "2026-09-09T16:00:00Z",
+   "cost": 0.3824,
+   "wasted": 0.0654
+  },
+  {
+   "hour": "2026-09-10T09:00:00Z",
+   "cost": 0.247,
+   "wasted": 0.0578
+  },
+  {
+   "hour": "2026-09-10T11:00:00Z",
+   "cost": 1.1175,
+   "wasted": 0.2241
+  },
+  {
+   "hour": "2026-09-10T14:00:00Z",
+   "cost": 1.2506,
+   "wasted": 0.1373
+  },
+  {
+   "hour": "2026-09-10T16:00:00Z",
+   "cost": 1.0344,
+   "wasted": 0.2152
+  },
+  {
+   "hour": "2026-09-11T09:00:00Z",
+   "cost": 0.8959,
+   "wasted": 0.1431
+  },
+  {
+   "hour": "2026-09-11T11:00:00Z",
+   "cost": 1.208,
+   "wasted": 0.3994
+  },
+  {
+   "hour": "2026-09-11T14:00:00Z",
+   "cost": 0.7689,
+   "wasted": 0.1787
+  },
+  {
+   "hour": "2026-09-11T16:00:00Z",
+   "cost": 0.2728,
+   "wasted": 0.067
+  },
+  {
+   "hour": "2026-09-12T09:00:00Z",
+   "cost": 0.9766,
+   "wasted": 0.3395
+  },
+  {
+   "hour": "2026-09-12T11:00:00Z",
+   "cost": 1.1863,
+   "wasted": 0.1182
+  },
+  {
+   "hour": "2026-09-12T14:00:00Z",
+   "cost": 0.6629,
+   "wasted": 0.1551
+  },
+  {
+   "hour": "2026-09-12T16:00:00Z",
+   "cost": 0.2271,
+   "wasted": 0.0367
+  },
+  {
+   "hour": "2026-09-15T09:00:00Z",
+   "cost": 0.4017,
+   "wasted": 0.0165
+  },
+  {
+   "hour": "2026-09-15T11:00:00Z",
+   "cost": 0.2707,
+   "wasted": 0.0728
+  },
+  {
+   "hour": "2026-09-15T14:00:00Z",
+   "cost": 0.3552,
+   "wasted": 0.0308
+  },
+  {
+   "hour": "2026-09-15T16:00:00Z",
+   "cost": 0.6691,
+   "wasted": 0.2041
+  },
+  {
+   "hour": "2026-09-16T09:00:00Z",
+   "cost": 0.2967,
+   "wasted": 0.0466
+  },
+  {
+   "hour": "2026-09-16T11:00:00Z",
+   "cost": 0.8593,
+   "wasted": 0.2657
+  },
+  {
+   "hour": "2026-09-16T14:00:00Z",
+   "cost": 1.1831,
+   "wasted": 0.3578
+  },
+  {
+   "hour": "2026-09-16T16:00:00Z",
+   "cost": 0.5341,
+   "wasted": 0.0776
+  },
+  {
+   "hour": "2026-09-17T09:00:00Z",
+   "cost": 0.6305,
+   "wasted": 0.1951
+  },
+  {
+   "hour": "2026-09-17T11:00:00Z",
+   "cost": 1.3493,
+   "wasted": 0.0713
+  },
+  {
+   "hour": "2026-09-17T14:00:00Z",
+   "cost": 0.4115,
+   "wasted": 0.0334
+  },
+  {
+   "hour": "2026-09-17T16:00:00Z",
+   "cost": 0.48,
+   "wasted": 0.0815
+  },
+  {
+   "hour": "2026-09-18T09:00:00Z",
+   "cost": 0.9069,
+   "wasted": 0.0834
+  },
+  {
+   "hour": "2026-09-18T11:00:00Z",
+   "cost": 0.2049,
+   "wasted": 0.03
+  },
+  {
+   "hour": "2026-09-18T14:00:00Z",
+   "cost": 0.6431,
+   "wasted": 0.1275
+  },
+  {
+   "hour": "2026-09-18T16:00:00Z",
+   "cost": 1.3437,
+   "wasted": 0.3247
+  },
+  {
+   "hour": "2026-09-19T09:00:00Z",
+   "cost": 0.8186,
+   "wasted": 0.1769
+  },
+  {
+   "hour": "2026-09-19T11:00:00Z",
+   "cost": 1.0114,
+   "wasted": 0.0191
+  },
+  {
+   "hour": "2026-09-19T14:00:00Z",
+   "cost": 1.2794,
+   "wasted": 0.3493
+  },
+  {
+   "hour": "2026-09-19T16:00:00Z",
+   "cost": 1.2494,
+   "wasted": 0.3489
+  },
+  {
+   "hour": "2026-09-22T09:00:00Z",
+   "cost": 0.6709,
+   "wasted": 0.0937
+  },
+  {
+   "hour": "2026-09-22T11:00:00Z",
+   "cost": 0.3242,
+   "wasted": 0.072
+  },
+  {
+   "hour": "2026-09-22T14:00:00Z",
+   "cost": 0.2747,
+   "wasted": 0.0065
+  },
+  {
+   "hour": "2026-09-22T16:00:00Z",
+   "cost": 0.4505,
+   "wasted": 0.0256
+  },
+  {
+   "hour": "2026-09-23T09:00:00Z",
+   "cost": 0.6081,
+   "wasted": 0.0112
+  },
+  {
+   "hour": "2026-09-23T11:00:00Z",
+   "cost": 0.2003,
+   "wasted": 0.0106
+  },
+  {
+   "hour": "2026-09-23T14:00:00Z",
+   "cost": 0.3218,
+   "wasted": 0.041
+  },
+  {
+   "hour": "2026-09-23T16:00:00Z",
+   "cost": 0.2306,
+   "wasted": 0.0706
+  },
+  {
+   "hour": "2026-09-24T09:00:00Z",
+   "cost": 0.9369,
+   "wasted": 0.0487
+  },
+  {
+   "hour": "2026-09-24T11:00:00Z",
+   "cost": 0.5027,
+   "wasted": 0.0611
+  },
+  {
+   "hour": "2026-09-24T14:00:00Z",
+   "cost": 0.637,
+   "wasted": 0.0274
+  },
+  {
+   "hour": "2026-09-24T16:00:00Z",
+   "cost": 1.2187,
+   "wasted": 0.4236
+  },
+  {
+   "hour": "2026-09-25T09:00:00Z",
+   "cost": 0.7592,
+   "wasted": 0.1286
+  },
+  {
+   "hour": "2026-09-25T11:00:00Z",
+   "cost": 0.3031,
+   "wasted": 0.0108
+  },
+  {
+   "hour": "2026-09-25T14:00:00Z",
+   "cost": 0.6112,
+   "wasted": 0.0566
+  },
+  {
+   "hour": "2026-09-25T16:00:00Z",
+   "cost": 1.1946,
+   "wasted": 0.0675
+  },
+  {
+   "hour": "2026-09-26T09:00:00Z",
+   "cost": 0.2277,
+   "wasted": 0.0758
+  },
+  {
+   "hour": "2026-09-26T11:00:00Z",
+   "cost": 0.8339,
+   "wasted": 0.0428
+  },
+  {
+   "hour": "2026-09-26T14:00:00Z",
+   "cost": 0.8518,
+   "wasted": 0.0081
+  },
+  {
+   "hour": "2026-09-26T16:00:00Z",
+   "cost": 0.8337,
+   "wasted": 0.2855
+  }
+ ],
+ "by_kind": [
+  {
+   "kind": "continue",
+   "calls": 118,
+   "cost": 34.22,
+   "avg_cost": 0.29,
+   "avg_seconds": 212
+  },
+  {
+   "kind": "retry",
+   "calls": 46,
+   "cost": 15.18,
+   "avg_cost": 0.33,
+   "avg_seconds": 240
+  },
+  {
+   "kind": "review",
+   "calls": 31,
+   "cost": 6.51,
+   "avg_cost": 0.21,
+   "avg_seconds": 95
+  },
+  {
+   "kind": "fix-review",
+   "calls": 9,
+   "cost": 2.43,
+   "avg_cost": 0.27,
+   "avg_seconds": 180
+  },
+  {
+   "kind": "spec-check",
+   "calls": 34,
+   "cost": 1.02,
+   "avg_cost": 0.03,
+   "avg_seconds": 20
+  },
+  {
+   "kind": "distill",
+   "calls": 6,
+   "cost": 0.12,
+   "avg_cost": 0.02,
+   "avg_seconds": 15
+  }
+ ],
+ "by_model": [
+  {
+   "model": "claude-sonnet-4-5",
+   "loops": 173,
+   "cost": 51.83,
+   "checkpoints": 104
+  }
+ ],
+ "by_prompts": [
+  {
+   "prompts": "3f9a1c2e",
+   "first_seen": "2026-09-01T09:12:00Z",
+   "loops": 81,
+   "cost": 25.11,
+   "checkpoints": 44,
+   "retries": 27
+  },
+  {
+   "prompts": "b71d04aa",
+   "first_seen": "2026-09-15T10:03:00Z",
+   "loops": 92,
+   "cost": 27.06,
+   "checkpoints": 60,
+   "retries": 19
+  }
+ ],
+ "budget": {
+  "loops": 173,
+  "cap": 1.0,
+  "cap_min": 1.0,
+  "p50": 0.27,
+  "p90": 0.44,
+  "max": 0.98,
+  "near_cap": 3
+ },
+ "review": {
+  "reviews": 31,
+  "failed": 9,
+  "cost": 6.51,
+  "fix_cost": 2.43
+ },
+ "spec": {
+  "checks": 34,
+  "failed": 4,
+  "cost": 1.02
+ },
+ "lessons": {
+  "with": 14,
+  "with_passed": 10,
+  "without": 32,
+  "without_passed": 15
+ },
+ "ledger": {
+  "detained_runs": 7,
+  "no_progress_cost": 6.84,
+  "saved": 2.31,
+  "by_verdict": [
+   {
+    "verdict": "repeat",
+    "runs": 3,
+    "saved": 1.42
+   },
+   {
+    "verdict": "no_change",
+    "runs": 2,
+    "saved": 0.89
+   }
+  ],
+  "false_stops": 0,
+  "false_stop_cost": 0,
+  "converging": 1,
+  "runs": [
+   {
+    "run_id": "SHOP-41-1790950000",
+    "repo": "shop",
+    "ticket": "SHOP-41",
+    "detained": true,
+    "stop_verdict": "repeat",
+    "stop_loop": 2,
+    "after_cost": 0.61,
+    "false_stop": false,
+    "converging": false,
+    "last": "2026-09-29T14:20:00Z"
+   },
+   {
+    "run_id": "API-17-1790700000",
+    "repo": "api",
+    "ticket": "API-17",
+    "detained": true,
+    "stop_verdict": "no_change",
+    "stop_loop": 3,
+    "after_cost": 0.48,
+    "false_stop": false,
+    "converging": false,
+    "last": "2026-09-26T11:05:00Z"
+   },
+   {
+    "run_id": "SHOP-33-1790300000",
+    "repo": "shop",
+    "ticket": "SHOP-33",
+    "detained": true,
+    "stop_verdict": null,
+    "stop_loop": null,
+    "after_cost": 0,
+    "false_stop": false,
+    "converging": true,
+    "last": "2026-09-21T16:40:00Z"
+   }
+  ],
+  "unknown_tests": [
+   {
+    "repo": "shop",
+    "loops": 21,
+    "unknown": 4
+   },
+   {
+    "repo": "api",
+    "loops": 12,
+    "unknown": 2
+   }
+  ]
+ },
+ "tickets": [
+  {
+   "repo": "shop",
+   "ticket": "SHOP-44",
+   "loops": 4,
+   "cost": 1.38,
+   "detentions": 0,
+   "state": "submitted",
+   "last": "2026-09-30T15:10:00Z"
+  },
+  {
+   "repo": "shop",
+   "ticket": "SHOP-41",
+   "loops": 7,
+   "cost": 2.41,
+   "detentions": 1,
+   "state": "submitted",
+   "last": "2026-09-29T16:02:00Z"
+  },
+  {
+   "repo": "api",
+   "ticket": "API-19",
+   "loops": 3,
+   "cost": 0.97,
+   "detentions": 0,
+   "state": "ready",
+   "last": "2026-09-29T10:44:00Z"
+  },
+  {
+   "repo": "api",
+   "ticket": "API-17",
+   "loops": 6,
+   "cost": 2.02,
+   "detentions": 1,
+   "state": "detention",
+   "last": "2026-09-26T11:05:00Z"
+  },
+  {
+   "repo": "shop",
+   "ticket": "SHOP-38",
+   "loops": 5,
+   "cost": 1.66,
+   "detentions": 0,
+   "state": "submitted",
+   "last": "2026-09-24T14:31:00Z"
+  }
+ ]
+}
