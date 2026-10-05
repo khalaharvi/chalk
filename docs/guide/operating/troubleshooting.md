@@ -21,6 +21,8 @@ first use.
 | Host and Docker resources | no | Informational: CPUs, memory, how many fleet runs at once, how long Chalk waits for the database |
 | Sandbox image and its bash | no | Built on the first run, or `chalk sandbox build`. A custom `CHALK_IMAGE` needs bash 5.2 or newer |
 | Auto mode for `CHALK_MODEL` | yes, when it can be asked | `FAIL` when loops would start in manual mode and have every edit refused: choose another `CHALK_MODEL`, ask an administrator to allow auto mode, or set `CHALK_PERMISSION_MODE=bypass`. "could not verify" when Docker or the image is not ready. See [auto mode requirements](../configuring/permissions.md#auto-mode-requirements) |
+| `uv` | no | Only the local [decider](../configuring/decider.md) needs it: `brew install uv` |
+| Decider | no | With `CHALK_DECIDER=off`, nothing to check. Otherwise, for the local service: whether `chalk decider up` installed it, the model revisions it resolved, whether it is running (a run starts it), its measured time per decision, and whether the host has memory for a run to start it. For a hosted decider: whether its `/health` answers |
 | Repository configured | no | `chalk init`, then set `CHALK_TEST_CMD` |
 
 ## Where a run keeps its files
@@ -37,7 +39,11 @@ Everything about the latest run of a ticket is under
 | `io/rubric.log` | The rubric's output from the last loop |
 | `io/spec-check.json`, `io/review.json` | The spec check's and the final review's answers |
 | `io/setup.log` | The output of `CHALK_SETUP_CMD` |
-| `io/startup/` | Logs from starting the database and the sandbox image |
+| `io/startup/` | Logs from starting the database and the sandbox image, and the local decider (`decider.log`) |
+
+The local decider keeps its own files in `~/.local/state/chalk/decider/`:
+what `chalk decider up` installed and measured (`installed`), the logs
+of both services (`decider.log`, `embed.log`), and their pids.
 
 ## Common problems
 
@@ -88,6 +94,23 @@ none, as Alpine images do. See
 **"chalk-db runs Postgres 16".** Runs keep working; run
 `chalk db upgrade` when no runs are active. Runs print this warning at
 most once a day; `chalk doctor` reports it every time.
+
+**The decider is never asked anything.** `chalk doctor` says why: it is
+`off`, `chalk decider up` was never run, or the host lacks the memory for a
+run to start it (a run then warns "not starting the local decider"). A run
+starts it in the background, so the first loops of a run on a cold machine
+get no answers. The stuck question is asked only of failed loops whose
+verdict is `spinning` or `other`, and never with `CHALK_FP_RULES=off`.
+Recall asks it only once there are `CHALK_DECIDER_MIN_LESSONS` resolved
+lessons.
+
+**"the local decider took … ms per decision".** `chalk decider up`
+measured it at over 1 second, so on this machine it records in shadow
+mode and `CHALK_DECIDER=on` acts as `shadow`. Run `chalk decider up`
+again on a less busy machine to measure again.
+
+**"the decider at … refused the request".** A hosted decider refused
+`CHALK_DECIDER_TOKEN`. The run goes on without it.
 
 **"ignoring CHALK_MEMORY…: Hindsight lesson memory was removed".** Delete
 those settings from `.chalk/config` or your environment. See

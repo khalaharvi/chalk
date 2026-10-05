@@ -107,3 +107,51 @@ CREATE INDEX IF NOT EXISTS lessons_fingerprint_idx ON lessons (repo, fingerprint
 -- NULL, for lessons from before scopes and when nothing was distilled, is
 -- recalled anywhere, as general.
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS scope TEXT;
+
+-- The decider's answers (lib/decider.sh, docs/decider-protocol.md): one row
+-- per question asked, or per call that got no answer.
+--   call_id     the runs row of the loop the decision was taken in
+--   kind        stuck (is the loop stuck on the same root cause?) | rerank
+--               (does a lesson apply?)
+--   answer      yes | no; NULL when there was no answer, and error says why
+--               (unreachable | timeout | budget | auth | rejected | server |
+--               invalid | version)
+--   confidence  0 to 1; threshold is CHALK_DECIDER_THRESHOLD when asked
+--   mode        shadow | on, as the decision was taken: on is held to
+--               shadow on a machine too slow for it
+--   acted       the answer changed the run: it detained it (stuck) or put
+--               the lesson in the prompt (rerank)
+--   model       the model that answered, with its revision when known
+CREATE TABLE IF NOT EXISTS decisions (
+    id          BIGSERIAL PRIMARY KEY,
+    call_id     BIGINT REFERENCES runs (id) ON DELETE CASCADE,
+    run_id      TEXT,
+    kind        TEXT NOT NULL,
+    question    TEXT NOT NULL,
+    answer      TEXT,
+    confidence  NUMERIC(4, 3),
+    threshold   NUMERIC(4, 3),
+    mode        TEXT NOT NULL,
+    latency_ms  INT,
+    acted       BOOLEAN NOT NULL DEFAULT false,
+    lesson_id   BIGINT,
+    model       TEXT,
+    error       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS decisions_run_idx ON decisions (run_id);
+CREATE INDEX IF NOT EXISTS decisions_call_idx ON decisions (call_id);
+
+-- Semantic recall: each resolved lesson's embedding, from chalk-embed
+-- (BAAI/bge-small-en-v1.5, 384 dimensions), with an HNSW index for cosine
+-- distance (`<=>`). Only where pgvector is installed: a Postgres 16
+-- database goes without, and recall skips the semantic step.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+        ALTER TABLE lessons ADD COLUMN IF NOT EXISTS embedding vector(384);
+        CREATE INDEX IF NOT EXISTS lessons_embedding_hnsw ON lessons
+            USING hnsw (embedding vector_cosine_ops);
+    END IF;
+END
+$$;

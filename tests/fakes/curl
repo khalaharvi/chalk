@@ -1,8 +1,136 @@
 #!/usr/bin/env bash
-# Fake curl: no test reaches the network. Records each call and its body,
-# and answers with an empty JSON object.
-url="${*: -1}"
+# Fake curl: no test reaches the network. Records each call and its body in
+# $FAKE_STATE/curl.log, and answers by the URL's path:
+#
+#   /v1/systemone   a fake decider that implements docs/decider-protocol.md:
+#                   it checks the request (422 when it breaks the protocol)
+#                   and answers every question from FAKE_DECIDER_ANSWERS
+#   /v1/embeddings  a fake chalk-embed: one fixed vector per input
+#   /health         {"status":"ok"} from either
+#   anything else   {}
+#
+# The fake services are scripted with:
+#   FAKE_DECIDER_ANSWERS   "KEY=P ..." with KEY a question key or a glob such
+#                          as lesson_*, P the probability a noul answer is
+#                          true; unlisted keys get 0.5, "-" leaves a key out
+#   FAKE_DECIDER_DELAY     seconds before answering; past --max-time, curl
+#                          times out (exit 28) as the real one does
+#   FAKE_DECIDER_DOWN=1    nothing listens (exit 7), decider and chalk-embed
+#   FAKE_DECIDER_STATUS    an HTTP status to answer with instead of 200
+#   FAKE_DECIDER_PROTOCOL  a protocol version to put in answers
+#   FAKE_DECIDER_TOKEN     the bearer token the decider requires (401 without)
+#   FAKE_EMBED_INDEX       the vectors are one-hot at this index (default 0)
+# Requests to the fake decider are kept in $FAKE_STATE/decider.log as
+# "max-time=T auth=yes|no" plus the request, never the token itself.
+set -euo pipefail
+
+url="" out="" format="" max_time="" data="" headers=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    -w) format="$2"; shift ;;
+    --max-time|-m) max_time="$2"; shift ;;
+    -H) headers+=("$2"); shift ;;
+    --data-binary|-d) data="$2"; shift ;;
+    -*) ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
 body=""
-case " $* " in *" @- "*) body="$(cat)" ;; esac
+case "$data" in
+  @-) body="$(cat)" ;;
+  @*) body="$(cat "${data#@}")" ;;
+  *)  body="$data" ;;
+esac
 printf '%s\n%s\n' "$url" "$body" >> "$FAKE_STATE/curl.log"
-echo '{}'
+
+# Headers given as @FILE are read from it, as curl does.
+auth=""
+for header in "${headers[@]+"${headers[@]}"}"; do
+  case "$header" in @*) header="$(cat "${header#@}")" ;; esac
+  case "$header" in Authorization:\ *) auth="${header#Authorization: }" ;; esac
+done
+
+# reply STATUS JSON: writes the answer where curl would, with -w's status.
+reply() {
+  if [ -n "$out" ]; then printf '%s' "$2" > "$out"; else printf '%s' "$2"; fi
+  if [ "$format" = '%{http_code}' ]; then printf '%s' "$1"; fi
+  exit 0
+}
+
+path="/${url#*://*/}"
+case "$path" in
+  /v1/systemone)
+    printf 'max-time=%s auth=%s\n%s\n' "${max_time:-none}" "$([ -n "$auth" ] && echo yes || echo no)" "$body" \
+      >> "$FAKE_STATE/decider.log" ;;
+  /v1/embeddings|/health) ;;
+  *) echo '{}'; exit 0 ;;
+esac
+
+if [ -n "${FAKE_DECIDER_DOWN:-}" ]; then
+  echo "curl: (7) Failed to connect" >&2
+  [ "$format" != '%{http_code}' ] || printf '000'
+  exit 7
+fi
+if [ -n "${FAKE_DECIDER_DELAY:-}" ]; then
+  if [ -n "$max_time" ] && awk -v d="$FAKE_DECIDER_DELAY" -v m="$max_time" 'BEGIN { exit !(d > m) }'; then
+    sleep "$max_time"
+    echo "curl: (28) Operation timed out after ${max_time}s" >&2
+    [ "$format" != '%{http_code}' ] || printf '000'
+    exit 28
+  fi
+  sleep "$FAKE_DECIDER_DELAY"
+fi
+[ -z "${FAKE_DECIDER_STATUS:-}" ] || reply "$FAKE_DECIDER_STATUS" '{"error":"scripted"}'
+
+case "$path" in
+  /health)
+    reply 200 '{"status":"ok","model":"fake-decider","device":"cpu"}' ;;
+  /v1/embeddings)
+    jq -e '(.input | type) == "array" and (.input | length) > 0 and all(.input[]; type == "string")' \
+      <<<"$body" >/dev/null 2>&1 || reply 422 '{"error":"input must be strings"}'
+    reply 200 "$(jq -c --argjson at "${FAKE_EMBED_INDEX:-0}" '
+      {object: "list", model: "BAAI/bge-small-en-v1.5",
+       data: [range(0; .input | length) as $i
+              | {object: "embedding", index: $i,
+                 embedding: [range(0; 384) as $d | if $d == $at then 1 else 0 end]}]}' <<<"$body")" ;;
+esac
+
+# The decider.
+if [ -n "${FAKE_DECIDER_TOKEN:-}" ] && [ "$auth" != "Bearer $FAKE_DECIDER_TOKEN" ]; then
+  reply 401 '{"error":"unauthorized"}'
+fi
+# The request, as docs/decider-protocol.md has it.
+jq -e '
+  .protocol == 1 and (.state | type) == "string" and (.state | length) > 0
+  and (.questions | type) == "object" and (.questions | length) > 0
+  and all(.questions[];
+    (.instructions | type) == "string"
+    and (if .type == "noul" then (.criteria == null or (.criteria | type) == "object")
+         elif .type == "choice" then (.criteria | type) == "object" and (.criteria | length) >= 2
+         elif .type == "score" then (.criteria | type) == "array" and (.criteria | length) >= 2
+         else false end))' <<<"$body" >/dev/null 2>&1 ||
+  reply 422 '{"detail":"the request breaks the decider protocol"}'
+
+# answer KEY -> the scripted probability for KEY, or "-".
+answer() {
+  local rule
+  for rule in ${FAKE_DECIDER_ANSWERS:-}; do
+    # shellcheck disable=SC2053 # the rule's key is a glob on purpose
+    if [[ $1 == ${rule%%=*} ]]; then printf '%s' "${rule#*=}"; return; fi
+  done
+  printf '0.5'
+}
+answers="{}"
+for key in $(jq -r '.questions | keys[]' <<<"$body"); do
+  p="$(answer "$key")"
+  [ "$p" != "-" ] || continue
+  answers="$(jq -c --arg k "$key" --argjson p "$p" --argjson q "$(jq -c --arg k "$key" '.questions[$k]' <<<"$body")" '
+    . + {($k): (if $q.type == "noul" then {type: "noul", noul: $p}
+                elif $q.type == "choice" then {type: "choice", choice: ($q.criteria | keys[0]), confidence: $p}
+                else {type: "score", score: 0, confidence: $p} end)}' <<<"$answers")"
+done
+reply 200 "$(jq -c --argjson answers "$answers" --arg protocol "${FAKE_DECIDER_PROTOCOL:-}" '
+  {model: "fake-decider", answers: $answers, latency_ms: 1}
+  + (if $protocol == "" then {} else {protocol: ($protocol | tonumber)} end)' <<<'null')"

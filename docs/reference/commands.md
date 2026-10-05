@@ -30,6 +30,15 @@ too), `down` stops it and keeps the data, `psql` opens a shell on it,
 `upgrade --cleanup` removes the old container and volume afterwards. See
 [the database](../guide/operating/dashboard.md#the-database).
 
+**`chalk decider up | down | status`** manages the local
+[decider](../guide/configuring/decider.md). `up` installs strands-decider
+with `uv`, downloads its models and the embedding model (about 4.3 GiB the
+first time), starts both services on 127.0.0.1, measures the time per
+decision and records the model revisions it resolved. `down` stops them;
+a run starts them again. `status` shows whether they run, the revisions
+and the measured time, or, for a hosted `CHALK_DECIDER_URL`, whether it
+answers.
+
 **`chalk sandbox build`** builds the default sandbox image,
 `chalk-sandbox:local`, from `share/sandbox/Dockerfile`. The first run does
 this too.

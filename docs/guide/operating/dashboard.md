@@ -36,6 +36,8 @@ It shows:
   as a before and after;
 - whether the spec check and final review are earning their cost;
 - **Would stopping early have paid?**, the verdict ledger (below);
+- **Is the decider worth asking?**, once a [decider](#the-decider) has
+  been asked anything;
 - **Which tests keep failing?**: the tests that failed in the most loops,
   up to ten per repository, with how many loops and tickets they failed
   in. A test that fails loop after loop, or on more than one ticket, is
@@ -105,6 +107,30 @@ When there are at least twenty detained runs with verdicts, stopping early
 would have saved at least a fifth of their spend without progress, and
 there was at most one false stop, the notes recommend turning the rules
 on.
+
+### The decider
+
+A loop the rules call `spinning` or `other` is the gray zone the
+verdicts cannot settle. With `CHALK_DECIDER=shadow` or `on`, a
+[decider](../configuring/decider.md) is asked whether such a loop is stuck
+on the same root cause as the loop before. In the ledger's runs, the
+**Decider** column shows the first loop it judged stuck at or above its
+threshold.
+
+The report card's "Is the decider worth asking?" section shows:
+
+- how many questions it was asked, how many it answered, and why the rest
+  got no answer (unreachable, timeout, used-up budget, refused token, …);
+- its median time per answer, and the model and revision that answered;
+- how many answers acted (`on` only);
+- for shadow runs: how many a confident "stuck" would have stopped, what
+  that would have saved, and the **false stops**, runs that still made
+  progress after it;
+- **Were confident answers right?**: shadow-mode "stuck" answers by
+  confidence (0.5 to 0.7, 0.7 to 0.9, 0.9 to 1), and how many matched what
+  the run did next. A "yes" is right when no later loop progressed, a
+  "no" when one did. Answers at 0.9 or more should be right about nine
+  times in ten before `CHALK_DECIDER=on` is worth it.
 
 ### Better fingerprints
 

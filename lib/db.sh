@@ -273,6 +273,131 @@ SELECT '- Seen before: ' || left(regexp_replace(signature, '\s+', ' ', 'g'), 240
 SQL
 }
 
+# db_decider_gate: prints how many lessons are resolved, and 1 when the
+# lessons table has the embedding column (Postgres 17 with pgvector), else
+# 0, on one line. The decider's recall steps wait for enough lessons.
+db_decider_gate() {
+  db_sql -F ' ' <<'SQL'
+SELECT count(*) FILTER (WHERE resolution IS NOT NULL),
+       (EXISTS (SELECT 1 FROM pg_attribute
+                 WHERE attrelid = 'lessons'::regclass AND attname = 'embedding'
+                   AND NOT attisdropped))::int
+  FROM lessons;
+SQL
+}
+
+# db_recall_shortlist REPO MODE QUERY FINGERPRINT FIRST_ERROR QVEC SIZE:
+# prints, as one JSON array, what the decider reranks: every exact match
+# (exact: true), then up to SIZE other lessons, lexical matches first (the
+# same rules as db_recall_lessons), then semantic ones. Each has its id,
+# the markdown line memory_recall would print (line), and the failure and
+# fix the decider reads (text).
+#   semantic  only with QVEC, the query's embedding (Postgres 17): the
+#             nearest resolved lessons by cosine distance, `<=>`, which the
+#             HNSW index (vector_cosine_ops) serves, with a similarity of at
+#             least 0.7. hnsw.ef_search is fixed at 100 (eng review S1): on a
+#             small table the planner scans every row, which is exact.
+db_recall_shortlist() {
+  local semantic=0
+  [[ -z $6 ]] || semantic=1
+  db_sql -v repo="$1" -v mode="$2" -v query="$3" -v fingerprint="$4" -v first_error="$5" \
+    -v qvec="$6" -v size="$7" -v semantic="$semantic" <<'SQL'
+BEGIN;
+SET LOCAL hnsw.ef_search = 100;
+CREATE TEMP TABLE shortlist ON COMMIT DROP AS
+WITH candidates AS (
+  SELECT id, signature, first_error, coalesce(lesson, resolution) AS fix,
+         coalesce(repo = :'repo' AND fingerprint = nullif(:'fingerprint', ''), false) AS exact,
+         CASE WHEN :'mode' = 'spec'
+                THEN word_similarity(coalesce(nullif(first_error, ''), signature), :'query')
+              WHEN :'mode' = 'failure' AND nullif(first_error, '') IS NOT NULL
+                THEN similarity(first_error, nullif(:'first_error', ''))
+              ELSE similarity(signature, :'query')
+         END AS score,
+         CASE WHEN :'mode' = 'spec' THEN 0.6
+              WHEN :'mode' = 'failure' AND nullif(first_error, '') IS NOT NULL THEN 0.5
+              ELSE 0.1
+         END AS threshold
+    FROM lessons
+   WHERE resolution IS NOT NULL
+)
+SELECT id, exact, CASE WHEN exact THEN 0 ELSE 1 END AS step, score AS rank_score
+  FROM candidates WHERE exact OR score > threshold;
+\if :semantic
+INSERT INTO shortlist
+SELECT n.id, false, 2, n.similarity
+  FROM (SELECT id, 1 - (embedding <=> :'qvec'::vector) AS similarity
+          FROM lessons
+         WHERE embedding IS NOT NULL AND resolution IS NOT NULL
+         ORDER BY embedding <=> :'qvec'::vector
+         LIMIT :'size'::int) n
+ WHERE n.similarity >= 0.7 AND n.id NOT IN (SELECT id FROM shortlist);
+\endif
+SELECT coalesce(json_agg(json_build_object(
+         'id', l.id, 'exact', s.exact, 'step', s.step,
+         'line', '- Seen before: ' || left(regexp_replace(l.signature, '\s+', ' ', 'g'), 240)
+                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution),
+         'text', 'Past failure: ' || left(regexp_replace(coalesce(nullif(l.first_error, ''), l.signature), '\s+', ' ', 'g'), 400)
+                 || E'\nIts fix: ' || left(coalesce(l.lesson, l.resolution), 400))
+         ORDER BY s.step, s.rank_score DESC, l.id DESC), '[]')
+  FROM (SELECT * FROM shortlist WHERE exact
+        UNION ALL
+        (SELECT * FROM shortlist WHERE NOT exact ORDER BY step, rank_score DESC, id DESC LIMIT :'size'::int)) s
+  JOIN lessons l ON l.id = s.id;
+COMMIT;
+SQL
+}
+
+# db_record_decisions ROWS: stores the decider's answers for the current
+# loop (RUN_ID, RUN_LOOP) with that loop's call. ROWS is a JSON array of
+# objects with the decisions table's columns (see decider_record).
+db_record_decisions() {
+  db_sql -v run_id="${RUN_ID:-}" -v loop="$RUN_LOOP" -v rows="$1" <<'SQL'
+INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode,
+                       latency_ms, acted, lesson_id, model, error)
+SELECT (SELECT id FROM runs
+         WHERE run_id = :'run_id' AND loop = :'loop'::int
+           AND kind IN ('continue', 'retry', 'fix-review')
+         ORDER BY id DESC LIMIT 1),
+       :'run_id', d.kind, d.question, d.answer, d.confidence, d.threshold, d.mode,
+       d.latency_ms, d.acted, d.lesson_id, d.model, d.error
+  FROM json_to_recordset(:'rows'::json) AS d(kind text, question text, answer text,
+       confidence numeric, threshold numeric, mode text, latency_ms int, acted boolean,
+       lesson_id bigint, model text, error text);
+SQL
+}
+
+# db_lessons_to_embed LIMIT: prints, as a JSON array, up to LIMIT resolved
+# lessons with no embedding, each with its id and the text to embed: its
+# failure and its fix. Prints [] on a database with no embedding column.
+db_lessons_to_embed() {
+  db_sql -v size="$1" <<'SQL'
+SELECT EXISTS (SELECT 1 FROM pg_attribute
+                WHERE attrelid = 'lessons'::regclass AND attname = 'embedding' AND NOT attisdropped)
+       AS has_embedding \gset
+\if :has_embedding
+SELECT coalesce(json_agg(json_build_object('id', id, 'text', text) ORDER BY id), '[]')
+  FROM (SELECT id, left(coalesce(nullif(first_error, ''), signature), 1500)
+                   || coalesce(E'\n' || lesson, '') AS text
+          FROM lessons
+         WHERE resolution IS NOT NULL AND embedding IS NULL
+         ORDER BY id LIMIT :'size'::int) t;
+\else
+SELECT '[]';
+\endif
+SQL
+}
+
+# db_set_embeddings PAIRS: writes lesson embeddings. PAIRS is a JSON array
+# of {id, embedding}, the embedding in pgvector's text form.
+db_set_embeddings() {
+  db_sql -v pairs="$1" <<'SQL'
+UPDATE lessons l SET embedding = p.embedding::vector
+  FROM json_to_recordset(:'pairs'::json) AS p(id bigint, embedding text)
+ WHERE l.id = p.id;
+SQL
+}
+
 # db_ticket_summary TICKET VAR [FALLBACK]: fills the associative array VAR
 # with the ticket's loops, total cost, human interventions (fixes) and
 # where it stands (state). Each is FALLBACK, by default "?", when the

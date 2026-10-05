@@ -16,8 +16,9 @@ with no quotes and no shell expansion. It is read, never executed.
   [Lesson recall](lesson-memory.md).
 - **Checked values:** Chalk stops with a message when `CHALK_FORGE`,
   `CHALK_PERMISSION_MODE`, `CHALK_FP_RULES`, `CHALK_FP_FEEDBACK`,
-  `CHALK_MAX_PARALLEL` or `CHALK_SANDBOX_MEM_MB` has a value it does not
-  accept, or when auto mode is combined with a Haiku `CHALK_MODEL`.
+  `CHALK_MAX_PARALLEL`, `CHALK_SANDBOX_MEM_MB` or one of the `CHALK_DECIDER*`
+  settings has a value it does not accept, or when auto mode is combined
+  with a Haiku `CHALK_MODEL`.
 
 The rest of this page lists every key in the order of the template,
 `share/templates/config`, with the template's own explanation. It is
@@ -29,8 +30,10 @@ the template and the defaults in `lib/config.sh` disagree.
 ## Machine settings
 
 These are read from the environment only, never from a repository, so a
-repository cannot point your agents' telemetry somewhere else. Generated
-from `CHALK_ENV_DEFAULTS` in `lib/config.sh`.
+repository cannot point your agents' telemetry, or the test output a
+decider receives, somewhere else. Generated from `CHALK_ENV_DEFAULTS` in
+`lib/config.sh`. See [The decider](decider.md) for the `CHALK_DECIDER_*`
+and `CHALK_EMBED_URL` settings.
 
 <!-- generated: env-reference -->
 

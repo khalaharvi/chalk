@@ -48,6 +48,10 @@ flowchart LR
    lessons.
 6. Only the host pushes and opens pull or merge requests, through `gh` or
    `glab`.
+7. Optionally, `chalk` asks a [decider](../guide/configuring/decider.md)
+   bounded questions over HTTP: by default the local reference service on
+   127.0.0.1 (strands-decider and chalk-embed, on the host, never in the
+   sandbox), or a hosted one.
 
 ## What each file owns
 
@@ -67,6 +71,7 @@ Modules load in layers; a file uses only what is loaded before it
 | | `lib/state.sh` | Per-repository run directories and pid files |
 | | `lib/config.sh` | `.chalk/config`, defaults, environment, validation |
 | | `lib/db.sh` | The `chalk-db` container, recording calls, lessons, the dashboard query, `chalk db upgrade` |
+| | `lib/decider.sh` | The [decider](../guide/configuring/decider.md): its protocol client and per-loop time budget, the stuck question, the lesson rerank, and the local service (`chalk decider up`, `down`, `status`) |
 | | `lib/memory.sh` | Lesson recall for prompts |
 | | `lib/sandbox.sh` | Sandbox containers, the image, the scripts run inside |
 | | `lib/fingerprint.sh` | Loop fingerprints and verdicts |
@@ -85,6 +90,7 @@ Outside `lib/`:
 | `share/prompts/` | Every prompt the agents receive |
 | `share/templates/` | Files `chalk init` adds to a repository |
 | `share/schema.sql`, `share/dashboard.sql`, `share/dashboard.html` | The telemetry schema, the report card's query and page |
+| `share/decider/chalk-embed.py` | The local embedding service for semantic recall, a single Python file run with `uv run --script` |
 | `share/ci-audit-schema.sql` | The optional central audit table |
 | `packaging/`, `scripts/release.sh`, `scripts/update-tap.sh`, `scripts/changelog.sh`, `CHANGELOG.md` | The Homebrew formula template, release scripts and the changelog |
 | `scripts/check-commit-title.sh` | The Conventional Commits check on pull request titles |

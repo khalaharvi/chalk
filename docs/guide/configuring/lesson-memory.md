@@ -3,8 +3,9 @@
 A lesson is what a person said in [office hours](../running/failures.md),
 distilled into a rule. Lessons live in the `lessons` table of the
 local Postgres database, `chalk-db`, and are matched there, so there is
-nothing extra to run and nothing leaves your machine. Recall is best
-effort: if the database cannot answer, the loop runs without lessons.
+nothing extra to run and nothing leaves your machine. An optional
+[decider](decider.md) adds two steps. Recall is best effort: if the
+database cannot answer, the loop runs without lessons.
 
 ## The recall ladder
 
@@ -41,6 +42,33 @@ fix:
 </lessons>
 ```
 
+## With a decider
+
+With a [decider](decider.md) (`CHALK_DECIDER=shadow` or `on`), and once
+there are `CHALK_DECIDER_MIN_LESSONS` (30) resolved lessons, the ladder
+gets two more steps:
+
+- **The same meaning:** lessons whose failure means the same as the
+  current one in other words, by the cosine distance between embeddings
+  (`BAAI/bge-small-en-v1.5`, from the local `chalk-embed`), with a
+  similarity of at least 0.7. This needs Postgres 17 with pgvector; a
+  Postgres 16 database skips it.
+- **The decider's choice:** up to 8 candidates, the similar errors first
+  and then those with the same meaning, go to the decider in one request,
+  one yes-or-no question each: does this lesson apply? Those it answers
+  yes at `CHALK_DECIDER_THRESHOLD` or above are kept, most confident
+  first.
+
+The same failure always comes first and is never dropped, and a loop
+still gets at most three lessons. In `shadow` mode the two new steps only
+record their choice, and the prompt gets the lessons the ladder above
+found. In `on` mode the prompt gets the same-failure lessons and the
+decider's choice. When the decider gives no answer, recall works as
+without it.
+
+A lesson's embedding is written when office hours resolves it, or, when
+chalk-embed is not running then, the next time the local decider starts.
+
 ## Fingerprints
 
 After a failed rubric, the loop is reduced to its
@@ -53,8 +81,8 @@ from matching. A detention stores the fingerprint with its lesson; that is
 what step 1 matches.
 
 Recall works with any setting of `CHALK_FP_RULES` except `off`, which
-computes no fingerprints. Then only steps 2 and 3, on the failure text,
-remain.
+computes no fingerprints. Then step 1 is skipped, and lessons are matched
+on the failure text.
 
 ## Hindsight was removed
 

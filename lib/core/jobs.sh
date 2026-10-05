@@ -29,6 +29,21 @@ jobs_spawn() {
   JOBS_RUNNING[$!]="$name"
 }
 
+# jobs_detach LOG COMMAND [ARGS...]: starts COMMAND in the background and
+# lets it go: it is never waited for, outlives this process, and runs in a
+# process group of its own, so a Ctrl-C meant for Chalk does not reach it.
+# Its output is appended to LOG. It does not inherit the locks this
+# process holds through flock (see chalk_lock).
+jobs_detach() {
+  local log="$1" fd
+  shift
+  (
+    for fd in "${CHALK_LOCK_FDS[@]}"; do exec {fd}>&-; done
+    set -m
+    "$@" < /dev/null >> "$log" 2>&1 &
+  )
+}
+
 # jobs_wait VAR: waits for every job, in the order they finish, and fills
 # the associative array VAR with each job's exit status by name. Returns
 # non-zero when any job failed.

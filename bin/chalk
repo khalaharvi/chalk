@@ -28,7 +28,7 @@ for module in log runtime jobs system; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
-for module in repo forge state config db memory sandbox fingerprint agent \
+for module in repo forge state config db decider memory sandbox fingerprint agent \
               run fleet lifecycle dashboard setup; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib" "$module.sh"
@@ -43,6 +43,7 @@ Setup
   chalk init                   Add Chalk config, textbook and CI gates to this repo
   chalk db up|down|psql        Manage the local telemetry database
   chalk db upgrade [--cleanup] Move the database to Postgres 17, then drop the old one
+  chalk decider up|down|status Install and start the local decider, stop it, or check it
   chalk sandbox build          Build the default sandbox image
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
 
@@ -71,6 +72,7 @@ main() {
     doctor)        cmd_doctor "$@" ;;
     init)          cmd_init "$@" ;;
     db)            cmd_db "$@" ;;
+    decider)       cmd_decider "$@" ;;
     sandbox)       cmd_sandbox "$@" ;;
     memory)        cmd_memory "$@" ;;
     prompts)       cmd_prompts "$@" ;;

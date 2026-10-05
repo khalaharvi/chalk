@@ -125,9 +125,12 @@ Harness
     Code.
 
 Decider
-:   Planned: a small, fast model that answers bounded questions, such as
-    "is this loop stuck?", so Chalk does not have to ask Claude. See the
-    [roadmap](../roadmap.md).
+:   System 1: a small, fast model that answers bounded questions, such as
+    "is this loop stuck?" or "does this lesson apply?", each with a
+    confidence, so Chalk does not have to ask Claude. Optional, off by
+    default, and in shadow mode until turned on.
+    *Mechanism:* `lib/decider.sh`. See [The decider](../guide/configuring/decider.md)
+    and [the decider protocol](../decider-protocol.md).
 
 Hindsight
 :   An optional lesson-memory server, removed in favour of recall from the

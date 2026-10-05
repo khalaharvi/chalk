@@ -2,6 +2,7 @@
 # Fake agent. Works out which Chalk prompt it was given from the tags in it
 # and returns the structured answer that prompt asks for.
 #   FAKE_CLAUDE_MODE=break     loop leaves the tree in a state the rubric rejects
+#   FAKE_CLAUDE_MODE=churn     like break, but changes another file each loop
 #   FAKE_CLAUDE_MODE=blocked   loop reports a blocker
 #   FAKE_CLAUDE_MODE=slow      loop takes a few seconds, so a test can stop the run
 #   FAKE_CLAUDE_MODE=idle      loop changes nothing and ticks nothing
@@ -54,6 +55,8 @@ case "$prompt" in
     spec="$(printf '%s\n' "$prompt" | sed -n 's:.*<spec_file>\(.*\)</spec_file>.*:\1:p' | head -n 1)"
     case "${FAKE_CLAUDE_MODE:-}" in
       break)   touch BROKEN; answer '{"status":"done","summary":"did the thing"}' ;;
+      churn)   touch BROKEN; echo "attempt $(wc -l < churn.txt 2>/dev/null || echo 0)" >> churn.txt
+               answer '{"status":"done","summary":"tried another way"}' ;;
       blocked) answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}' ;;
       slow)    touch "$FAKE_STATE/slow-started"; sleep 3; answer '{"status":"done","summary":"slow"}' ;;
       idle)    answer '{"status":"done","summary":"nothing to do"}' ;;
