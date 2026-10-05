@@ -157,6 +157,7 @@ goes on exactly as with `CHALK_DECIDER=off`:
 | Could not connect | `unreachable` | no; the decider may simply not be running |
 | No full answer within the time left | `timeout` | no |
 | The loop's time was already used up | `budget`, and sends nothing | no |
+| The local service was answering other loops for longer than this one could wait | `busy`, and sends nothing | no |
 | `401` or `403` | `auth` | a warning, once per run |
 | `422` or another `4xx` | `rejected` | no |
 | `5xx` | `server` | no |
@@ -164,6 +165,14 @@ goes on exactly as with `CHALK_DECIDER=off`:
 | A `protocol` other than 1 | `version` | a warning, once per run |
 
 Chalk never retries within a loop.
+
+**Concurrent requests.** A fleet's loops may ask at the same time, so a
+hosted decider should answer concurrent requests, or queue them within
+the time each allows. The local reference service cannot (strands-decider
+0.1.0 aborts on Apple's GPU when asked two things at once), so Chalk's
+loops take turns at it: each waits at most 1 second for its turn, out of
+its budget, and records `busy` if the turn does not come. See
+[Several loops at once](guide/configuring/decider.md#several-loops-at-once).
 
 **Time is one budget per loop, not per call.** All the calls one loop
 makes to the host services, the stuck question, the lesson embedding and
@@ -182,7 +191,7 @@ mode but cannot act (`on`) on that machine, and `chalk doctor` says why.
 | Key | Type | Asked when | `state` |
 | :-- | :-- | :-- | :-- |
 | `stuck` | `noul` | A loop failed and its verdict is `spinning` or `other`, the cases the fingerprint rules cannot settle. Not with `CHALK_FP_RULES=off`. | The failing tests and first error of the previous and the current loop, and a diffstat between their working trees (file names and line counts, no contents), capped at about 1,500 tokens |
-| `lesson_<id>` | `noul` | Choosing which past lessons to give the next loop, once there are 30 resolved lessons (`CHALK_DECIDER_MIN_LESSONS`); up to 8 at once | The current failure, then each candidate lesson's failure and fix in its question |
+| `lesson_<id>` | `noul` | Choosing which past lessons to give the next loop, once there are 30 resolved lessons (`CHALK_DECIDER_MIN_LESSONS`); up to 5 at once | The current failure, then each candidate lesson's failure and fix in its question; 4,000 characters in all |
 
 What each answer can do:
 

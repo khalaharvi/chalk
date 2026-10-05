@@ -73,7 +73,7 @@ answer.
 | `kind` | `stuck` (is the loop stuck?) or `rerank` (does a lesson apply?) |
 | `question`, `lesson_id` | What was asked; for `rerank`, about which lesson |
 | `answer`, `confidence`, `threshold` | `yes` or `no`, the confidence from 0 to 1, and `CHALK_DECIDER_THRESHOLD` at the time; NULL answer when there was none |
-| `error` | Why there was no answer: `unreachable`, `timeout`, `budget`, `auth`, `rejected`, `server`, `invalid` or `version` |
+| `error` | Why there was no answer: `unreachable`, `timeout`, `budget`, `busy`, `auth`, `rejected`, `server`, `invalid` or `version` |
 | `mode`, `acted` | `shadow` or `on`, as the decision was taken; whether it changed the run |
 | `latency_ms`, `model` | How long it took; the model that answered, with the revision `chalk decider up` resolved |
 

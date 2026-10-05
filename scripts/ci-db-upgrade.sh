@@ -15,6 +15,12 @@
 # CHALK_CI_DB_PREFIX (default chalk-ci), refuses the names a real install
 # uses, and removes them when it ends (CHALK_CI_DB_KEEP=1 keeps them). Its
 # locks, dumps and other state go to a temporary XDG_STATE_HOME.
+#
+# The failure it injects is an image that does not exist. Pulling one asks
+# the Docker config's credential helper first, and Docker Desktop's
+# (docker-credential-desktop) can hang there for many minutes, so that
+# step runs with a config of its own that names no helper. The real
+# images are pulled first, with the usual config.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -107,6 +113,23 @@ lesson_text() { sql -c "SELECT signature || '|' || lesson FROM lessons WHERE tic
 
 remove_all
 
+for image in "$legacy_image" "$new_image"; do
+  docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image" >/dev/null
+done
+# A Docker config without a credential helper, on the same daemon: the
+# current context is kept in the usual config, so its endpoint goes in
+# DOCKER_HOST.
+no_helper="$XDG_STATE_HOME/docker-config"
+mkdir -p "$no_helper"
+echo '{}' > "$no_helper/config.json"
+docker_host="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)}"
+# without_helper COMMAND...: runs COMMAND with that config.
+without_helper() (
+  export DOCKER_CONFIG="$no_helper"
+  if [[ -n $docker_host ]]; then export DOCKER_HOST="$docker_host"; fi
+  "$@"
+)
+
 # 1. An install from before Postgres 17: only the legacy volume exists, so
 # `chalk db up` creates the container on Postgres 16.
 docker volume create "$CHALK_DB_LEGACY_VOLUME" >/dev/null
@@ -167,7 +190,7 @@ assert_rolled_back() {
 }
 
 # 2. Failures roll back. The Postgres 17 container cannot be created:
-if CHALK_DB_IMAGE="$prefix-no-such-image:pg17" chalk fail-create.log db upgrade; then
+if CHALK_DB_IMAGE="$prefix-no-such-image:pg17" without_helper chalk fail-create.log db upgrade; then
   show fail-create.log; fail "an upgrade whose image cannot be pulled must fail"
 fi
 check "fail-create.log: the failure is named" grep -q 'upgrade failed: could not create the Postgres 17 container' "$out/fail-create.log"

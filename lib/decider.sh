@@ -41,8 +41,30 @@ DECIDER_SLOW_MS=1000
 DECIDER_HEADROOM_MB=6144
 # The stuck question's text is capped near 1,500 tokens.
 DECIDER_STATE_CHARS=6000
-# Lessons the rerank asks about at once.
-DECIDER_SHORTLIST=8
+# The rerank: how many lessons it asks about at once, and the characters
+# of the whole request, the current failure plus every lesson question.
+# The failure gets up to DECIDER_RERANK_STATE_CHARS of them; the lessons
+# share the rest equally, each keeping part of its failure and of its fix.
+#
+# The window strands-decider-2B-hobson-v19 was evaluated at is 3,072 tokens
+# (it was trained at 4,096), and its tokenizer gives about 3.1 characters a
+# token on pytest failures and lesson notes. But time binds first: on an M3
+# Pro (MPS) a rerank took about 0.9 ms a token, so one of 2,875 tokens
+# (9,000 characters, 8 lessons) took 2.7 s, past the loop's whole 2 s
+# budget. These limits make the largest about 1,340 tokens and 1.2 s, and
+# leave the rest of the budget for the embedding and the stuck question.
+DECIDER_SHORTLIST=5
+DECIDER_RERANK_CHARS=4000
+DECIDER_RERANK_STATE_CHARS=1500
+
+# The local strands-decider must be asked one thing at a time: two requests
+# at once abort it on Apple's GPU (measured with 0.1.0 on MPS: every time,
+# with as few as two), and its engine keeps per-request state on itself on
+# any device. So Chalk's calls to it take turns through a lock shared by
+# every Chalk process on the machine. A call waits for its turn at most
+# DECIDER_QUEUE_MS, and the wait counts against the loop's budget.
+DECIDER_QUEUE_MS=1000
+DECIDER_QUEUE_POLL=0.02
 
 # The current loop's spend of DECIDER_LOOP_BUDGET_MS, and its limit; see
 # decider_budget_reset.
@@ -143,14 +165,31 @@ decider_touch() {
   [[ -d $dir ]] && : > "$dir/last-used" 2>/dev/null || true
 }
 
+# decider_turn STARTED_MS: waits for this call's turn at the local decider,
+# from STARTED_MS, for at most DECIDER_QUEUE_MS and never past what the
+# loop's budget leaves for the call itself. Holds the lock decider-ask on
+# success; the caller releases it.
+decider_turn() {
+  local started="$1" limit now
+  limit=$((DECIDER_LIMIT_MS - DECIDER_SPENT_MS - DECIDER_MIN_CALL_MS))
+  (( limit < DECIDER_QUEUE_MS )) || limit=$DECIDER_QUEUE_MS
+  until chalk_lock decider-ask 0; do
+    now="${| decider_now_ms; }"
+    (( now - started < limit )) || return 1
+    sleep "$DECIDER_QUEUE_POLL"
+  done
+}
+
 # decider_post URL OUT [TOKEN_VAR]: POSTs the JSON on stdin to URL, within
 # what is left of the loop's budget, and writes the response body to OUT.
 # Sets DECIDER_ERROR (empty when the service answered 200) and DECIDER_MS,
 # and adds DECIDER_MS to the budget spent. Returns non-zero on no answer.
 # TOKEN_VAR names a variable holding a bearer token; curl reads the header
 # from a file descriptor, so the token never appears in its arguments.
+# A call to the local decider first waits its turn (decider_turn); its wait
+# is part of DECIDER_MS, and a turn that does not come is the error busy.
 decider_post() {
-  local url="$1" out="$2" token="" left max started now code status=0 hfd=""
+  local url="$1" out="$2" token="" left max started now code status=0 hfd="" turn=0
   local -a auth=()
   DECIDER_ERROR="" DECIDER_MS=0
   if [[ -n ${3:-} ]]; then token="${!3-}"; fi
@@ -159,15 +198,32 @@ decider_post() {
     DECIDER_ERROR=budget
     return 1
   fi
+  # chalk_lock needs the host profile; a run has it by now, and probing it
+  # here (docker info) would not be waiting for a turn.
+  if [[ $url == "$DECIDER_LOCAL_URL"/* ]]; then system_profile; fi
+  started="${| decider_now_ms; }"
+  if [[ $url == "$DECIDER_LOCAL_URL"/* ]]; then
+    if decider_turn "$started"; then turn=1; fi
+    now="${| decider_now_ms; }"
+    left=$((left - (now - started)))
+    # The turn came too late if the poll that took it overshot the wait.
+    if (( ! turn || left < DECIDER_MIN_CALL_MS )); then
+      if (( turn )); then chalk_unlock decider-ask; fi
+      DECIDER_MS=$((now - started))
+      DECIDER_SPENT_MS=$((DECIDER_SPENT_MS + DECIDER_MS))
+      DECIDER_ERROR=busy
+      return 1
+    fi
+  fi
   printf -v max '%d.%03d' $((left / 1000)) $((left % 1000))
   if [[ -n $token ]]; then
     exec {hfd}< <(printf 'Authorization: Bearer %s\n' "$token")
     auth=(-H "@/dev/fd/$hfd")
   fi
-  started="${| decider_now_ms; }"
   code="$(curl -sS -o "$out" -w '%{http_code}' --max-time "$max" \
             -H 'Content-Type: application/json' "${auth[@]}" --data-binary @- "$url" 2>/dev/null)" || status=$?
   if [[ -n $hfd ]]; then exec {hfd}<&-; fi
+  if (( turn )); then chalk_unlock decider-ask; fi
   now="${| decider_now_ms; }"
   DECIDER_MS=$((now - started))
   DECIDER_SPENT_MS=$((DECIDER_SPENT_MS + DECIDER_MS))
@@ -186,10 +242,11 @@ decider_post() {
 }
 
 # decider_wake: after a call to the local service found nothing listening,
-# as after an idle shutdown in a long run, starts it in the background, so
-# that later loops of this run get answers. The same gate as at run start.
+# as after an idle shutdown in a long run or a crash of strands-decider
+# alone, starts it in the background, so that later loops of this run get
+# answers. The same gate as at run start.
 decider_wake() {
-  ! decider_alive || return 0
+  [[ -z ${| decider_pid decider; } ]] || return 0
   decider_autostart_ok || return 0
   local dir
   dir="${| decider_dir; }"
@@ -345,11 +402,38 @@ decider_stuck() {
 
 # ---------------------------------------------------------------- lesson recall
 
+# The question asked of each candidate lesson, before its failure and fix.
+DECIDER_LESSON_QUESTION="Does this past lesson apply to the current failure, so that its fix would help?"
+
+# decider_rerank_questions SHORTLIST CHARS -> REPLY: the rerank's questions,
+# as a JSON object of noul questions by key (lesson_ID), one for each lesson
+# of SHORTLIST (db_recall_shortlist) that is not an exact match, in no more
+# than CHARS characters in all. The lessons share CHARS equally; within its
+# share, a lesson's failure and its fix get half each, and what one does
+# not need goes to the other. A part that is cut ends in "…".
+decider_rerank_questions() {
+  REPLY="$(jq -c --argjson chars "$2" --arg ask "$DECIDER_LESSON_QUESTION" '
+    def cut($n): if length <= $n then . elif $n < 1 then "" else .[:$n - 1] + "…" end;
+    [.[] | select(.exact | not)] as $lessons
+    | ($ask + "\nPast failure: ") as $head | "\nIts fix: " as $mid
+    | if ($lessons | length) == 0 then {} else
+        ($chars / ($lessons | length) | floor) as $each
+        | ($each - ($head | length) - ($mid | length)) as $room
+        | [$lessons[]
+           | ([(.failure | length), ([($room / 2 | floor), $room - (.fix | length)] | max)] | min) as $f
+           | {key: "lesson_\(.id)",
+              value: {type: "noul",
+                      instructions: ($head + (.failure | cut($f)) + $mid + (.fix | cut($room - $f)))}}]
+        | from_entries
+      end' <<<"$1" 2>/dev/null || true)"
+}
+
 # decider_recall VAR REPO MODE QUERY [FINGERPRINT] [FIRST_ERROR]: the recall
 # ladder's last two steps, once there are CHALK_DECIDER_MIN_LESSONS resolved
 # lessons. Semantic recall (pgvector, Postgres 17 only) adds lessons whose
 # failure means the same as QUERY to the lexical ones; the decider then
-# reranks up to 8 of them in one batched request. Exact matches come first
+# reranks up to DECIDER_SHORTLIST of them in one batched request, within
+# DECIDER_RERANK_CHARS. Exact matches are not asked about: they come first
 # and are always kept. With CHALK_DECIDER=on, fills VAR with up to three
 # lessons, as memory_recall prints them, and returns 0. In shadow mode, or
 # without an answer, it only records, and returns non-zero: the caller keeps
@@ -357,7 +441,7 @@ decider_stuck() {
 decider_recall() {
   local -n __recalled=$1
   local repo="$2" mode="$3" query="$4" fingerprint="${5:-}" first_error="${6:-}"
-  local resolved=0 vector=0 qvec="" shortlist questions id answer confidence threshold
+  local resolved=0 vector=0 qvec="" shortlist state questions id answer confidence threshold
   local -a exact=() kept=() rows=()
   local -A answers line
   read -r resolved vector < <(db_decider_gate 2>/dev/null || true) || true
@@ -371,13 +455,14 @@ decider_recall() {
   # ID, a tab, then the line as a JSON string, which holds no raw tab or newline.
   mapfile -t rows < <(jq -r '.[] | select(.exact | not) | "\(.id)\t\(.line | @json)"' <<<"$shortlist")
   (( ${#rows[@]} )) || return 1
-  questions="$(jq -c '[.[] | select(.exact | not)
-      | {key: "lesson_\(.id)", value: {type: "noul", instructions:
-          ("Does this past lesson apply to the current failure, so that its fix would help?\n" + .text)}}]
-      | from_entries' <<<"$shortlist")"
+  # The whole request within DECIDER_RERANK_CHARS: the failure first, then
+  # the lessons in what is left. Exact matches are not asked about.
+  state="Current failure:
+${query:0:$DECIDER_RERANK_STATE_CHARS}"
+  questions="${| decider_rerank_questions "$shortlist" $((DECIDER_RERANK_CHARS - ${#state})); }"
+  [[ -n $questions ]] || return 1
 
-  if ! decider_ask "Current failure:
-${query:0:$DECIDER_STATE_CHARS}" "$questions" answers; then
+  if ! decider_ask "$state" "$questions" answers; then
     decider_record rerank "rerank ${#rows[@]} lessons" "" "" false
     return 1
   fi
@@ -504,31 +589,63 @@ decider_autostart_ok() {
   fi
 }
 
+# True on Apple silicon, where strands-decider runs on the GPU through MPS
+# or, from the release after 0.1.0, MLX.
+decider_apple_silicon() {
+  system_profile
+  [[ ${SYS[os]:-} == darwin && ${SYS[arch]:-} == arm64 ]]
+}
+
+# decider_serve_device BIN -> REPLY: the --device strands-decider at BIN is
+# to serve on. On Apple silicon: mlx when its `serve --help` offers it
+# (strands-decider's README: 1.4 to 1.6 times as fast as MPS there, from the
+# release after 0.1.0), otherwise mps. Elsewhere empty: it picks CUDA or the
+# CPU itself.
+decider_serve_device() {
+  local help
+  REPLY=""
+  decider_apple_silicon || return 0
+  # Wide and plain, so that its help is not wrapped or coloured.
+  help="$(COLUMNS=200 NO_COLOR=1 TERM=dumb "$1" serve --help 2>/dev/null || true)"
+  if [[ $help == *mlx* ]]; then REPLY=mlx; else REPLY=mps; fi
+}
+
+# The device `chalk decider up` is starting the decider on, while it runs;
+# afterwards, launches read serve_device from what it recorded.
+DECIDER_SERVE_DEVICE=""
+
 # decider_launch [ONLINE]: starts both service processes in the background,
 # each in a process group of its own, with pidfiles, and the idle watcher.
 # They never download unless ONLINE is 1 (only `chalk decider up`).
 decider_launch() {
-  local dir bin offline=1
+  local dir bin offline=1 device
+  local -A got
   dir="${| decider_dir; }"
   bin="${| decider_bin; }"
   [[ -n $bin ]] || { warn "strands-decider is not installed; run: chalk decider up"; return 1; }
   [[ ${1:-0} != 1 ]] || offline=0
+  decider_info got
+  device="${DECIDER_SERVE_DEVICE:-${got[serve_device]-}}"
+  [[ $device != auto ]] || device=""
   mkdir -p "$dir"
   rm -f "$dir/decider.pid" "$dir/embed.pid"
   : > "$dir/last-used"
   if (( offline )); then export HF_HUB_OFFLINE=1; fi
-  jobs_detach "$dir/decider.log" decider_exec_serve "$bin" "$dir/decider.pid"
+  jobs_detach "$dir/decider.log" decider_exec_serve "$bin" "$dir/decider.pid" "$device"
   jobs_detach "$dir/embed.log" uv run --script "$CHALK_HOME/share/decider/chalk-embed.py" \
     --port "$DECIDER_EMBED_PORT" --pidfile "$dir/embed.pid"
   jobs_detach "$dir/watch.log" decider_watch
   if (( offline )); then unset HF_HUB_OFFLINE; fi
 }
 
-# decider_exec_serve BIN PIDFILE: becomes strands-decider serving on
-# DECIDER_PORT, after writing its own pid (exec keeps the pid).
+# decider_exec_serve BIN PIDFILE [DEVICE]: becomes strands-decider serving
+# on DECIDER_PORT, on DEVICE when given, after writing its own pid (exec
+# keeps the pid).
 decider_exec_serve() {
+  local -a device=()
+  [[ -z ${3:-} ]] || device=(--device "$3")
   printf '%s\n' "$BASHPID" > "$2"
-  exec "$1" serve "$DECIDER_MODEL" --host 127.0.0.1 --port "$DECIDER_PORT"
+  exec "$1" serve "$DECIDER_MODEL" --host 127.0.0.1 --port "$DECIDER_PORT" "${device[@]}"
 }
 
 # Seconds between the idle watcher's checks, and the idle time after which
@@ -592,15 +709,18 @@ decider_stop() {
 # until the decider is healthy or the wait is over; the others find the
 # lock held, or the service alive, and leave it. Run in the background by
 # run_start_services (never in jobs_wait), so a run does not wait for it.
+# It is running while strands-decider is: if that died alone, what is left
+# (chalk-embed, the watcher) is stopped and both start again.
 decider_start_once() {
   local limit waited=0
-  if decider_alive; then decider_touch; return 0; fi
+  if [[ -n ${| decider_pid decider; } ]]; then decider_touch; return 0; fi
   chalk_lock decider 0 || return 0
-  if decider_alive; then
+  if [[ -n ${| decider_pid decider; } ]]; then
     chalk_unlock decider
     decider_touch
     return 0
   fi
+  decider_stop
   info "starting the local decider"
   if ! decider_launch; then
     chalk_unlock decider
@@ -677,8 +797,21 @@ decider_revision() {
   if [[ -f $file ]]; then read -r REPLY < "$file" || true; fi
 }
 
+# decider_up_wait LIMIT VAR: waits up to LIMIT seconds for both service
+# processes to answer /health, and sets VAR to the seconds it waited. False
+# when they did not, or one of them died first.
+decider_up_wait() {
+  local -n __waited=$2
+  __waited=0
+  until decider_healthy "$DECIDER_LOCAL_URL" && decider_healthy "$DECIDER_EMBED_LOCAL_URL"; do
+    __waited=$((__waited + 1))
+    if (( __waited >= $1 )) || [[ -z ${| decider_pid decider; } ]]; then return 1; fi
+    sleep 1
+  done
+}
+
 decider_up() {
-  local dir bin base base_rev rev embed_line median version device health
+  local dir bin base base_rev rev embed_line median version device health package
   decider_local ||
     die "CHALK_DECIDER_URL is $CHALK_DECIDER_URL; 'chalk decider up' manages only the local service ($DECIDER_LOCAL_URL)"
   command -v uv >/dev/null 2>&1 ||
@@ -688,9 +821,14 @@ decider_up() {
   mkdir -p "$dir"
   chalk_lock decider 300 || die "another chalk is starting the decider; try again in a moment"
 
-  info "installing $DECIDER_PACKAGE with uv (latest release)"
-  uv tool install --upgrade "$DECIDER_PACKAGE" >"$dir/install.log" 2>&1 ||
-    { chalk_unlock decider; die "could not install $DECIDER_PACKAGE (see $dir/install.log)"; }
+  # On Apple silicon with the [mlx] extra, which the release after 0.1.0
+  # adds for --device mlx; uv installs the package without it, with a
+  # warning, while there is none.
+  package="$DECIDER_PACKAGE"
+  if decider_apple_silicon; then package+="[mlx]"; fi
+  info "installing $package with uv (latest release)"
+  uv tool install --upgrade "$package" >"$dir/install.log" 2>&1 ||
+    { chalk_unlock decider; die "could not install $package (see $dir/install.log)"; }
   bin="${| decider_bin; }"
   [[ -n $bin ]] || { chalk_unlock decider; die "uv installed $DECIDER_PACKAGE, but its command is not in $(uv tool dir --bin)"; }
   version="$(uv tool list 2>/dev/null | awk -v p="$DECIDER_PACKAGE" '$1 == p { sub(/^v/, "", $2); print $2; exit }')"
@@ -710,19 +848,28 @@ decider_up() {
     { chalk_unlock decider; die "could not prepare chalk-embed (see $dir/embed-install.log)"; }
 
   decider_stop
-  info "starting the decider on $DECIDER_LOCAL_URL"
+  DECIDER_SERVE_DEVICE="${| decider_serve_device "$bin"; }"
+  info "starting the decider on $DECIDER_LOCAL_URL${DECIDER_SERVE_DEVICE:+ with --device $DECIDER_SERVE_DEVICE}"
   decider_launch || { chalk_unlock decider; die "could not start the decider"; }
-  local waited=0 limit
+  local waited=0 limit up=1
   limit="${| system_timeout 300 "${CHALK_DECIDER_TIMEOUT:-auto}"; }"
-  until decider_healthy "$DECIDER_LOCAL_URL" && decider_healthy "$DECIDER_EMBED_LOCAL_URL"; do
-    waited=$((waited + 1))
-    if (( waited >= limit )) || ! decider_alive; then
-      decider_stop
-      chalk_unlock decider
-      die "the decider did not become healthy in ${waited}s (see $dir/decider.log and $dir/embed.log)"
-    fi
-    sleep 1
-  done
+  local mlx_failed=0
+  decider_up_wait "$limit" waited || up=0
+  if (( ! up )) && [[ $DECIDER_SERVE_DEVICE == mlx ]]; then
+    mlx_failed=1
+    # MLX support that does not work on this machine: MPS does.
+    warn "the decider did not start with --device mlx (see $dir/decider.log); starting it with --device mps"
+    decider_stop
+    DECIDER_SERVE_DEVICE=mps
+    decider_launch || { chalk_unlock decider; die "could not start the decider"; }
+    up=1
+    decider_up_wait "$limit" waited || up=0
+  fi
+  if (( ! up )); then
+    decider_stop
+    chalk_unlock decider
+    die "the decider did not become healthy in ${waited}s (see $dir/decider.log and $dir/embed.log)"
+  fi
   health="$(curl -sS --max-time 2 "$DECIDER_LOCAL_URL/health" 2>/dev/null || true)"
   device="$(jq -r '.device // empty' <<<"$health" 2>/dev/null || true)"
 
@@ -737,6 +884,8 @@ decider_up() {
     printf 'base_model=%s@%s\n' "$base" "${base_rev:-?}"
     printf 'embed_model=%s@%s\n' "$DECIDER_EMBED_MODEL" "${embed_rev:-?}"
     printf 'device=%s\n' "${device:-?}"
+    printf 'serve_device=%s\n' "${DECIDER_SERVE_DEVICE:-auto}"
+    printf 'mlx_failed=%s\n' "$mlx_failed"
     printf 'embed_device=%s\n' "${embed_device:-?}"
     printf 'bench_ms=%s\n' "$median"
   } > "$dir/installed"
@@ -762,9 +911,29 @@ decider_up() {
   info "it stops after ${CHALK_DECIDER_IDLE_MINUTES} idle minutes, and runs start it again. To use it, set CHALK_DECIDER=shadow."
 }
 
+# decider_device_note -> REPLY: the --device `chalk decider up` chose for
+# the local decider, and why; empty when it recorded none (an install by
+# an older Chalk).
+decider_device_note() {
+  local -A got
+  decider_info got
+  REPLY=""
+  case "${got[serve_device]-}" in
+    "")   ;;
+    auto) REPLY="chosen by strands-decider: CUDA or the CPU" ;;
+    mlx)  REPLY="mlx (Apple silicon)" ;;
+    mps)  if [[ ${got[mlx_failed]-} == 1 ]]; then
+            REPLY="mps (Apple silicon): --device mlx did not start"
+          else
+            REPLY="mps (Apple silicon): ${got[package]:-strands-decider} has no --device mlx; chalk decider up picks it once it does"
+          fi ;;
+    *)    REPLY="${got[serve_device]}" ;;
+  esac
+}
+
 decider_status() {
   local -A got
-  local mode slow
+  local mode slow note
   mode="${| decider_mode; }"
   info "CHALK_DECIDER=$CHALK_DECIDER (acting as $mode), CHALK_DECIDER_URL=$CHALK_DECIDER_URL"
   if ! decider_local; then
@@ -784,6 +953,8 @@ decider_status() {
   fi
   info "  package: ${got[package]-?}, installed ${got[installed_at]-?}"
   info "  decider: ${got[decider_model]} on ${got[device]-?}"
+  note="${| decider_device_note; }"
+  if [[ -n $note ]]; then info "  device:  $note"; fi
   info "  base:    ${got[base_model]-?}"
   info "  embed:   ${got[embed_model]-?} on ${got[embed_device]-?}"
   slow="${| decider_slow; }"

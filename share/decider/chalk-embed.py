@@ -38,6 +38,7 @@ import json
 import math
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL = "BAAI/bge-small-en-v1.5"
@@ -78,8 +79,15 @@ class RealModel:
         if dimension != DIMENSIONS:
             raise SystemExit(f"{MODEL} has {dimension} dimensions, not {DIMENSIONS}")
 
+        # The server answers each request on a thread of its own, and two
+        # encodes at once on Apple's GPU abort the process (measured on MPS:
+        # four concurrent requests killed it on the first try). Requests take
+        # turns; each takes milliseconds.
+        self.lock = threading.Lock()
+
     def encode(self, texts: list[str]) -> list[list[float]]:
-        vectors = self.model.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
+        with self.lock:
+            vectors = self.model.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
         return [[round(float(x), 6) for x in v] for v in vectors]
 
 

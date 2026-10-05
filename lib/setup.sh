@@ -87,6 +87,9 @@ doctor_decider() {
     return 0
   fi
   doctor_check optional "decider model ${got[decider_model]} on ${got[device]-?}" "" true
+  if [[ -n ${got[serve_device]-} ]]; then
+    doctor_check optional "decider device: ${| decider_device_note; }" "" true
+  fi
   doctor_check optional "decider base model ${got[base_model]-?}" "" true
   doctor_check optional "embedding model ${got[embed_model]-?}" "" true
   doctor_check optional "local decider running" "stopped; the next run starts it, or: chalk decider up" \
