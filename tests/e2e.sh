@@ -755,6 +755,169 @@ SQL
   pg -c 'DROP SCHEMA chalk_e2e CASCADE'
 fi
 
+# 3c''. chalk share: an anonymised report card that never holds anything
+# identifying (#21). The database and the state directory are seeded with
+# sentinels: repository and branch names, ticket IDs, paths, test names,
+# errors, notes, lessons, an email, a host, model revisions, a cloud
+# account ID and labels Chalk never writes. None may reach the summary.
+# Against a real Postgres the sentinels go through share/dashboard.sql and
+# share/share.sql; with the fakes, the database answers with them directly,
+# as if a query had let them through, and share/share.jq must drop them.
+decider_name="$(sed -n 's/^DECIDER_MODEL=//p' "$here/../lib/decider.sh")"
+decider_name="${decider_name##*/}"
+mkdir -p "$XDG_STATE_HOME/chalk/SENTINEL_REPO/runs/SENT-123"
+printf 'loop 1 failed at /SENTINEL/path/app.py: SENTINEL_TEXT\n' \
+  > "$XDG_STATE_HOME/chalk/SENTINEL_REPO/runs/SENT-123/run.log"
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  spg() { PGOPTIONS='-c search_path=chalk_e2e_share,public -c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
+  spg -c 'DROP SCHEMA IF EXISTS chalk_e2e_share CASCADE' -c 'CREATE SCHEMA chalk_e2e_share'
+  spg -f "$here/../share/schema.sql"
+  spg -v decider="$decider_name" <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons,
+                  run_id, tests_hash, failing, first_error, tree_id, verdict, fp_rules, failing_tests)
+VALUES
+  ('SENTINEL_REPO', 'SENT-123', 'chalk/SENT-123-sentinel-branch', 1, 'continue', 'ok', 1, false,
+   'claude-opus-4-5-20251101', 'SENTINELHASH', 0.4567, 1, 30, 1234567, 2345, 3456789, 4567, 12, 1, 0,
+   'SENT-123-1700000000', 'SENTINELTESTHASH', 2, 'Error at /SENTINEL/path/app.py: SENTINEL_TEXT',
+   'SENTINELTREE', 'first', 'shadow', E'tests/SENTINEL_TEST.py::test_sentinel_login\n/SENTINEL/path/spec.js'),
+  ('SENTINEL_REPO', 'SENT-123', 'chalk/SENT-123-sentinel-branch', 2, 'retry', 'SENTINEL_STATUS', 1, false,
+   'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/sentinelarn', 'SENTINELHASH',
+   0.3333, 1, 20, 1000, 200, 0, 0, 3, 0, 1,
+   'SENT-123-1700000000', 'SENTINELTESTHASH', 2, 'Error at /SENTINEL/path/app.py: SENTINEL_TEXT',
+   'SENTINELTREE', 'SENTINEL_VERDICT', 'SENTINEL_RULES', 'tests/SENTINEL_TEST.py::test_sentinel_login'),
+  ('SENTINEL_REPO', 'SENT-123', 'chalk/SENT-123-sentinel-branch', 3, 'retry', 'ok', 0, true,
+   'claude-opus-4-5-20251101', 'SENTINELHASH', 0.2, 1, 10, 1000, 100, 0, 0, 2, 0, 1,
+   'SENT-123-1700000000', NULL, NULL, NULL, 'SENTINELTREE2', NULL, 'shadow', NULL),
+  ('SENTINEL_REPO', 'SENT-123', 'chalk/SENT-123-sentinel-branch', 0, 'review', 'pass', 0, false,
+   'claude-sonnet-4-5@20250929', 'SENTINELHASH', 0.1, 1, 5, 100, 10, 0, 0, 1, 0, 0,
+   'SENT-123-1700000000', NULL, NULL, NULL, NULL, NULL, 'shadow', NULL),
+  ('SENTINEL_REPO', 'SENT-123', 'chalk/SENT-123-sentinel-branch', 0, 'SENTINEL_KIND', 'ok', 0, false,
+   'claude-haiku-4-5-20251001', 'SENTINELHASH', 0.01, 1, 1, 10, 1, 0, 0, 1, 0, 0,
+   'SENT-123-1700000000', NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+  ('sentinel-other-repo', 'SENT-456', 'chalk/SENT-456', 1, 'continue', 'ok', 0, true,
+   'us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'SENTINELHASH', 0.25, 1, 40, 500, 50, 0, 0, 4, 0, 0,
+   'SENT-456-1700000001', NULL, NULL, NULL, 'SENTINELTREE3', NULL, 'on', NULL);
+INSERT INTO events (repo, ticket, kind)
+VALUES ('SENTINEL_REPO', 'SENT-123', 'detention'), ('SENTINEL_REPO', 'SENT-123', 'SENTINEL_EVENT'),
+       ('sentinel-other-repo', 'SENT-456', 'submitted');
+INSERT INTO lessons (repo, ticket, signature, resolution, lesson, resolved_by, resolved_at,
+                     run_id, fingerprint, first_error, scope)
+VALUES ('SENTINEL_REPO', 'SENT-123', E'deja_vu: rubric failed (exit 1)\n/SENTINEL/path/app.py SENTINEL_TEXT',
+        'SENTINEL_TEXT: the fix was in /SENTINEL/path', 'SENTINEL_LESSON: never touch /SENTINEL/path',
+        'sentinel.user@example.com', now(), 'SENT-123-1700000000', 'SENTINELFP', '/SENTINEL/path', 'repo'),
+       ('SENTINEL_REPO', 'SENT-789', 'SENTINEL_TEXT, a reason Chalk never writes', NULL, NULL, NULL, NULL,
+        NULL, NULL, NULL, NULL);
+INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode,
+                       latency_ms, acted, model, error, url)
+SELECT (SELECT id FROM runs WHERE run_id = 'SENT-123-1700000000' AND loop = v.n AND kind <> 'review'
+          ORDER BY id LIMIT 1),
+       'SENT-123-1700000000', v.kind, 'SENTINEL_QUESTION about /SENTINEL/path', v.a, v.c, 0.9, v.mode,
+       v.ms, false, v.model, v.e, v.u
+  FROM (VALUES (1, 'stuck', 'yes', 0.95, 'shadow', 123, 'SENTINEL-HOST.example.com/decider@deadbee', NULL,
+                'https://SENTINEL-URL.example.net:8443/decider'),
+               (2, 'stuck', 'no', 0.75, 'shadow', 457, :'decider' || '@abcdef1', NULL, 'http://127.0.0.1:8471'),
+               (2, 'SENTINEL_DKIND', NULL, NULL, 'SENTINEL_MODE', 2000, NULL, 'SENTINEL_ERROR', NULL)
+       ) v(n, kind, a, c, mode, ms, model, e, u);
+SQL
+  PGOPTIONS='-c search_path=chalk_e2e_share,public' chalk share --json --days 30 > "$tmp/share.json" 2> "$tmp/share.err" ||
+    { cat "$tmp/share.err"; fail "chalk share against a seeded database"; }
+else
+  # The report card's data and share.sql's counts, with a sentinel in
+  # every string a query could let through.
+  cat > "$tmp/share-dashboard.json" <<'JSON'
+{"generated_at": "2026-10-05T10:00:00Z", "days": 30, "submitted": 1, "detentions": 1,
+ "totals": {"cost": 1.3500, "calls": 6, "loops": 4, "checkpoints": 2, "loop_cost": 1.2400,
+            "wasted": 0.7900, "tickets": 2, "input_tokens": 1237177, "output_tokens": 2706,
+            "cache_read_tokens": 3456789, "cache_write_tokens": 4567, "denials": 1, "loop_denials": 1},
+ "by_hour": [{"hour": "2026-10-05T09:00:00Z", "cost": 1.35, "wasted": 0.79}],
+ "by_kind": [{"kind": "continue", "calls": 2, "cost": 0.7067, "avg_cost": 0.3534, "avg_seconds": 35},
+             {"kind": "SENTINEL_KIND", "calls": 1, "cost": 0.01, "avg_cost": 0.01, "avg_seconds": 1}],
+ "by_model": [{"model": "claude-opus-4-5-20251101", "loops": 2, "cost": 0.6567, "checkpoints": 1},
+              {"model": "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/sentinelarn", "loops": 1, "cost": 0.3333, "checkpoints": 0},
+              {"model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "loops": 1, "cost": 0.25, "checkpoints": 1}],
+ "by_prompts": [{"prompts": "SENTINELHASH", "first_seen": "2026-10-05T09:00:00Z", "loops": 4, "cost": 1.24}],
+ "budget": {"loops": 4, "cap": 1.0000, "cap_min": 1.0000, "p50": 0.29, "p90": 0.42, "max": 0.4567, "near_cap": 0},
+ "review": {"reviews": 1, "failed": 0, "cost": 0.1, "fix_cost": 0},
+ "spec": {"checks": 0, "failed": 0, "cost": 0},
+ "lessons": {"with": 2, "with_passed": 1, "without": 0, "without_passed": 0},
+ "failing_tests": [{"repo": "SENTINEL_REPO", "test": "tests/SENTINEL_TEST.py::test_sentinel_login", "loops": 2, "tickets": 1, "last": "2026-10-05T09:00:00Z", "n": 1}],
+ "ledger": {"detained_runs": 1, "no_progress_cost": 0.79, "saved": 0.53, "blocked_only": 0, "blocked_only_cost": 0,
+            "no_verdicts": 0, "false_stops": 0, "false_stop_cost": 0, "converging": 0, "stopped_on": 0,
+            "by_verdict": [{"verdict": "SENTINEL_VERDICT", "runs": 1, "saved": 0.53}],
+            "runs": [{"run_id": "SENT-123-1700000000", "repo": "SENTINEL_REPO", "ticket": "SENT-123"}],
+            "unknown_tests": [{"repo": "SENTINEL_REPO", "loops": 2, "unknown": 0}]},
+ "decider": {"questions": 3, "answered": 2, "acted": 0, "median_ms": 290,
+             "models": ["SENTINEL-HOST.example.com/decider@deadbee", "DECIDER@abcdef1"],
+             "by_kind": [{"kind": "SENTINEL_DKIND", "questions": 1, "answered": 0, "acted": 0},
+                         {"kind": "stuck", "questions": 2, "answered": 2, "acted": 0}],
+             "errors": [{"error": "SENTINEL_ERROR", "calls": 1}],
+             "calibration": [{"low": 0.7, "answers": 1, "agreed": 1}, {"low": "SENTINEL", "answers": 1, "agreed": 0}],
+             "would_stop": 1, "would_save": 0.53, "false_stops": 0},
+ "tickets": [{"repo": "SENTINEL_REPO", "ticket": "SENT-123", "state": "detention", "last": "2026-10-05T09:00:00Z"}]}
+JSON
+  sed -i.bak "s/DECIDER@/$decider_name@/" "$tmp/share-dashboard.json" && rm "$tmp/share-dashboard.json.bak"
+  cat > "$tmp/share-extra.json" <<'JSON'
+{"runs": 2, "repositories": 2, "agent": {"ok": 3, "blocked": 0, "error": 1, "turns": 21},
+ "verdicts": {"first": 1, "SENTINEL_VERDICT": 1, "none": 2},
+ "fp_rules": {"shadow": 2, "SENTINEL_RULES": 1, "on": 1},
+ "events": {"detention": 1, "submitted": 1, "SENTINEL_EVENT": 1},
+ "detentions_by_reason": {"deja_vu": 1, "SENT-123 at /SENTINEL/path": 1},
+ "lessons": {"opened": 2, "resolved": 1, "distilled": 1, "scope_repo": 1, "scope_general": 0, "fingerprinted": 1},
+ "decider_modes": {"shadow": 2, "SENTINEL_MODE": 1},
+ "note": "SENTINEL_TEXT from sentinel.user@example.com"}
+JSON
+  FAKE_DASHBOARD="$tmp/share-dashboard.json" FAKE_SHARE_COUNTS="$tmp/share-extra.json" \
+    chalk share --json --days 30 > "$tmp/share.json" 2> "$tmp/share.err" ||
+    { cat "$tmp/share.err"; fail "chalk share"; }
+fi
+# share_has FILTER VALUE: the summary's FILTER is VALUE.
+share_has() { test "$(jq -c "$1" "$tmp/share.json")" = "$2"; }
+check "share: prints one JSON summary and nothing else on stdout" jq -e 'type == "object" and .schema == 1' "$tmp/share.json"
+check "share: --json prints no guidance" test ! -s "$tmp/share.err"
+leaks=""
+for sentinel in SENTINEL SENT-123 SENT-456 SENT-789 /SENTINEL/path 123456789012 example.com \
+                example.net deadbee abcdef1 20251101 20250929 1700000000 us.anthropic arn:aws 0.4567 0.3333 \
+                1237177 3456789 test_sentinel_login "$tmp" "$XDG_STATE_HOME" "$HOME"; do
+  if grep -qiF -- "$sentinel" "$tmp/share.json"; then leaks="$leaks $sentinel"; fi
+done
+user="$(id -un)"
+if (( ${#user} >= 5 )) && grep -qiF -- "$user" "$tmp/share.json"; then leaks="$leaks $user"; fi
+[ -z "$leaks" ] || { jq . "$tmp/share.json"; echo "leaked:$leaks"; }
+check "share: no repository, ticket, path, test, note, email, host, revision or account ID leaks" test -z "$leaks"
+check "share: models are named by family, and anything else is other" \
+  share_has '[.by_model[] | "\(.model)=\(.loops)"] | sort' '["claude-opus-4-5=2","claude-sonnet-4-5=1","other=1"]'
+check "share: costs and token counts are rounded to two significant figures" \
+  share_has '[.totals.cost_usd, .totals.input_tokens, .budget.max_usd]' '[1.4,1200000,0.46]'
+check "share: counts are kept as they are" \
+  share_has '[.totals.loops, .totals.runs, .totals.repositories, .totals.submitted, .totals.detentions]' '[4,2,2,1,1]'
+check "share: labels Chalk does not write read as other" \
+  share_has '[.verdicts.other, .fp_rules.other, .detentions_by_reason.other, .decider.modes.other, .decider.errors.other]' '[1,1,1,1,1]'
+check "share: the local decider is named, any other only as hosted" \
+  share_has '.decider.models' "[\"hosted\",\"$decider_name\"]"
+check "share: the summary says what kind of machine, not which" \
+  jq -e '.host | (.os | IN("darwin", "linux", "other")) and (.cpus == null or (.cpus | test("^[0-9]+(-[0-9]+|\\+)?$")))' "$tmp/share.json"
+# network_calls: how many bytes the network fakes have logged so far.
+network_calls() {
+  local log bytes=0
+  for log in "$FAKE_STATE"/{curl,gh,glab,claude}.log; do
+    if [ -e "$log" ]; then bytes=$((bytes + $(wc -c < "$log"))); fi
+  done
+  echo "$bytes"
+}
+before="$(network_calls)"
+chalk share --days 30 --output "$tmp/share-saved.json" > "$tmp/share2.out" 2> "$tmp/share2.err" ||
+  { cat "$tmp/share2.err"; fail "chalk share --output"; }
+check "share: --output saves the same JSON it prints" cmp -s "$tmp/share-saved.json" "$tmp/share2.out"
+check "share: says nothing was sent, and where it could be posted" \
+  sh -c "grep -q 'Nothing has been sent' '$tmp/share2.err' && grep -qF 'discussions/new?category=report-cards' '$tmp/share2.err'"
+check "share: calls no network tool (curl, gh, glab, claude)" \
+  test "$(network_calls)" = "$before"
+if chalk share --days 0 >/dev/null 2>&1; then fail "share must reject --days 0"; fi
+pass "share: --days takes a positive whole number"
+if [ -n "${FAKE_PG_URL:-}" ]; then spg -c 'DROP SCHEMA chalk_e2e_share CASCADE'; fi
+
 check "telemetry is off unless an endpoint is set" sh -c "! grep -q OTEL_ '$FAKE_STATE/docker.log'"
 chalk new PROJ-7 Traced feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-7"

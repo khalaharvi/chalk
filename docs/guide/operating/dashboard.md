@@ -44,6 +44,20 @@ It shows:
   worth a closer look or an office-hours note;
 - the fifty most recently active tickets and their state.
 
+### Sharing it
+
+```sh
+chalk share                # last 30 days; --days N, --output FILE, --json
+```
+
+`chalk share` prints an anonymised summary of the same numbers as JSON:
+counts, rates, rounded costs, model families and the size of your machine.
+It holds no repository, path, ticket, test name, error or note, and it
+sends nothing. If you choose to post it in the
+[Report cards](https://github.com/khalaharvi/chalk/discussions/new?category=report-cards)
+discussions, it helps tune Chalk's defaults. [Privacy](../../privacy.md#chalk-share)
+lists every field and why it is safe.
+
 ## Verdicts
 
 After the rubric runs, Chalk reduces each loop to its **fingerprint**:

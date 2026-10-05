@@ -51,10 +51,10 @@ case "$sql" in
     done
     echo "call $kind $cost" >> "$ledger" ;;
   *"SET resolution"*) echo "fix" >> "$ledger" ;;
-  *"FROM runs WHERE repo"*)
+  *"FROM runs r WHERE repo"*)
     awk '$1 == "call" { cost += $3; if ($2 ~ /^(continue|retry|fix-review)$/) loops++ }
          $1 == "fix" { fixes++ }
-         END { printf "%d %.2f %d\n", loops, cost, fixes }' "$ledger"
+         END { printf "%d %.2f %d ready\n", loops, cost, fixes }' "$ledger"
     exit 0 ;;
 esac
 printf '%s\n' "$sql" | "$DEMO_FAKES/docker" "$@"

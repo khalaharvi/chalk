@@ -81,6 +81,7 @@ Modules load in layers; a file uses only what is loaded before it
 | | `lib/lifecycle.sh` | `chalk office-hours`, `submit`, `cleanup` |
 | | `lib/dashboard.sh` | `chalk dashboard` |
 | | `lib/setup.sh` | `chalk doctor` and `chalk init` |
+| | `lib/share.sh` | `chalk share`: the anonymised report card |
 
 Outside `lib/`:
 
@@ -90,6 +91,7 @@ Outside `lib/`:
 | `share/prompts/` | Every prompt the agents receive |
 | `share/templates/` | Files `chalk init` adds to a repository |
 | `share/schema.sql`, `share/dashboard.sql`, `share/dashboard.html` | The telemetry schema, the report card's query and page |
+| `share/share.sql`, `share/share.jq` | The counts `chalk share` adds to the report card's, and the allow-list that builds its summary |
 | `share/decider/chalk-embed.py` | The local embedding service for semantic recall, a single Python file run with `uv run --script` |
 | `share/ci-audit-schema.sql` | The optional central audit table |
 | `packaging/`, `scripts/release.sh`, `scripts/update-tap.sh`, `scripts/changelog.sh`, `CHANGELOG.md` | The Homebrew formula template, release scripts and the changelog |

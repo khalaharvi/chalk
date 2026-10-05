@@ -92,6 +92,13 @@ follows it.
 report card for the last N days (30 by default) and opens it. See
 [Verdicts and the report card](../guide/operating/dashboard.md).
 
+**`chalk share [--days N] [--output FILE] [--json]`** prints an anonymised
+summary of the report card for the last N days (30 by default) as JSON:
+counts, rates, rounded costs, model families and the size of the machine,
+never a repository, path, ticket, test name, error or note. `--output`
+also saves it, and `--json` prints only the JSON. It sends nothing; you
+decide whether to post it. See [Privacy](../privacy.md#chalk-share).
+
 ## Failure lifecycle
 
 **`chalk office-hours -m NOTE [--detach | -d]`**, run from a `detention/…`
