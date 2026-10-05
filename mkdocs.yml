@@ -119,6 +119,7 @@ nav:
           - Troubleshooting: guide/operating/troubleshooting.md
   - Reference:
       - Commands: reference/commands.md
+      - Decider protocol: decider-protocol.md
       - Glossary: reference/glossary.md
       - Roadmap: roadmap.md
   - Develop:
