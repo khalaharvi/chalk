@@ -27,6 +27,8 @@ run_context() {
   # detention the latest failure matched (see run_fingerprint).
   RUN_DENIALS=0
   RUN_OPEN_TICKET=""
+  # The decider's confidence when it judged the run stuck (run_next_step).
+  RUN_STUCK_CONFIDENCE=""
   # Set by cmd_run when the loop starts; calls outside a run record none.
   RUN_ID=""
   RUN_FP_BASE=()
@@ -86,11 +88,16 @@ run_claim() {
 }
 
 # run_start_services: starts the telemetry database and the sandbox image
-# side by side. Either failing stops the run.
+# side by side. Either failing stops the run. The local decider, when it
+# is installed and wanted, is started too, but never waited for: until it
+# answers, loops go on without it.
 run_start_services() {
   local -A started
   local name failed=""
   jobs_init "$RUN_IO/startup"
+  if [[ $CHALK_DECIDER != off ]] && decider_autostart_ok; then
+    jobs_detach "$RUN_IO/startup/decider.log" decider_start_once
+  fi
   jobs_spawn database db_up
   jobs_spawn image sandbox_ensure_image
   jobs_wait started && return 0
@@ -132,10 +139,10 @@ run_build_prompt() {
   printf '<rubric_command>%s</rubric_command>\n' "$CHALK_TEST_CMD"
 
   if [[ -n ${__recall[mode]-} ]]; then
-    lessons="$(memory_recall "${__recall[mode]}" "${__recall[query]-}" \
-      "${__recall[fingerprint]-}" "${__recall[first_error]-}")"
+    lessons="${| memory_recall "${__recall[mode]}" "${__recall[query]-}" \
+      "${__recall[fingerprint]-}" "${__recall[first_error]-}"; }"
   else
-    lessons="$(memory_recall spec "$(<"$RUN_SPEC")")"
+    lessons="${| memory_recall spec "$(<"$RUN_SPEC")"; }"
   fi
   RUN_LESSONS="$(printf '%s\n' "$lessons" | grep -c '^- ' || true)"
   if [ -n "$lessons" ]; then printf '<lessons>\n%s\n</lessons>\n' "$lessons"; fi
@@ -248,6 +255,41 @@ $tests}")
   fi
 }
 
+# run_stuck_state PREV CUR -> REPLY: what the decider is told about a loop
+# the fingerprint rules could not settle (maintainer's decision on #34):
+# compact facts only, the failing tests and first error of the previous
+# loop (PREV, the baseline) and of this one (CUR), and a diffstat between
+# their working trees. Never the diff itself. decider_stuck caps it.
+run_stuck_state() {
+  local -n __stuck_prev=$1 __stuck_cur=$2
+  local stat=""
+  REPLY="${| run_stuck_facts previous "$1"; }${| run_stuck_facts current "$2"; }"
+  if [[ -n ${__stuck_prev[tree_id]-} && -n ${__stuck_cur[tree_id]-} ]]; then
+    # shellcheck disable=SC2016 # expanded by the sandbox's bash
+    stat="$(sandbox_sh "$RUN_SANDBOX" 'git diff --stat=120 "$1" "$2" | tail -n 41' \
+              "${__stuck_prev[tree_id]}" "${__stuck_cur[tree_id]}" 2>/dev/null || true)"
+  fi
+  REPLY+="changes between the two loops (git diff --stat):
+${stat:-  none, or unknown}"
+}
+
+# run_stuck_facts LABEL FP -> REPLY: one loop's lines of run_stuck_state.
+# FP names an array filled by fp_compute. At most 20 test IDs are listed.
+run_stuck_facts() {
+  local -n __facts=$2
+  local tests="${__facts[tests]-UNKNOWN}" count="${__facts[failing]-}"
+  if [[ $tests == UNKNOWN ]]; then
+    tests="unknown"
+  else
+    tests="($count): $(head -n 20 <<<"$tests" | paste -sd ',' - | sed 's/,/, /g')"
+    if (( ${count:-0} > 20 )); then tests+=", ..."; fi
+  fi
+  REPLY="$1 loop:
+  failing tests $tests
+  first error: ${__facts[first_error]:-none found}
+"
+}
+
 # Brings commits made in the sandbox onto the host branch (fast-forward only).
 run_sync() {
   sandbox_export "$RUN_SANDBOX" "$RUN_BASE"
@@ -343,6 +385,7 @@ run_next_step() {
     deja_vu)     REPLY="this fails like the open detention of ${RUN_OPEN_TICKET:-another ticket}; fix that one first" ;;
     repeat)      REPLY="the agent made the same failing change twice; fix the failure yourself, a retry would repeat it" ;;
     no_change)   REPLY="the agent changed nothing; make the checkpoint clearer, or do this step yourself" ;;
+    stuck)       REPLY="the decider judged the agent stuck on the same root cause as the loop before (confidence $RUN_STUCK_CONFIDENCE); fix that cause yourself, a retry would likely fail the same way" ;;
     *)           REPLY="fix what stopped the run" ;;
   esac
 }
@@ -364,7 +407,8 @@ run_detention_branch() {
 # lesson, says what to do next, and halts this run. KIND is blocked,
 # loop_limit or review; how the last loop ended when the retries ran out
 # (failed, agent_error or passed); or the verdict that stopped the run
-# (deja_vu, repeat or no_change). FINGERPRINT and FIRST_ERROR are given only
+# (deja_vu, repeat or no_change), or stuck when the decider stopped it.
+# FINGERPRINT and FIRST_ERROR are given only
 # when the loop that detained the run failed its rubric.
 run_detain() {
   local kind="$1" reason="$2" detail="${3:-}" fingerprint="${4:-}" first_error="${5:-}" branch signature
@@ -463,11 +507,13 @@ cmd_run() {
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended
-  local open remaining result agent_status rubric_exit progressed output
+  local open remaining result agent_status rubric_exit progressed output stuck key
   local -a lesson
-  local -A usage fp recall=()
+  local -A usage fp base recall=()
   result="$RUN_IO/loop.json"
   while :; do
+    # Every host-service call of this loop shares one budget.
+    decider_budget_reset
     open="$(spec_open_count "$RUN_SPEC")"
 
     # Every checkpoint is ticked: review, then either submit or fix findings.
@@ -508,6 +554,7 @@ cmd_run() {
       fp=()
       run_verdict fp blocked
       db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
+      decider_flush
       run_detain blocked "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
       return 1
     fi
@@ -537,10 +584,22 @@ cmd_run() {
         ended="passed"
       fi
     fi
+    # The baseline this loop is judged against, before run_verdict moves it on.
+    base=()
+    for key in "${!RUN_FP_BASE[@]}"; do base[$key]="${RUN_FP_BASE[$key]}"; done
     run_verdict fp "$ended"
+
+    # The gray zone: a failed loop the rules call spinning or other is put
+    # to the decider. Only with fingerprints (not CHALK_FP_RULES=off).
+    stuck=""
+    if [[ $CHALK_DECIDER != off && $CHALK_FP_RULES != off && $ended == failed &&
+          ${fp[verdict]-} == @(spinning|other) ]]; then
+      stuck="${| decider_stuck "${| run_stuck_state base fp; }"; }"
+    fi
 
     db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
       "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
+    decider_flush
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
     if (( usage[denials] > 0 )); then
       run_log "  ${usage[denials]} action(s) were refused by permission checks; see $result"
@@ -561,6 +620,13 @@ cmd_run() {
     # fails like an open detention on another ticket is detained at once.
     if [ "$CHALK_FP_RULES" = "on" ] && fp_stops "${fp[verdict]-}"; then
       run_detain "${fp[verdict]}" "${fp[verdict]}: $reason" "" "${lesson[@]}"
+      return 1
+    fi
+    # With CHALK_DECIDER=on, a confident "stuck" detains at once. A decider
+    # can only stop a run early, never give it more loops.
+    if [[ -n $stuck ]]; then
+      printf -v RUN_STUCK_CONFIDENCE '%d.%02d' $((${stuck#* } / 1000)) $((${stuck#* } % 1000 / 10))
+      run_detain stuck "stuck: $reason" "" "${lesson[@]}"
       return 1
     fi
 

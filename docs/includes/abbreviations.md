@@ -13,3 +13,5 @@
 *[shadow mode]: Shadow mode: a rule records what it would have done and changes nothing.
 *[verdict]: Verdict: the label a loop that made no progress gets from its fingerprint, such as repeat or no_change.
 *[verdicts]: Verdicts: the labels loops that made no progress get from their fingerprints, such as repeat or no_change.
+*[decider]: Decider: a small, fast model (System 1) that answers bounded questions, such as whether a loop is stuck, with a confidence. Optional, off by default.
+*[Decider]: Decider: a small, fast model (System 1) that answers bounded questions, such as whether a loop is stuck, with a confidence. Optional, off by default.

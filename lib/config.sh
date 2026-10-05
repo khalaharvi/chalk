@@ -32,6 +32,9 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_FP_RULES]=shadow
   [CHALK_FP_FEEDBACK]=false
   [CHALK_TEST_REPORT]=""
+  [CHALK_DECIDER]=off
+  [CHALK_DECIDER_THRESHOLD]=0.9
+  [CHALK_DECIDER_MIN_LESSONS]=30
 )
 
 # Machine-level settings: environment only, never read from the repository.
@@ -42,6 +45,20 @@ declare -gA CHALK_ENV_DEFAULTS=(
   [CHALK_OTEL_SIGNALS]=traces
   # Seconds to wait for the database; auto adapts to the machine.
   [CHALK_DB_TIMEOUT]=auto
+  # Where the decider is (docs/decider-protocol.md): by default the local
+  # service that `chalk decider up` installs. A repository cannot point it
+  # elsewhere, since the decider receives test output.
+  [CHALK_DECIDER_URL]="http://127.0.0.1:8471"
+  # Bearer token for a hosted decider. Never logged.
+  [CHALK_DECIDER_TOKEN]=""
+  # Where semantic recall gets embeddings: the local chalk-embed.
+  [CHALK_EMBED_URL]="http://127.0.0.1:8472"
+  # Minutes without a request after which the local decider stops; a run
+  # starts it again.
+  [CHALK_DECIDER_IDLE_MINUTES]=30
+  # Seconds a run's start of the local decider waits for it; auto adapts
+  # to the machine.
+  [CHALK_DECIDER_TIMEOUT]=auto
 )
 
 # Settings of the Hindsight lesson memory, which was removed. They are
@@ -124,4 +141,20 @@ load_config() {
     die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
   [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"
+  case "$CHALK_DECIDER" in
+    off|shadow|on) ;;
+    *) die "CHALK_DECIDER must be 'off', 'shadow' or 'on' (got '$CHALK_DECIDER')" ;;
+  esac
+  [[ $CHALK_DECIDER_THRESHOLD =~ ^(0\.[5-9][0-9]{0,2}|1(\.0{0,3})?)$ ]] ||
+    die "CHALK_DECIDER_THRESHOLD must be a confidence from 0.5 to 1, to at most three places (got '$CHALK_DECIDER_THRESHOLD')"
+  [[ $CHALK_DECIDER_MIN_LESSONS =~ ^[0-9]+$ ]] ||
+    die "CHALK_DECIDER_MIN_LESSONS must be a whole number (got '$CHALK_DECIDER_MIN_LESSONS')"
+  [[ $CHALK_DECIDER_IDLE_MINUTES =~ ^[1-9][0-9]*$ ]] ||
+    die "CHALK_DECIDER_IDLE_MINUTES must be a positive whole number (got '$CHALK_DECIDER_IDLE_MINUTES')"
+  [[ $CHALK_DECIDER_TIMEOUT == auto || $CHALK_DECIDER_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
+    die "CHALK_DECIDER_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DECIDER_TIMEOUT')"
+  local url
+  for url in CHALK_DECIDER_URL CHALK_EMBED_URL; do
+    [[ ${!url} =~ ^https?://[^[:space:]]+$ ]] || die "$url must be an http:// or https:// URL (got '${!url}')"
+  done
 }

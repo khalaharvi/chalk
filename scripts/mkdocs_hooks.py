@@ -32,6 +32,7 @@ GROUP_TITLES = {
     "CHALK_BASE_BRANCH": "Repository",
     "CHALK_TEST_CMD": "The rubric",
     "CHALK_BUDGET_USD": "Loops, spend and verdicts",
+    "CHALK_DECIDER": "The decider",
     "CHALK_IMAGE": "Sandbox",
     "CHALK_TEXTBOOK": "Checks and submission",
     "CHALK_PERMISSION_MODE": "Permissions",

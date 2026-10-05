@@ -519,10 +519,22 @@ SQL
     test "$(pg -c 'SELECT count(*) FROM runs'):$(pg -c 'SELECT count(*) FROM lessons')" = 1:1
   check "schema: the fingerprint columns are added, and old rows read as NULL" \
     test "$(pg -c "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'chalk_e2e'
-                     AND column_name IN ('run_id', 'tests_hash', 'failing', 'first_error', 'tree_id',
+                     AND table_name IN ('runs', 'lessons') AND column_name IN ('run_id', 'tests_hash', 'failing', 'first_error', 'tree_id',
                                          'verdict', 'fingerprint', 'fp_rules')"):$(pg -c 'SELECT count(*) FROM runs WHERE verdict IS NULL AND fp_rules IS NULL')" = 10:1
   check "schema: lessons are indexed by fingerprint" \
     test "$(pg -c "SELECT count(*) FROM pg_indexes WHERE schemaname = 'chalk_e2e' AND indexname = 'lessons_fingerprint_idx'")" = 1
+  check "schema: the decider's answers have a table, linked to the loop's call" \
+    test "$(pg -c "SELECT confrelid::regclass FROM pg_constraint WHERE conrelid = 'chalk_e2e.decisions'::regclass AND contype = 'f'")" = runs
+  embedding="$(pg -c "SELECT format_type(atttypid, atttypmod) FROM pg_attribute
+                       WHERE attrelid = 'chalk_e2e.lessons'::regclass AND attname = 'embedding'")"
+  if [ "$(pg -c "SELECT count(*) FROM pg_extension WHERE extname = 'vector'")" = 1 ]; then
+    check "schema: with pgvector, lessons get a 384-dimension embedding" test "$embedding" = "vector(384)"
+    check "schema: ... with an HNSW index for cosine distance" \
+      pg -c "SELECT 1/count(*) FROM pg_indexes WHERE schemaname = 'chalk_e2e' AND indexname = 'lessons_embedding_hnsw'
+               AND indexdef LIKE '%USING hnsw (embedding vector_cosine_ops)%'"
+  else
+    check "schema: without pgvector (Postgres 16), lessons have no embedding" test -z "$embedding"
+  fi
   check "schema: the failing test IDs column is added, and old rows read as NULL" \
     test "$(pg -c 'SELECT count(*) FROM runs WHERE failing_tests IS NULL')" = 1
   check "schema: the lesson scope column is added, and old lessons read as NULL, recalled anywhere" \
@@ -541,7 +553,7 @@ SQL
   #   L-9 detained:  first, blocked (10c, 10c)           a judged loop: counted
   # L-1 records CHALK_FP_RULES=shadow; the others, from before it was
   # recorded, record nothing and count as shadow.
-  pg -c 'TRUNCATE runs, lessons'
+  pg -c 'TRUNCATE runs, lessons, decisions'
   pg <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
                   prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
@@ -631,6 +643,48 @@ SQL
     test "$(jq -r '[.[] | select(.repo == "ft2") | .test] | "\(length) \(first) \(last)"' "$tmp/failing.json")" = "10 t01 t10"
   check "failing tests: each row says when the test last failed" \
     test "$(jq '[.[] | .last | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$")] | all' "$tmp/failing.json")" = true
+
+  # The decider, in shadow mode, ten cents a loop:
+  #   D-1 detained:  "stuck" at 0.95 on loop 2, nothing progressed after: right,
+  #                  and stopping there would have saved loop 3
+  #   D-2 submitted: "stuck" at 0.92 on loop 1, then loop 2 progressed: wrong,
+  #                  a false stop
+  #   D-3 submitted: "not stuck" at 0.80 on loop 1, then progress: right
+  # plus a question on D-3 that got no answer (timeout), and one rerank.
+  pg -c 'TRUNCATE runs, lessons, decisions'
+  pg <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict)
+SELECT 'dec', t, 'chalk/' || t, n, CASE n WHEN 1 THEN 'continue' ELSE 'retry' END, 'ok',
+       CASE WHEN p THEN 0 ELSE 1 END, p, 'm', 'p', 0.10, 1, 1, 0, 0, 0, 0, 0, 0, 0, t || '-1', v
+  FROM (VALUES ('D-1', 1, false, 'first'), ('D-1', 2, false, 'spinning'), ('D-1', 3, false, 'spinning'),
+               ('D-2', 1, false, 'other'), ('D-2', 2, true, NULL),
+               ('D-3', 1, false, 'spinning'), ('D-3', 2, true, NULL)) v(t, n, p, v);
+INSERT INTO lessons (repo, ticket, signature, run_id) VALUES ('dec', 'D-1', 's', 'D-1-1');
+INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode,
+                       latency_ms, acted, model, error)
+SELECT (SELECT id FROM runs WHERE run_id = v.r AND loop = v.n), v.r, v.kind, 'q', v.a, v.c, 0.9,
+       'shadow', v.ms, false, 'fake-decider@0123456', v.e
+  FROM (VALUES ('D-1-1', 2, 'stuck', 'yes', 0.95, 100, NULL), ('D-2-1', 1, 'stuck', 'yes', 0.92, 200, NULL),
+               ('D-3-1', 1, 'stuck', 'no', 0.80, 300, NULL), ('D-3-1', 1, 'stuck', NULL, NULL, 2000, 'timeout'),
+               ('D-1-1', 3, 'rerank', 'yes', 0.97, 120, NULL)) v(r, n, kind, a, c, ms, e);
+SQL
+  pg -v days=30 -f "$here/../share/dashboard.sql" | jq -c . > "$tmp/decider.json"
+  dec() { jq -r "def c: . * 100 | round; .decider | $1" "$tmp/decider.json"; }
+  check "decider: questions asked, answered, and the median time of an answer" \
+    test "$(dec '[.questions, .answered, .median_ms] | join(" ")')" = "5 4 160"
+  check "decider: questions by kind, and calls with no answer by why" \
+    test "$(dec '[(.by_kind[] | "\(.kind)=\(.questions)/\(.answered)"), (.errors[] | "\(.error)=\(.calls)")] | join(" ")')" \
+      = "rerank=1/1 stuck=4/3 timeout=1"
+  check "decider: confident answers are checked against what the run did next" \
+    test "$(dec '[.calibration[] | "\(.low):\(.answers)/\(.agreed)"] | join(" ")')" = "0.7:1/1 0.9:2/1"
+  check "decider: what stopping at a confident stuck would have saved, and its false stops" \
+    test "$(dec '[.would_stop, (.would_save | c), .false_stops] | join(" ")')" = "2 10 1"
+  check "decider: the model and revision that answered" test "$(dec '.models | join(" ")')" = "fake-decider@0123456"
+  check "ledger: each run says where the decider would have stopped it" \
+    test "$(jq -r '[.ledger.runs[] | "\(.run_id):\(.decider_loop)"] | sort | join(" ")' "$tmp/decider.json")" \
+      = "D-1-1:2 D-2-1:1"
   pg -c 'DROP SCHEMA chalk_e2e CASCADE'
 fi
 
@@ -845,6 +899,124 @@ check "chalk memory says Hindsight was removed and how to clean it up" \
     grep -qF 'docker rm -f chalk-memory && docker volume rm chalk-memory-data' '$tmp/memory.log'"
 cd "$tmp/demo"
 
+# 4c. The decider (docs/decider-protocol.md), played by the fake in
+# tests/fakes/curl at a hosted URL, so nothing is started. The agent
+# changes a file every loop but the same test keeps failing, so the rules
+# call loops 2 and 3 spinning: the gray zone the decider is asked about.
+# decider_run TICKET [ENV=VALUE...]: a churning run of TICKET, its log in
+# $tmp/TICKET.log, the requests the decider got in $tmp/TICKET.decider and
+# what went to the database in $tmp/TICKET.db. Each ticket fails its own
+# test, so that no run fails like another's open detention (deja_vu).
+decider_run() {
+  local ticket="$1" db_lines decider_cmd
+  shift
+  decider_cmd="if [ -e BROKEN ]; then mkdir -p out
+    echo '<testsuite><testcase classname=\"demo\" name=\"no_marker_$ticket\"><failure message=\"BROKEN\"/></testcase></testsuite>' > out/report.xml
+    echo 'AssertionError: BROKEN exists in $ticket'; exit 1; fi"
+  cd "$tmp/demo"
+  chalk new "$ticket" Decider feature >/dev/null
+  cd "$tmp/demo.worktrees/$ticket"
+  git add -A && git commit -q -m "spec"
+  : > "$FAKE_STATE/decider.log"
+  db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+  env FAKE_CLAUDE_MODE=churn CHALK_TEST_REPORT=out/report.xml CHALK_TEST_CMD="$decider_cmd" \
+      CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test "$@" \
+      chalk run > "$tmp/$ticket.log" 2>&1 || true
+  tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/$ticket.db"
+  cp "$FAKE_STATE/decider.log" "$tmp/$ticket.decider"
+  cd "$tmp/demo"
+}
+# asked TICKET: how many stuck questions the decider got.
+asked() { grep -c '"stuck":{"type":"noul"' "$tmp/$1.decider" || true; }
+# detained_as_usual TICKET: three loops, then detention for the failing rubric.
+detained_as_usual() {
+  grep -q 'loop 3 (retry)' "$tmp/$1.log" && ! grep -q 'loop 4' "$tmp/$1.log" &&
+    grep -q 'DETENTION: rubric failed (exit 1)$' "$tmp/$1.log" &&
+    next_step "$tmp/$1.log" "the rubric still fails after 2 retries"
+}
+
+decider_run PROJ-50 CHALK_DECIDER=off
+check "decider off: the churning run takes three loops, then the usual detention" detained_as_usual PROJ-50
+check "decider off: the loops after the first are spinning" \
+  test "$(grep -c -e '-v verdict=spinning$' "$tmp/PROJ-50.db")" -eq 2
+check "decider off: nothing is asked" test "$(asked PROJ-50)" -eq 0
+
+decider_run PROJ-51 CHALK_DECIDER=shadow FAKE_DECIDER_ANSWERS="stuck=0.97"
+check "decider shadow: the run is unchanged" detained_as_usual PROJ-51
+check "decider shadow: each spinning loop is put to the decider" test "$(asked PROJ-51)" -eq 2
+state="$(grep '"stuck"' "$tmp/PROJ-51.decider" | tail -n 1 | jq -r .state)"
+check "the decider gets the failing tests and first errors of both loops" \
+  sh -c 'printf "%s\n" "$1" | grep -q "^previous loop:" && printf "%s\n" "$1" | grep -q "^current loop:" &&
+    test "$(printf "%s\n" "$1" | grep -c "failing tests (1): demo::no_marker")" -eq 2 &&
+    test "$(printf "%s\n" "$1" | grep -c "first error: AssertionError: BROKEN exists")" -eq 2' _ "$state"
+check "... and a diffstat between their trees, never the diff itself" \
+  sh -c 'printf "%s\n" "$1" | grep -q " churn.txt | 1 +" && ! printf "%s\n" "$1" | grep -qE "^(@@|\+attempt|diff --git)"' _ "$state"
+check "decider shadow: the answers are recorded with their loops, none acted on" \
+  sh -c "test \"\$(grep -c 'INSERT INTO decisions' '$tmp/PROJ-51.db')\" -eq 2 &&
+    grep -q '\"answer\":\"yes\",\"confidence\":0.970,\"threshold\":0.9,\"mode\":\"shadow\"' '$tmp/PROJ-51.db' &&
+    ! grep -q '\"acted\":true' '$tmp/PROJ-51.db'"
+
+decider_run PROJ-52 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97"
+check "decider on: a confident stuck detains the run at loop 2" \
+  sh -c "grep -q 'DETENTION: stuck: rubric failed (exit 1)' '$tmp/PROJ-52.log' && ! grep -q 'loop 3' '$tmp/PROJ-52.log'"
+check "next step when the decider stopped the run: fix the cause yourself" \
+  next_step "$tmp/PROJ-52.log" "the decider judged the agent stuck on the same root cause as the loop before (confidence 0.97)"
+check "decider on: the answer that acted is recorded as such" grep -q '"acted":true' "$tmp/PROJ-52.db"
+check "decider on: the lesson carries the failing loop's fingerprint" \
+  grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/PROJ-52.db"
+
+decider_run PROJ-53 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.6"
+check "decider on: an answer below the threshold changes nothing" detained_as_usual PROJ-53
+
+decider_run PROJ-54 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" FAKE_DECIDER_DOWN=1
+check "decider unreachable: the run goes as with the decider off" detained_as_usual PROJ-54
+check "decider unreachable: no warning, and no answer recorded as unreachable" \
+  sh -c "! grep -q '^warning' '$tmp/PROJ-54.log' && grep -q '\"error\":\"unreachable\"' '$tmp/PROJ-54.db'"
+
+decider_run PROJ-55 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" FAKE_DECIDER_DELAY=5
+check "decider too slow: the run goes as with the decider off" detained_as_usual PROJ-55
+check "decider too slow: no call waits past the loop's 2 s, recorded as a timeout" \
+  sh -c "sed -n 's/^max-time=//p' '$tmp/PROJ-55.decider' | awk '{ if (\$1 > 2) bad = 1 } END { exit bad || NR == 0 }' &&
+    grep -q '\"error\":\"timeout\"' '$tmp/PROJ-55.db'"
+
+decider_run PROJ-56 CHALK_DECIDER=on CHALK_FP_RULES=off FAKE_DECIDER_ANSWERS="stuck=0.97"
+check "CHALK_FP_RULES=off: the decider is not asked whether a loop is stuck" test "$(asked PROJ-56)" -eq 0
+check "CHALK_FP_RULES=off: the run goes as with the decider off" detained_as_usual PROJ-56
+
+decider_run PROJ-57 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" \
+  CHALK_DECIDER_TOKEN=tok-e2e-secret FAKE_DECIDER_TOKEN=tok-e2e-secret
+check "a hosted decider gets CHALK_DECIDER_TOKEN, and answers" grep -q 'DETENTION: stuck:' "$tmp/PROJ-57.log"
+check "the token is never logged or stored" \
+  sh -c "! grep -rq 'tok-e2e-secret' '$FAKE_STATE' '$XDG_STATE_HOME' '$tmp/PROJ-57.log' '$tmp/PROJ-57.db'"
+decider_run PROJ-58 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97" \
+  CHALK_DECIDER_TOKEN=wrong FAKE_DECIDER_TOKEN=tok-e2e-secret
+check "a refused token: the run goes as with the decider off, with one warning" \
+  sh -c "grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/PROJ-58.log' &&
+    test \"\$(grep -c '^warning: the decider at http://decider.test refused the request' '$tmp/PROJ-58.log')\" -eq 1"
+
+# The local service: a run does not start one that `chalk decider up` never
+# installed, and doctor says so.
+decider_run PROJ-59 CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://127.0.0.1:8471
+check "a run does not start a local decider that was never installed" \
+  test ! -e "$XDG_STATE_HOME/chalk/demo/runs/PROJ-59/io/startup/decider.log"
+CHALK_DECIDER=shadow chalk doctor > "$tmp/doctor-decider1.log" 2>&1 || true
+check "doctor: a local decider that was never installed is reported" \
+  grep -q '^  --    local decider (CHALK_DECIDER=shadow): not installed, so nothing is asked; run: chalk decider up' \
+    "$tmp/doctor-decider1.log"
+CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test chalk doctor > "$tmp/doctor-decider2.log" 2>&1 || true
+check "doctor: a hosted decider is checked through its health endpoint" \
+  grep -q '^  ok    decider at http://decider.test (CHALK_DECIDER=shadow)' "$tmp/doctor-decider2.log"
+check "doctor: off says so" grep -q '^  ok    decider off (CHALK_DECIDER=off)' "$tmp/doctor1.log"
+CHALK_DECIDER_URL=http://decider.test chalk decider status > "$tmp/decider-status.log" 2>&1 ||
+  { cat "$tmp/decider-status.log"; fail "chalk decider status"; }
+check "chalk decider status reports a hosted decider's health" grep -q '^decider: healthy' "$tmp/decider-status.log"
+if CHALK_DECIDER_URL=http://decider.test chalk decider up > "$tmp/decider-up.log" 2>&1; then
+  fail "chalk decider up must refuse a decider it does not manage"
+fi
+check "chalk decider up manages only the local service, and installs nothing for another" \
+  sh -c "grep -q \"manages only the local service\" '$tmp/decider-up.log' && ! grep -q installing '$tmp/decider-up.log'"
+cd "$tmp/demo"
+
 # 4b. Against a real Postgres: a resolved lesson that matches the failure
 # reaches the prompt's <lessons> and is counted in runs.lessons. The runs
 # use a schema of their own, so the seeded lessons are the only ones. Their
@@ -907,7 +1079,7 @@ SQL
   # 1. Exact: the same fingerprint in the same repository comes first, and
   # three lexical matches cannot push it out. The same fingerprint in
   # another repository is not an exact match.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed demo "$fingerprint" "" "disk quota exceeded" EXACT-FIX
   seed other "$fingerprint" "" "disk quota exceeded" OTHER-REPO-FIX
   for fix in LEX-A LEX-B LEX-C; do seed other "fp-$fix" "$error" "rubric failed" "$fix"; done
@@ -920,7 +1092,7 @@ SQL
 
   # 2. Lexical: a similar first error from another repository matches; a
   # different error does not.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed other fp-1 "$error in the working tree" "rubric failed" LEXICAL-FIX
   seed other fp-2 "TypeError: Cannot read properties of undefined (reading 'map')" "rubric failed" WRONG-FIX
   recall_run PROJ-41
@@ -929,7 +1101,7 @@ SQL
 
   # 3. Legacy: a lesson from before fingerprints has no first_error, and is
   # matched on its signature. An unresolved one is never recalled.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed other "" "" "rubric failed (exit 1)
 $error
 FAILED demo::no_marker" LEGACY-FIX
@@ -942,7 +1114,7 @@ $error')"
     test "$(recalled PROJ-42):$(counted PROJ-42)" = "LEGACY-FIX:0 1"
 
   # 4. First loop: before any failure, a lesson whose error the spec mentions.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed other fp-1 "$error" "rubric failed" SPEC-FIX
   seed other fp-2 "panic: runtime error: index out of range [3] with length 3" "rubric failed" NOT-IN-SPEC-FIX
   RECALL_CONTEXT="CI fails with $error after the last refactor; make the marker check pass." \
@@ -951,7 +1123,7 @@ $error')"
     test "$(recalled PROJ-43):$(counted PROJ-43)" = "SPEC-FIX:1"
 
   # 5. No match: no <lessons> block at all, and nothing counted.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed other fp-1 "TypeError: Cannot read properties of undefined (reading 'map')" "rubric failed (exit 2)" NOPE-FIX
   recall_run PROJ-44
   check "recall: with no matching lesson the prompt has no <lessons> block" \
@@ -959,7 +1131,7 @@ $error')"
   check "recall: with no matching lesson none are counted" test "$(counted PROJ-44)" = "0 0"
 
   # 6. Without fingerprints, recall matches the failure text, as it always did.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed other "" "" "rubric failed (exit 1)
 $error" TEXT-FIX
   recall_run PROJ-45 CHALK_FP_RULES=off
@@ -968,13 +1140,98 @@ $error" TEXT-FIX
 
   # 7. Scope: a lesson scoped to its repository is recalled only there; a
   # general one, like one from before scopes, anywhere.
-  rpg -c 'TRUNCATE lessons, runs'
+  rpg -c 'TRUNCATE lessons, runs, decisions'
   seed other fp-1 "$error" "rubric failed" OTHER-REPO-ONLY-FIX repo
   seed demo fp-2 "$error" "rubric failed" OWN-REPO-FIX repo
   seed other fp-3 "$error" "rubric failed" GENERAL-FIX general
   recall_run PROJ-46
   check "recall: a lesson scoped to another repository is not recalled; one scoped to this one is" \
     test "$(recalled PROJ-46):$(counted PROJ-46)" = "GENERAL-FIX OWN-REPO-FIX:0 2"
+  # 8. With a decider (here the fake one) and CHALK_DECIDER_MIN_LESSONS
+  # resolved lessons, recall adds lessons whose failure means the same
+  # (semantic: pgvector, so Postgres 17 only), and the decider picks among
+  # the candidates in one request per loop. LEX-FIX matches lexically.
+  # SEM-FIX shares no words with the failure, but its embedding equals the
+  # fake chalk-embed's (one-hot at 0); FAR-FIX's is orthogonal to it.
+  rpg -c 'TRUNCATE lessons, runs, decisions'
+  seed other fp-1 "$error in the working tree" "rubric failed" LEX-FIX
+  seed other fp-2 "ImportError: cannot import name 'marker_guard' from 'demo.checks'" "rubric failed" SEM-FIX
+  seed other fp-3 "KeyError: 'region'" "rubric failed" FAR-FIX
+  pg17=0
+  if [ "$(rpg -c "SELECT count(*) FROM pg_extension WHERE extname = 'vector'")" = 1 ]; then pg17=1; fi
+  if [ "$pg17" = 1 ]; then
+    onehot() { echo "(SELECT ('[' || string_agg(CASE WHEN i = $1 THEN '1' ELSE '0' END, ',' ORDER BY i) || ']')::vector FROM generate_series(1, 384) i)"; }
+    rpg -c "UPDATE lessons SET embedding = $(onehot 1) WHERE lesson = 'SEM-FIX'" \
+        -c "UPDATE lessons SET embedding = $(onehot 6) WHERE lesson = 'FAR-FIX'"
+  fi
+  lex="$(rpg -c "SELECT id FROM lessons WHERE lesson = 'LEX-FIX'")"
+  sem="$(rpg -c "SELECT id FROM lessons WHERE lesson = 'SEM-FIX'")"
+  decider_env=(CHALK_DECIDER_MIN_LESSONS=3 CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test
+               FAKE_DECIDER_ANSWERS="lesson_$sem=0.97 lesson_$lex=0.93 lesson_*=0.2")
+  rm -f "$FAKE_STATE/curl.log"
+  : > "$FAKE_STATE/decider.log"
+  recall_run PROJ-60 CHALK_DECIDER=on "${decider_env[@]}"
+  # reranks TICKET: the rerank decisions recorded with TICKET's loop calls,
+  # and how many of them were used.
+  reranks() {
+    rpg -F ' ' -v ticket="$1" <<'SQL'
+SELECT count(*) FILTER (WHERE d.kind = 'rerank'), count(*) FILTER (WHERE d.acted)
+  FROM decisions d JOIN runs r ON r.id = d.call_id
+ WHERE r.ticket = :'ticket' AND r.kind IN ('continue', 'retry');
+SQL
+  }
+  if [ "$pg17" = 1 ]; then
+    check "decider recall (Postgres 17): the decider's picks, most confident first, lexical and semantic" \
+      test "$(recalled PROJ-60):$(counted PROJ-60)" = "SEM-FIX LEX-FIX:1 2"
+    check "decider recall (Postgres 17): the query is embedded" grep -q 'http://embed.test/v1/embeddings' "$FAKE_STATE/curl.log"
+    check "decider recall: every lesson asked about is recorded with its loop, and what was used" \
+      test "$(reranks PROJ-60)" = "3 3"
+  else
+    check "decider recall (Postgres 16): no semantic step, so only the lexical candidate" \
+      test "$(recalled PROJ-60):$(counted PROJ-60)" = "LEX-FIX:0 1"
+    check "decider recall (Postgres 16): nothing is embedded" sh -c "! grep -q embed.test '$FAKE_STATE/curl.log'"
+    check "decider recall: every lesson asked about is recorded with its loop, and what was used" \
+      test "$(reranks PROJ-60)" = "1 1"
+  fi
+  check "decider recall: the lessons go to the decider in one request per loop" \
+    test "$(grep -c '"lesson_' "$FAKE_STATE/decider.log")" -le 2
+  check "decider recall: no lesson below the threshold is used" \
+    sh -c "! grep -q 'FAR-FIX' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-60/io/prompt.md'"
+
+  # In shadow mode the decider is asked and recorded, and the prompt keeps
+  # the lexical lessons, as with the decider off.
+  rpg -c 'DELETE FROM lessons WHERE ticket <> $$SEED-1$$' -c 'TRUNCATE runs, decisions'
+  recall_run PROJ-61 CHALK_DECIDER=shadow "${decider_env[@]}"
+  check "decider recall in shadow mode: the prompt gets what recall without it gives" \
+    test "$(recalled PROJ-61):$(counted PROJ-61)" = "LEX-FIX:0 1"
+  check "decider recall in shadow mode: the answers are recorded, none used" \
+    test "$(reranks PROJ-61 | cut -d' ' -f2)" = 0 -a "$(reranks PROJ-61 | cut -d' ' -f1)" -ge 1
+
+  # A below-the-gate table: with fewer resolved lessons than
+  # CHALK_DECIDER_MIN_LESSONS, the decider is not asked about lessons.
+  rpg -c 'DELETE FROM lessons WHERE ticket <> $$SEED-1$$' -c 'TRUNCATE runs, decisions'
+  : > "$FAKE_STATE/decider.log"
+  recall_run PROJ-62 CHALK_DECIDER=on "${decider_env[@]}" CHALK_DECIDER_MIN_LESSONS=30
+  check "decider recall waits for CHALK_DECIDER_MIN_LESSONS resolved lessons" \
+    sh -c "test '$(recalled PROJ-62)' = LEX-FIX && ! grep -q '\"lesson_' '$FAKE_STATE/decider.log'"
+
+  # Office hours writes the resolved lesson's embedding (Postgres 17).
+  cd "$tmp/demo.worktrees/PROJ-62"
+  git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-62-*')"
+  git rm -q BROKEN && git commit -q -m "remove the blocker"
+  CHALK_DECIDER=shadow CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test FAKE_EMBED_INDEX=9 \
+    chalk office-hours -m "the marker check needs no BROKEN file" > "$tmp/PROJ-62-oh.log" 2>&1 ||
+    { cat "$tmp/PROJ-62-oh.log"; fail "office hours with a decider"; }
+  if [ "$pg17" = 1 ]; then
+    check "office hours writes the resolved lesson's embedding" \
+      test "$(rpg -c "SELECT (embedding::real[])[10] FROM lessons WHERE ticket = 'PROJ-62'")" = 1
+    check "... and those of resolved lessons that had none" \
+      test "$(rpg -c "SELECT count(*) FROM lessons WHERE resolution IS NOT NULL AND embedding IS NULL")" = 0
+  else
+    check "office hours on Postgres 16 resolves the lesson, with no embedding" \
+      test "$(rpg -c "SELECT count(*) FROM lessons WHERE ticket = 'PROJ-62' AND resolution IS NOT NULL")" = 1
+  fi
+  cd "$tmp/demo"
 
   rpg -c 'DROP SCHEMA chalk_recall CASCADE'
   export PGOPTIONS="$e2e_pgoptions"

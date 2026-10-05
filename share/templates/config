@@ -57,6 +57,20 @@ CHALK_MAX_PARALLEL=auto
 # Memory one sandbox needs, in MiB, for CHALK_MAX_PARALLEL=auto.
 CHALK_SANDBOX_MEM_MB=2048
 
+# A decider: a small, fast model that judges the loops the verdicts cannot
+# settle (stuck or not?) and which past lessons apply. By default the local
+# service from `chalk decider up`; it receives failing test names, first
+# error lines, file names with line counts and lesson texts, never code.
+#   off     ask nothing
+#   shadow  ask, and record the answers only (see `chalk dashboard`)
+#   on      also act on answers at CHALK_DECIDER_THRESHOLD or above: detain
+#           a stuck loop at once, and choose the lessons a loop is given
+CHALK_DECIDER=off
+# The confidence, from 0.5 to 1, an answer needs before the decider acts.
+CHALK_DECIDER_THRESHOLD=0.9
+# Resolved lessons needed before recall uses embeddings and the decider.
+CHALK_DECIDER_MIN_LESSONS=30
+
 # Sandbox image. Needs bash 5.2 or newer, git, coreutils and the claude CLI.
 # The default is Node 22. For another stack, build an image FROM
 # chalk-sandbox:local (chalk sandbox build) with your toolchain, and set

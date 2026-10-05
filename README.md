@@ -260,6 +260,7 @@ Setup
   chalk db up|down|psql        Manage the local telemetry database
   chalk db upgrade [--cleanup] Move the database to Postgres 17, then drop the old one
   chalk sandbox build          Build the default sandbox image
+  chalk decider up|down|status Install and start the local decider, stop it, or check it
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
 
 Work
@@ -278,6 +279,20 @@ Failure lifecycle
   chalk submit                 Push the current branch and open the pull/merge request
   chalk cleanup [--all]        Stop runs, remove sandboxes, worktrees, merged branches
 ```
+
+## Decider (optional)
+
+A decider is a small, fast model that answers the bounded questions
+Chalk would otherwise leave to a counter or to Claude: is this loop stuck
+on the same root cause as the last one, and which past lessons apply.
+`chalk decider up` installs the local reference service with `uv`
+([strands-decider](https://github.com/strands-labs/strands-decider) and
+an embedding model, about 4.3 GiB) and runs it on 127.0.0.1, so nothing
+leaves your machine. Set `CHALK_DECIDER=shadow` to record its answers on
+the report card, and `on` to let confident answers act. It never holds a
+run up: when it is down or slow, runs go on as without it. Any hosted
+model that speaks the [decider protocol](docs/decider-protocol.md) works
+too.
 
 ## For teams
 
@@ -302,9 +317,11 @@ team compliant. See [Pull and merge request gates](https://khalaharvi.github.io/
   [permissions](https://khalaharvi.github.io/chalk/guide/configuring/permissions/),
   [prompts](https://khalaharvi.github.io/chalk/guide/configuring/prompts/),
   [lesson recall](https://khalaharvi.github.io/chalk/guide/configuring/lesson-memory/),
+  [the decider](https://khalaharvi.github.io/chalk/guide/configuring/decider/),
   [verdicts and the report card](https://khalaharvi.github.io/chalk/guide/operating/dashboard/),
   [pull and merge request gates](https://khalaharvi.github.io/chalk/guide/operating/merge-request-gates/)
 - **Reference:** [commands](https://khalaharvi.github.io/chalk/reference/commands/),
+  [decider protocol](https://khalaharvi.github.io/chalk/decider-protocol/),
   [glossary of the school terms](https://khalaharvi.github.io/chalk/reference/glossary/),
   [roadmap](docs/roadmap.md)
 - **Develop:** [architecture](https://khalaharvi.github.io/chalk/develop/architecture/),

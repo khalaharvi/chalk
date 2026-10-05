@@ -64,6 +64,47 @@ doctor_auto_mode() {
   esac
 }
 
+# The decider, all optional: uv, the service, the models and the revisions
+# `chalk decider up` resolved, its measured time per decision, and whether
+# a run may start it.
+doctor_decider() {
+  local -A got
+  local slow free
+  doctor_check optional "uv" "needed only for the local decider: brew install uv" command -v uv
+  if [[ $CHALK_DECIDER == off ]]; then
+    doctor_check optional "decider off (CHALK_DECIDER=off)" "" true
+    return 0
+  fi
+  if ! decider_local; then
+    doctor_check optional "decider at $CHALK_DECIDER_URL (CHALK_DECIDER=$CHALK_DECIDER)" \
+      "not answering GET /health; runs go on without it" decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN
+    return 0
+  fi
+  decider_info got
+  if [[ -z ${got[decider_model]-} ]]; then
+    doctor_check optional "local decider (CHALK_DECIDER=$CHALK_DECIDER)" \
+      "not installed, so nothing is asked; run: chalk decider up" false
+    return 0
+  fi
+  doctor_check optional "decider model ${got[decider_model]} on ${got[device]-?}" "" true
+  doctor_check optional "decider base model ${got[base_model]-?}" "" true
+  doctor_check optional "embedding model ${got[embed_model]-?}" "" true
+  doctor_check optional "local decider running" "stopped; the next run starts it, or: chalk decider up" \
+    decider_healthy "$DECIDER_LOCAL_URL"
+  slow="${| decider_slow; }"
+  if [[ -n $slow ]]; then
+    doctor_check optional "decider takes $slow ms per decision" \
+      "over $DECIDER_SLOW_MS ms on this machine, so it records in shadow mode only: CHALK_DECIDER=on acts as shadow" false
+  else
+    doctor_check optional "decider takes ${got[bench_ms]:-?} ms per decision (measured by chalk decider up)" "" true
+  fi
+  free="${| decider_headroom; }"
+  if [[ $CHALK_DECIDER != on && -n $free ]] && (( free < DECIDER_HEADROOM_MB )); then
+    doctor_check optional "memory beside Docker for the decider: $free MiB" \
+      "runs start it only with $DECIDER_HEADROOM_MB MiB free; set CHALK_DECIDER=on to start it anyway" false
+  fi
+}
+
 cmd_doctor() {
   load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   info "chalk $CHALK_VERSION"
@@ -90,6 +131,7 @@ cmd_doctor() {
   doctor_check optional "sandbox bash ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]}+" \
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
   doctor_auto_mode
+  doctor_decider
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured
   [ "$DOCTOR_FAILED" -eq 0 ] || die "fix the FAIL items above"
 }

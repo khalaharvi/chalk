@@ -109,6 +109,8 @@ SELECT json_build_object(
   -- CHALK_FP_RULES=on already stopped at its first stop: nothing ran after
   -- it, so it would add spend with no progress and no savings, and could
   -- never show a false stop. Those runs are only counted, as stopped_on.
+  -- decider_loop is the first loop the decider judged stuck at or above its
+  -- threshold (decisions), in shadow or on mode alike.
   'ledger', (WITH l AS (
       SELECT * FROM r WHERE is_loop AND run_id IS NOT NULL
     ), per_run AS (
@@ -117,6 +119,9 @@ SELECT json_build_object(
              coalesce(bool_or(verdict IS NOT NULL), false) AS fingerprinted,
              coalesce(bool_or(verdict NOT IN ('blocked', 'agent_error')), false) AS could_stop,
              coalesce(bool_or(fp_rules = 'on'), false) AS rules_on,
+             (SELECT min(c.loop) FROM decisions d JOIN runs c ON c.id = d.call_id
+               WHERE d.run_id = l.run_id AND d.kind = 'stuck' AND d.answer = 'yes'
+                 AND d.confidence >= d.threshold) AS decider_loop,
              min(loop) FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')) AS stop_loop,
              (array_agg(verdict ORDER BY loop)
                 FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')))[1] AS stop_verdict,
@@ -153,9 +158,9 @@ SELECT json_build_object(
                       WHERE rules_on AND detained AND stop_loop IS NOT NULL),
       'runs', (SELECT coalesce(json_agg(x ORDER BY x.last DESC), '[]') FROM (
           SELECT run_id, repo, ticket, detained, could_stop, stop_verdict, stop_loop, after_cost,
-                 false_stop, detained AND last_verdict IS NOT DISTINCT FROM 'improving' AS converging,
+                 false_stop, detained AND last_verdict IS NOT DISTINCT FROM 'improving' AS converging, decider_loop,
                  to_char(last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last
-            FROM lr WHERE detained OR stop_loop IS NOT NULL
+            FROM lr WHERE detained OR stop_loop IS NOT NULL OR decider_loop IS NOT NULL
            ORDER BY lr.last DESC LIMIT 50) x),
       -- Failed loops per repository, and how many of them named no tests.
       'unknown_tests', (SELECT coalesce(json_agg(u ORDER BY u.loops DESC), '[]') FROM (
@@ -165,6 +170,59 @@ SELECT json_build_object(
              AND verdict IS NOT NULL AND verdict NOT IN ('blocked', 'agent_error')
            GROUP BY repo) u))
     FROM lr),
+  -- The decider (lib/decider.sh): every question asked in the window, what
+  -- came back, and whether its confident answers were right.
+  -- A stuck answer is right when "yes" was followed by no progress in its
+  -- run, and "no" by progress. It is judged once the run has shown which:
+  -- a later loop progressed, or the run ended in detention. Only answers
+  -- in shadow mode count: an answer that acted stopped its run, so nothing
+  -- came after it to judge it by.
+  -- would_stop and would_save: shadow runs where a confident "stuck" came
+  -- before the run ended; would_save is the spend on the loops after it,
+  -- false_stops the runs that still progressed after it.
+  'decider', (WITH d AS (
+      SELECT d.*, c.loop
+        FROM decisions d JOIN runs c ON c.id = d.call_id
+       WHERE d.created_at >= now() - make_interval(days => :'days'::int)
+    ), s AS (
+      SELECT d.*,
+             EXISTS (SELECT 1 FROM runs l
+                      WHERE l.run_id = d.run_id AND l.loop > d.loop AND l.progressed) AS progressed_after,
+             EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = d.run_id) AS detained
+        FROM d WHERE d.kind = 'stuck' AND d.answer IN ('yes', 'no') AND d.mode = 'shadow'
+    ), stops AS (
+      SELECT run_id, min(loop) AS loop FROM s
+       WHERE answer = 'yes' AND confidence >= threshold GROUP BY run_id
+    ), after_stop AS (
+      SELECT st.run_id,
+             coalesce(sum(l.cost_usd), 0) AS cost,
+             coalesce(bool_or(l.progressed), false) AS progressed
+        FROM stops st LEFT JOIN runs l ON l.run_id = st.run_id AND l.loop > st.loop
+             AND l.kind IN ('continue', 'retry', 'fix-review')
+       GROUP BY st.run_id
+    )
+    SELECT json_build_object(
+      'questions', (SELECT count(*) FROM d),
+      'answered', (SELECT count(*) FROM d WHERE answer IS NOT NULL),
+      'acted', (SELECT count(*) FROM d WHERE acted),
+      'median_ms', (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms)
+                      FROM d WHERE answer IS NOT NULL),
+      'models', (SELECT coalesce(json_agg(DISTINCT model), '[]') FROM d WHERE model IS NOT NULL),
+      'by_kind', (SELECT coalesce(json_agg(k ORDER BY k.kind), '[]') FROM (
+          SELECT kind, count(*) AS questions, count(*) FILTER (WHERE answer IS NOT NULL) AS answered,
+                 count(*) FILTER (WHERE acted) AS acted
+            FROM d GROUP BY kind) k),
+      'errors', (SELECT coalesce(json_agg(e ORDER BY e.calls DESC), '[]') FROM (
+          SELECT error, count(*) AS calls FROM d WHERE error IS NOT NULL GROUP BY error) e),
+      'calibration', (SELECT coalesce(json_agg(b ORDER BY b.low), '[]') FROM (
+          SELECT CASE WHEN confidence >= 0.9 THEN 0.9 WHEN confidence >= 0.7 THEN 0.7 ELSE 0.5 END AS low,
+                 count(*) AS answers,
+                 count(*) FILTER (WHERE (answer = 'yes') = NOT progressed_after) AS agreed
+            FROM s WHERE progressed_after OR detained
+           GROUP BY 1) b),
+      'would_stop', (SELECT count(*) FROM after_stop),
+      'would_save', (SELECT coalesce(sum(cost), 0) FROM after_stop WHERE NOT progressed),
+      'false_stops', (SELECT count(*) FROM after_stop WHERE progressed))),
   'tickets', (SELECT coalesce(json_agg(t ORDER BY t.last DESC), '[]') FROM (
       SELECT * FROM (
       SELECT r.repo, r.ticket, count(*) FILTER (WHERE is_loop) AS loops,

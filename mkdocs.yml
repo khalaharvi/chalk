@@ -113,6 +113,7 @@ nav:
           - Permissions: guide/configuring/permissions.md
           - Prompts: guide/configuring/prompts.md
           - Lesson recall: guide/configuring/lesson-memory.md
+          - The decider: guide/configuring/decider.md
       - Operating:
           - Verdicts and the report card: guide/operating/dashboard.md
           - Pull and merge request gates: guide/operating/merge-request-gates.md

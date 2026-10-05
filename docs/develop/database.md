@@ -51,8 +51,31 @@ own repository, `general` anywhere; NULL, for lessons from before scopes
 or when nothing was distilled, is recalled anywhere. `memory_synced_at` is no longer written: it belonged to
 Hindsight, and is kept so existing databases need no migration.
 
-The trigram index on `signature` and the index on `(repo, fingerprint)`
-serve [lesson recall](../guide/configuring/lesson-memory.md).
+On Postgres 17, `embedding` (`vector(384)`) holds the lesson's embedding
+from chalk-embed (`BAAI/bge-small-en-v1.5`), written when office hours
+resolves it. A Postgres 16 database has no such column: the schema adds
+it only where pgvector is installed.
+
+The trigram index on `signature`, the index on `(repo, fingerprint)` and
+the HNSW index on `embedding` (`vector_cosine_ops`, for `<=>`) serve
+[lesson recall](../guide/configuring/lesson-memory.md). The semantic query
+sets `hnsw.ef_search` to 100; on a small table the planner reads every
+row, which is exact, and the index takes over as the table grows.
+
+**`decisions`**: one row per question put to the
+[decider](../guide/configuring/decider.md), or per call that got no
+answer.
+
+| Column | Meaning |
+| :-- | :-- |
+| `call_id` | The `runs` row of the loop the decision was taken in |
+| `run_id` | The run |
+| `kind` | `stuck` (is the loop stuck?) or `rerank` (does a lesson apply?) |
+| `question`, `lesson_id` | What was asked; for `rerank`, about which lesson |
+| `answer`, `confidence`, `threshold` | `yes` or `no`, the confidence from 0 to 1, and `CHALK_DECIDER_THRESHOLD` at the time; NULL answer when there was none |
+| `error` | Why there was no answer: `unreachable`, `timeout`, `budget`, `auth`, `rejected`, `server`, `invalid` or `version` |
+| `mode`, `acted` | `shadow` or `on`, as the decision was taken; whether it changed the run |
+| `latency_ms`, `model` | How long it took; the model that answered, with the revision `chalk decider up` resolved |
 
 ## The report card query
 

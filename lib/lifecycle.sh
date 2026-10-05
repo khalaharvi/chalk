@@ -102,6 +102,11 @@ cmd_office_hours() {
     repo)    info "lesson, recalled in this repository only: $lesson" ;;
     none)    info "no lesson distilled: the fix does not support a rule for other tickets; your note is recalled in this repository only" ;;
   esac
+  # Its embedding, for semantic recall. When chalk-embed is not running,
+  # the local decider writes it the next time it starts.
+  if [[ $CHALK_DECIDER != off ]] && decider_healthy "$CHALK_EMBED_URL"; then
+    decider_embed_lessons 16
+  fi
 
   RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
