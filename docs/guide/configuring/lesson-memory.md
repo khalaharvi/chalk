@@ -1,7 +1,7 @@
 # Lesson recall
 
 A lesson is what a person said in [office hours](../running/failures.md),
-distilled into a general rule. Lessons live in the `lessons` table of the
+distilled into a rule. Lessons live in the `lessons` table of the
 local Postgres database, `chalk-db`, and are matched there, so there is
 nothing extra to run and nothing leaves your machine. Recall is best
 effort: if the database cannot answer, the loop runs without lessons.
@@ -21,6 +21,11 @@ on your machine, chosen in this order:
 3. **Before the first failure**, lessons whose error appears in the spec
    (word similarity above 0.6). Plain similarity between one error line and
    a whole spec would stay near zero.
+
+A lesson scoped to its repository (`repo`, see
+[office hours](../running/failures.md#office-hours)) takes part only in
+its own repository. Lessons from before scopes existed, and lessons
+recorded when distillation was off or failed, are recalled anywhere.
 
 Within each step, the closest matches come first. The number of lessons a
 loop was given is recorded with it, so the report card can compare retries
@@ -70,7 +75,7 @@ chalk db psql
 ```
 
 ```sql
-SELECT ticket, left(signature, 60), lesson, resolved_by
+SELECT ticket, left(signature, 60), lesson, scope, resolved_by
   FROM lessons ORDER BY id DESC LIMIT 10;
 ```
 

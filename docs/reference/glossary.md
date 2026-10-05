@@ -40,9 +40,10 @@ Tutoring
     hours. The CI gates treat it like a `chalk/` branch.
 
 Lesson
-:   A general rule distilled from an office-hours note and the fix, stored
-    in the `lessons` table and recalled into the prompts of later loops
-    whose failures look the same.
+:   A rule distilled from an office-hours note and the fix, stored in the
+    `lessons` table and recalled into the prompts of later loops whose
+    failures look the same. Its scope says whether it holds in any
+    repository (`general`) or only in its own (`repo`).
     *Mechanism:* `office_hours_distill` in `lib/lifecycle.sh`,
     `memory_recall` in `lib/memory.sh`. See
     [Lesson recall](../guide/configuring/lesson-memory.md).
@@ -73,7 +74,8 @@ Checkpoint
 
 Spec check
 :   A cheap model's check, before the first loop, that every checkpoint is
-    small, testable and unambiguous.
+    small, testable and unambiguous, and leaves the rubric passing on its
+    own.
 
 Loop
 :   One agent call that works on a checkpoint (`continue`), retries after a

@@ -61,21 +61,6 @@ doctor_auto_mode() {
   esac
 }
 
-# Which account the agents' calls go to. Claude Code uses ANTHROPIC_API_KEY
-# before CLAUDE_CODE_OAUTH_TOKEN, so a key left over from other work bills
-# the API account even when a subscription token is set. Optional: someone
-# may set both on purpose.
-doctor_billing() {
-  if [[ -n ${ANTHROPIC_API_KEY:-} && -n ${CLAUDE_CODE_OAUTH_TOKEN:-} ]]; then
-    doctor_check optional "agent calls bill the API account, not your Claude plan" \
-      "both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set, and the API key wins; to use your plan, run: unset ANTHROPIC_API_KEY" false
-  elif [[ -n ${ANTHROPIC_API_KEY:-} ]]; then
-    doctor_check optional "agent calls bill the API account (ANTHROPIC_API_KEY)" "" true
-  elif [[ -n ${CLAUDE_CODE_OAUTH_TOKEN:-} ]]; then
-    doctor_check optional "agent calls use your Claude plan (CLAUDE_CODE_OAUTH_TOKEN)" "" true
-  fi
-}
-
 cmd_doctor() {
   load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
   info "chalk $CHALK_VERSION"
@@ -91,7 +76,6 @@ cmd_doctor() {
   doctor_check required "$cli ($forge)"     "${CHALK_FORGE_INSTALL[$forge]}"      command -v "$cli"
   doctor_check required "$cli signed in"    "run: $cli auth login"                forge_signed_in
   doctor_check required "agent credentials" "export one of: ${CHALK_AUTH_VARS[*]}"     agent_auth_present
-  doctor_billing
   doctor_check optional "claude on host"    "only needed for 'chalk fleet' planning" command -v claude
   doctor_check optional "telemetry database" "starts on first run, or: chalk db up" db_running
   if db_exists; then

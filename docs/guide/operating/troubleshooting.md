@@ -15,7 +15,6 @@ first use.
 | Docker CLI and daemon | yes | Install and start Docker Desktop, OrbStack or Colima |
 | `gh` or `glab`, signed in | yes | Install it and run `gh auth login` or `glab auth login`. Which one depends on the `origin` remote, or `CHALK_FORGE` |
 | Agent credentials | yes | Run `claude setup-token` and export `CLAUDE_CODE_OAUTH_TOKEN` to use your Claude subscription, or export `ANTHROPIC_API_KEY`. See [Sign in to Claude](../../getting-started.md#sign-in-to-claude) |
-| Which account agent calls bill | no | Says whether calls bill the API account or use your Claude plan. Shows `--` when both `ANTHROPIC_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` are set, because the API key wins; `unset ANTHROPIC_API_KEY` to use your plan |
 | `claude` on the host | no | Only `chalk fleet` planning needs it |
 | Telemetry database | no | Starts on the first run, or `chalk db up` |
 | Database on Postgres 17 | no | `chalk db upgrade`; see [the database](dashboard.md#the-database) |

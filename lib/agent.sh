@@ -9,7 +9,7 @@ declare -gA CHALK_SCHEMA=(
   [loop]='{"type":"object","required":["status","summary"],"properties":{"status":{"enum":["done","blocked"]},"checkpoint":{"type":"string"},"summary":{"type":"string"},"blocker":{"type":"string"}}}'
   [spec]='{"type":"object","required":["verdict","problems"],"properties":{"verdict":{"enum":["pass","fail"]},"problems":{"type":"array","items":{"type":"object","required":["checkpoint","problem"],"properties":{"checkpoint":{"type":"string"},"problem":{"type":"string"},"suggestion":{"type":"string"}}}}}}'
   [review]='{"type":"object","required":["verdict","summary","findings"],"properties":{"verdict":{"enum":["pass","fail"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","required":["severity","issue"],"properties":{"severity":{"enum":["blocker","minor"]},"file":{"type":"string"},"issue":{"type":"string"}}}}}}'
-  [lesson]='{"type":"object","required":["lesson"],"properties":{"lesson":{"type":"string"}}}'
+  [lesson]='{"type":"object","required":["lesson","scope"],"properties":{"lesson":{"type":"string"},"scope":{"enum":["general","repo","none"]}}}'
   [plan]='{"type":"object","required":["workstreams"],"properties":{"workstreams":{"type":"array","items":{"type":"object","required":["ticket","title","checkpoints"],"properties":{"ticket":{"type":"string"},"title":{"type":"string"},"context":{"type":"string"},"checkpoints":{"type":"array","items":{"type":"string"}}}}}}}'
 )
 

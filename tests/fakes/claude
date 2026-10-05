@@ -8,6 +8,8 @@
 #   FAKE_CLAUDE_MODE=refused   like idle, with four actions refused by permission checks
 #   FAKE_CLAUDE_MODE=error     loop stops early on its turn limit
 #   FAKE_SPEC=fail             spec check fails
+#   FAKE_DISTILL=repo          distillation gives a lesson for this repository only
+#   FAKE_DISTILL=none          distillation finds no lesson in the evidence
 #   FAKE_REVIEW=fail-once      first review fails, later ones pass
 #   FAKE_REVIEW=fail           every review fails
 #   FAKE_AUTO_MODE=off         auto mode is unavailable: sessions start in manual mode
@@ -30,7 +32,10 @@ case "$prompt" in
     printf '{"type":"system","subtype":"status","permissionMode":"%s"}\n' "$mode"
     printf '{"type":"control_response","response":{"subtype":"success","request_id":"chalk-doctor","response":{"current_permission_mode":"%s"}}}\n' "$mode" ;;
   *"<engineer_note>"*)
-    answer '{"lesson":"Distilled: never commit a BROKEN marker"}' ;;
+    case "${FAKE_DISTILL:-general}" in
+      none) answer '{"lesson":"","scope":"none"}' ;;
+      *)    answer "{\"lesson\":\"Distilled: never commit a BROKEN marker\",\"scope\":\"${FAKE_DISTILL:-general}\"}" ;;
+    esac ;;
   *"<base_ref>"*)
     mode="${FAKE_REVIEW:-pass}"
     if [ "$mode" = "fail-once" ]; then

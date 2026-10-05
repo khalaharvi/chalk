@@ -12,7 +12,8 @@ For each workstream return:
 - context: what to build and why, naming the files or modules involved.
 - checkpoints: ordered steps. An agent implements one per session with no one
   to ask, and a test command decides whether it is done. So each checkpoint
-  must state the behaviour and how a test proves it.
+  must state the behaviour and how a test proves it, and leave every test
+  passing: a test and the code that makes it pass go in one checkpoint.
 
 <examples>
 Good: "POST /limits returns 429 with a Retry-After header once a client

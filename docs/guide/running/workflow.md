@@ -26,7 +26,8 @@ ticket's state, loops, cost, office-hours fixes and detentions with
    mode (see [Permissions](../configuring/permissions.md)).
    `CHALK_SETUP_CMD` runs once.
 2. **Spec check.** A cheap model (`CHALK_CHEAP_MODEL`) confirms every
-   checkpoint is small, testable and unambiguous. If not, it lists the
+   checkpoint is small, testable and unambiguous, and leaves the rubric
+   passing on its own. If not, it lists the
    problems with suggestions, and the run stops before any money is spent
    on loops. A spec that passed is not checked again until its checkpoints
    change. Run the check alone with `chalk check`.
@@ -60,14 +61,21 @@ appears in the pull or merge request.
 
 ## Writing a spec an agent can finish
 
-The spec check rejects checkpoints that are too big, untestable or vague.
-What passes it:
+The spec check rejects checkpoints that are too big, untestable or vague,
+and checkpoints that cannot leave the rubric passing on their own. What
+passes it:
 
 - **One loop's work.** A checkpoint should be finishable within one loop's
   budget: one function with its tests, one endpoint, one migration. Split
   anything you would split into separate commits.
 - **Provable by the rubric.** Say what a test will show: "rejects an
   expired token with 401", not "handle tokens properly".
+- **Green on its own.** The harness commits a checkpoint only when the
+  whole rubric passes, so a checkpoint that adds a test for a later
+  checkpoint to make pass can never land. Put a test and the code that
+  makes it pass in one checkpoint: not "write the failing test" then "fix
+  the rounding", but "fix the rounding so totals match the legacy export;
+  covered by a test".
 - **In order.** The agent always takes the first unchecked checkpoint.
   Put foundations first.
 - **Context names files.** The Context section says what is being built,
