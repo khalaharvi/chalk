@@ -67,7 +67,22 @@ cd "$tmp/demo"
 chalk new PROJ-2 Broken feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-2"
 git add -A && git commit -q -m "spec"
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
 if FAKE_CLAUDE_MODE="break" chalk run > "$tmp/run2.log" 2>&1; then fail "failing run should exit non-zero"; fi
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db2.log"
+# CHALK_FP_RULES defaults to shadow: verdicts are recorded and nothing else
+# changes. The agent leaves the same tree each loop and the rubric names no
+# tests, so the loops after the first are no_change.
+check "shadow mode: the same three loops, then the usual detention" \
+  sh -c "grep -q 'loop 3 (retry)' '$tmp/run2.log' && ! grep -q 'loop 4' '$tmp/run2.log' &&
+    grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/run2.log'"
+check "shadow mode: the retry prompt's failure feedback is unchanged" \
+  sh -c "grep -A 1 '^<failure>' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-2/io/prompt.md' | grep -qx 'rubric failed (exit 1)'"
+check "shadow mode: one verdict per loop with no progress" \
+  test "$(grep -c -e '-v verdict=first$' "$tmp/db2.log"):$(grep -c -e '-v verdict=no_change$' "$tmp/db2.log")" = 1:2
+check "every call in the run records its run_id" \
+  test "$(grep -c 'INSERT INTO runs' "$tmp/db2.log")" = "$(grep -Ec -e '-v run_id=PROJ-2-[0-9]+ -v tests_hash=' "$tmp/db2.log")"
+check "the lesson is linked to its run" grep -Eq -e '-v run_id=PROJ-2-[0-9]+ -v fingerprint=' "$tmp/db2.log"
 detention="$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-2-*')"
 check "detention branch created" test -n "$detention"
 check "detention branch holds the broken work" git cat-file -e "$detention:BROKEN"
@@ -87,6 +102,28 @@ check "lesson resolved with the engineer's note" grep -q "resolution=BROKEN mark
 check "note distilled into a general lesson" grep -q "lesson=Distilled: never commit" "$FAKE_STATE/db.log"
 check "distillation sandbox removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-2-distill"
 check "tutoring merge request opened" grep -q "mr create.*tutoring/PROJ-2" "$FAKE_STATE/glab.log"
+
+# 2b. With CHALK_FP_RULES=on, a loop that repeats the last one's failure on
+# the same tree is detained at once. The rubric writes a JUnit report.
+cd "$tmp/demo"
+chalk new PROJ-9 Repeating feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-9"
+git add -A && git commit -q -m "spec"
+junit='<testsuite><testcase classname="demo" name="no_marker"><failure message="BROKEN"/></testcase></testsuite>'
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+if FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_TEST_REPORT=out/report.xml \
+   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$junit' > out/report.xml; echo 'AssertionError: BROKEN exists'; exit 1; fi" \
+   chalk run > "$tmp/run12.log" 2>&1; then
+  fail "a repeating run with rules on should exit non-zero"
+fi
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db12.log"
+check "rules on: a repeating loop is detained at loop 2 with the verdict as the reason" \
+  sh -c "grep -q 'DETENTION: repeat: rubric failed (exit 1)' '$tmp/run12.log' && ! grep -q 'loop 3' '$tmp/run12.log'"
+check "rules on: the loops record first, then repeat, with the failing test count" \
+  sh -c "grep -q -e '-v failing=1 .*-v verdict=first$' '$tmp/db12.log' && grep -q -e '-v failing=1 .*-v verdict=repeat$' '$tmp/db12.log'"
+check "rules on: the lesson carries the failing loop's fingerprint and first error" \
+  grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
+cd "$tmp/demo"
 
 # 3. Fleet: a plan with two workstreams runs in parallel in the background.
 cd "$tmp/demo"
@@ -165,6 +202,84 @@ check "dashboard page is built with its data embedded" \
   sh -c "grep -q 'Chalk report card' '$tmp/report.html' && grep -q '\"generated_at\"' '$tmp/report.html' && ! grep -q 'CHALK_DATA' '$tmp/report.html'"
 check "stored text cannot close the dashboard's script tag" \
   sh -c "grep -qF '\"<\\/script>\"' '$tmp/report.html' && ! grep -qF '\"</script>\"' '$tmp/report.html'"
+
+# 3c'. Against a real Postgres: the schema upgrades a populated database in
+# place, and the verdict ledger adds up. Both run in a schema of their own,
+# so the numbers do not depend on the rest of this test.
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  pg() { PGOPTIONS='-c search_path=chalk_e2e,public -c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -A -t -v ON_ERROR_STOP=1 "$@"; }
+  # pg_trgm stays in public, so dropping the test schema cannot take it along.
+  PGOPTIONS='-c client_min_messages=warning' psql "$FAKE_PG_URL" -X -q -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public'
+  pg -c 'DROP SCHEMA IF EXISTS chalk_e2e CASCADE' -c 'CREATE SCHEMA chalk_e2e'
+  pg -f "$here/../share/schema.sql"
+  # A database from before fingerprints, with a row in it.
+  pg <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons)
+VALUES ('old', 'OLD-1', 'chalk/OLD-1', 1, 'continue', 'ok', 0, true, 'm', 'p', 0.5, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+INSERT INTO lessons (repo, ticket, signature) VALUES ('old', 'OLD-1', 'rubric failed');
+ALTER TABLE runs DROP COLUMN run_id, DROP COLUMN tests_hash, DROP COLUMN failing,
+                 DROP COLUMN first_error, DROP COLUMN tree_id, DROP COLUMN verdict;
+DROP INDEX lessons_fingerprint_idx;
+ALTER TABLE lessons DROP COLUMN run_id, DROP COLUMN fingerprint, DROP COLUMN first_error;
+SQL
+  pg -f "$here/../share/schema.sql"
+  pg -f "$here/../share/schema.sql"
+  check "schema: applied twice to a populated database, every row is kept" \
+    test "$(pg -c 'SELECT count(*) FROM runs'):$(pg -c 'SELECT count(*) FROM lessons')" = 1:1
+  check "schema: the fingerprint columns are added, and old rows read as NULL" \
+    test "$(pg -c "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'chalk_e2e'
+                     AND column_name IN ('run_id', 'tests_hash', 'failing', 'first_error', 'tree_id',
+                                         'verdict', 'fingerprint')"):$(pg -c 'SELECT count(*) FROM runs WHERE verdict IS NULL')" = 9:1
+  check "schema: lessons are indexed by fingerprint" \
+    test "$(pg -c "SELECT count(*) FROM pg_indexes WHERE schemaname = 'chalk_e2e' AND indexname = 'lessons_fingerprint_idx'")" = 1
+
+  # Four runs, ten cents a loop unless noted:
+  #   L-1 detained:  first, no_change, no_change (30c)   saves 30c by no_change
+  #   L-2 detained:  first, repeat, repeat (40c)         saves 40c by repeat
+  #   L-3 submitted: first, no_change, progressed (50c)  a false stop, 50c after it
+  #   L-4 detained:  first, improving, improving         converging but detained
+  pg -c 'TRUNCATE runs, lessons'
+  pg <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons,
+                  run_id, failing, verdict)
+SELECT 'ledger', t, 'chalk/' || t, n, CASE n WHEN 1 THEN 'continue' ELSE 'retry' END, 'ok',
+       CASE WHEN p THEN 0 ELSE 1 END, p, 'm', 'p', cost, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+       t || '-100', failing, verdict
+  FROM (VALUES
+    ('L-1', 1, false, 0.10, NULL, 'first'), ('L-1', 2, false, 0.20, NULL, 'no_change'),
+    ('L-1', 3, false, 0.30, NULL, 'no_change'),
+    ('L-2', 1, false, 0.10, 1, 'first'), ('L-2', 2, false, 0.20, 1, 'repeat'),
+    ('L-2', 3, false, 0.40, 1, 'repeat'),
+    ('L-3', 1, false, 0.10, NULL, 'first'), ('L-3', 2, false, 0.10, NULL, 'no_change'),
+    ('L-3', 3, true, 0.50, NULL, NULL),
+    ('L-4', 1, false, 0.10, 3, 'first'), ('L-4', 2, false, 0.20, 2, 'improving'),
+    ('L-4', 3, false, 0.30, 1, 'improving')
+  ) v(t, n, p, cost, failing, verdict);
+INSERT INTO lessons (repo, ticket, signature, run_id)
+VALUES ('ledger', 'L-1', 's', 'L-1-100'), ('ledger', 'L-2', 's', 'L-2-100'), ('ledger', 'L-4', 's', 'L-4-100');
+SQL
+  pg -v days=30 -f "$here/../share/dashboard.sql" | jq -c .ledger > "$tmp/ledger.json"
+  # Amounts are compared in cents: jq may keep "0.7000" as Postgres wrote it.
+  ledger() { jq -r "def c: . * 100 | round; $1" "$tmp/ledger.json"; }
+  check "ledger: no-progress spend and savings on detained runs" \
+    test "$(ledger '[.detained_runs, (.no_progress_cost | c), (.saved | c)] | join(" ")')" = "3 190 70"
+  check "ledger: savings split by the first stopping verdict" \
+    test "$(ledger '[.by_verdict[] | "\(.verdict)=\(.runs)/\(.saved | c)"] | join(" ")')" = "repeat=1/40 no_change=1/30"
+  check "ledger: a stop followed by progress is a false stop, with the spend after it" \
+    test "$(ledger '[.false_stops, (.false_stop_cost | c)] | join(" ")')" = "1 50"
+  check "ledger: runs detained while improving are counted" test "$(ledger .converging)" = 1
+  check "ledger: one row per run" \
+    test "$(ledger '[.runs[] | "\(.run_id):\(.stop_verdict):\(.stop_loop):\(.after_cost | c):\(.false_stop):\(.converging)"] | sort | join(" ")')" \
+      = "L-1-100:no_change:2:30:false:false L-2-100:repeat:2:40:false:false L-3-100:no_change:2:50:true:false L-4-100:null:null:0:false:true"
+  check "ledger: failed loops that named no tests, per repository" \
+    test "$(ledger '[.unknown_tests[] | "\(.repo) \(.loops) \(.unknown)"] | join(" ")')" = "ledger 11 5"
+  pg -c 'DROP SCHEMA chalk_e2e CASCADE'
+fi
+
 check "telemetry is off unless an endpoint is set" sh -c "! grep -q OTEL_ '$FAKE_STATE/docker.log'"
 chalk new PROJ-7 Traced feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-7"

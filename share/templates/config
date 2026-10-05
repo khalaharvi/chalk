@@ -16,6 +16,10 @@ CHALK_TEST_CMD=
 CHALK_SETUP_CMD=
 # Seconds before a hung rubric is killed.
 CHALK_RUBRIC_TIMEOUT=900
+# Optional JUnit XML report the rubric writes, as a path inside the repo,
+# e.g. report.xml for pytest --junitxml=report.xml. Names the failing tests
+# more reliably than reading the rubric's output.
+CHALK_TEST_REPORT=
 
 # Spend cap per agent loop, in USD, enforced by Claude Code.
 CHALK_BUDGET_USD=1.00
@@ -24,6 +28,13 @@ CHALK_BUDGET_USD=1.00
 CHALK_MAX_LOOPS=20
 # Consecutive failed loops tolerated before detention.
 CHALK_MAX_RETRIES=2
+# Each loop that makes no progress gets a verdict from its failing tests,
+# first error and working tree (see `chalk dashboard`):
+#   shadow  record the verdicts only
+#   on      also detain at once when a loop repeats itself, changes nothing,
+#           or fails like an open detention on another ticket
+#   off     compute nothing
+CHALK_FP_RULES=shadow
 # Agents `chalk fleet` will run at once on one machine.
 CHALK_MAX_PARALLEL=4
 
