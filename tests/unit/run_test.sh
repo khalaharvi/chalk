@@ -64,3 +64,16 @@ check "without a fingerprint, no fingerprint is passed on" test -z "${recall[fin
 run_recall recall "fallback" generic
 check "a fingerprint that says nothing falls back to the failure text" \
   test "${recall[mode]}:${recall[query]}" = "text:fallback"
+
+# --- run_detention_branch: a free name, even within one second ------------
+
+git init -q "$tmp/dt"
+git -C "$tmp/dt" commit -q --allow-empty -m init
+taken="detention/PROJ-1-$EPOCHSECONDS"
+git -C "$tmp/dt" branch "$taken"
+git -C "$tmp/dt" branch "$taken-2"
+name="$(RUN_WT="$tmp/dt" RUN_TICKET=PROJ-1; run_detention_branch; echo "$REPLY")"
+check "a detention branch name is never one that exists" \
+  sh -c '! git -C "$1" show-ref -q --verify "refs/heads/$2"' _ "$tmp/dt" "$name"
+check "a detention branch keeps the ticket and the detention/ prefix" \
+  test "${name#detention/PROJ-1-}" != "$name"

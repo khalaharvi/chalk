@@ -314,6 +314,18 @@ run_next_step() {
   esac
 }
 
+# run_detention_branch -> REPLY: a name for this run's detention branch that
+# is not taken yet. Two detentions of one ticket within the same second get
+# -2, -3 and so on, instead of the second one failing to fetch.
+run_detention_branch() {
+  local base="detention/$RUN_TICKET-$EPOCHSECONDS" n=1
+  REPLY="$base"
+  while git -C "$RUN_WT" show-ref -q --verify "refs/heads/$REPLY"; do
+    n=$((n + 1))
+    REPLY="$base-$n"
+  done
+}
+
 # run_detain KIND REASON [DETAIL] [FINGERPRINT] [FIRST_ERROR]: parks the
 # sandbox's work on a local detention branch, logs the failure as an open
 # lesson, says what to do next, and halts this run. KIND is blocked,
@@ -323,7 +335,7 @@ run_next_step() {
 # when the loop that detained the run failed its rubric.
 run_detain() {
   local kind="$1" reason="$2" detail="${3:-}" fingerprint="${4:-}" first_error="${5:-}" branch signature
-  branch="detention/$RUN_TICKET-$EPOCHSECONDS"
+  branch="${| run_detention_branch; }"
 
   sandbox_commit "$RUN_SANDBOX" "detention($RUN_TICKET): $reason" --allow-empty
   sandbox_export "$RUN_SANDBOX" "$RUN_BASE"
