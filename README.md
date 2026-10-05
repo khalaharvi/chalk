@@ -11,7 +11,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 -->
 
 <p align="center">
-  <img src="docs/assets/run-banner.svg" width="820" alt="chalk: Claude Code agents that work unattended. A sample chalk run starts a sandbox without forge credentials, loops under a spend cap while the harness runs the tests itself, retries after a red test run, passes an independent review, and only then opens a pull request.">
+  <img src="docs/assets/run-banner.svg" width="820" alt="Chalk harness: Claude Code agents that work unattended. A sample chalk run starts a sandbox without forge credentials, loops under a spend cap while the harness runs the tests itself, retries after a red test run, passes an independent review, and only then opens a pull request.">
 </p>
 
 <p align="center">

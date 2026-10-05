@@ -613,7 +613,8 @@ For 1.0, freeze:
 
 Add a deprecation policy: deprecated keys warn for one minor release before
 they are removed, and `chalk doctor` flags them. Write a migration guide
-from 0.x and an announcement with real report-card numbers.
+from 0.x and an announcement with real report-card numbers, titled with
+"Chalk harness" (see PRODUCT.md, Name).
 
 **Done when:** v1.0 is tagged, and no breaking change is needed in the
 month after.

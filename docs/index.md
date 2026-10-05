@@ -1,9 +1,9 @@
 ---
-title: Chalk
+title: Chalk harness
 description: Runs Claude Code agents in disposable sandboxes, one checkpoint at a time, with a spend cap per loop, a test gate and a human escalation path.
 ---
 
-# Chalk
+# Chalk harness
 
 ![Chalk report card: Claude Code agents, one checkpoint at a time, with a spend cap and a test gate. It measures the cost per finished checkpoint, commits only loops that pass the rubric, and learns from detentions resolved in office hours.](assets/banner-light.svg#only-light)
 ![Chalk report card: Claude Code agents, one checkpoint at a time, with a spend cap and a test gate. It measures the cost per finished checkpoint, commits only loops that pass the rubric, and learns from detentions resolved in office hours.](assets/banner-dark.svg#only-dark)
