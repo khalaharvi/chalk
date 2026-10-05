@@ -22,6 +22,7 @@ excludes=(
   # Placeholders in examples and the demo, and pages that need a login.
   '^https?://([a-z0-9-]+\.)?example\.(com|org)'
   '^https://mcp\.atlassian\.com/'
+  '^https://claude\.ai/settings/'
   '^https://github\.com/users/khalaharvi/projects/'
   # Edit links point at files that exist only once a change is merged.
   '^https://github\.com/khalaharvi/chalk/edit/'
