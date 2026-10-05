@@ -66,6 +66,21 @@ case "$cmd" in
     fi ;;
   run)
     printf '%s\n' "$*" >> "$FAKE_STATE/docker.log"
+    # A one-off command (--entrypoint) runs on the host with the arguments
+    # after the image, and with stdin passed through.
+    if [[ " $* " == *" --entrypoint "* ]]; then
+      entrypoint=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --entrypoint) entrypoint="$2"; shift ;;
+          --user|-e|-v|--name) shift ;;
+          -*) ;;
+          *) shift; break ;;
+        esac
+        shift
+      done
+      exec "$entrypoint" "$@"
+    fi
     name="" mounts=() image=""
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -146,6 +161,8 @@ case "$cmd" in
         *"'generated_at'"*)
           echo '{"generated_at":"2026-01-01 00:00","days":30,"submitted":0,"detentions":0,"totals":{"calls":0},"note":"</script>"}' ;;
         *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;
+        # FAKE_OPEN_MATCH=TICKET: an open lesson of TICKET has the same fingerprint.
+        *"SELECT ticket FROM lessons"*) echo "${FAKE_OPEN_MATCH:-}" ;;
       esac
       exit 0
     fi
