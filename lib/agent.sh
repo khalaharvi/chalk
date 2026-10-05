@@ -106,6 +106,19 @@ agent_cost() {
   LC_ALL=C printf '%.4f\n' "$cost"
 }
 
+# agent_usd AMOUNT -> REPLY: AMOUNT, a cost in USD, as people read it:
+# dollars and cents ($0.38), or <$0.01 for a cost that rounds to no cents.
+# The database and the report card keep four places; logs and requests
+# show this. A value that is not a cost comes back as $VALUE.
+agent_usd() {
+  local re='^[0-9]+(\.[0-9]+)?$'
+  REPLY="\$$1"
+  if [[ $1 =~ $re ]]; then
+    LC_ALL=C printf -v REPLY '$%.2f' "$1"
+    if [[ $REPLY == '$0.00' && $1 == *[1-9]* ]]; then REPLY='<$0.01'; fi
+  fi
+}
+
 # agent_model FILE: the model that did most of a call's work (highest cost in
 # the CLI's modelUsage), or nothing when the result does not say.
 agent_model() {

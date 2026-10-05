@@ -374,7 +374,7 @@ run_graduate() {
   local review="" request
   request="${| forge_request; }"
   db_ticket_summary "$RUN_TICKET" summary
-  run_log "all checkpoints complete (${summary[loops]} loops, \$${summary[cost]}, ${summary[fixes]} human interventions)"
+  run_log "all checkpoints complete (${summary[loops]} loops, ${| agent_usd "${summary[cost]}"; }, ${summary[fixes]} human interventions)"
 
   if [ "$CHALK_AUTO_MR" != "true" ] && [ "${1:-}" != "--force" ]; then
     run_log "CHALK_AUTO_MR is off; open the $request with: chalk submit"
@@ -392,7 +392,7 @@ run_graduate() {
 
 - Spec: \`specs/$RUN_TICKET.md\`, all checkpoints complete
 - Agent loops: ${summary[loops]}
-- Agent cost: \$${summary[cost]}
+- Agent cost: ${| agent_usd "${summary[cost]}"; }
 - Human interventions (office hours): ${summary[fixes]}
 - Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review
 
@@ -511,7 +511,7 @@ cmd_run() {
 
     db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
       "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
-    run_log "loop $RUN_LOOP ($mode): agent $agent_status (\$$(agent_cost "$result"), ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
+    run_log "loop $RUN_LOOP ($mode): agent $agent_status (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
     if (( usage[denials] > 0 )); then
       run_log "  ${usage[denials]} action(s) were refused by permission checks; see $result"
     fi
@@ -574,7 +574,7 @@ cmd_status() {
     if run_is_alive "${dir%/}"; then state="running"; fi
     db_ticket_summary "$ticket" summary -
     mapfile -t detentions < <(git for-each-ref --format='%(refname:short)' "refs/heads/detention/$ticket-*")
-    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${summary[cost]}" "${summary[fixes]}" "${#detentions[@]}"
+    printf '%-14s %-8s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${| agent_usd "${summary[cost]}"; }" "${summary[fixes]}" "${#detentions[@]}"
   done
 }
 

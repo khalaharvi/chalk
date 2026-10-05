@@ -43,6 +43,13 @@ check "agent_cost reads costs written in exponent form" test "$(cost_for 1.5e-03
 check "agent_cost gives 0.0000 for a value that is not a cost" test "$(cost_for '"n/a"')" = 0.0000
 check "agent_cost gives 0.0000 for an unreadable result" test "$(agent_cost "$tmp/missing.json")" = 0.0000
 
+check "agent_usd shows dollars and cents" test "${| agent_usd 0.3800; }" = '$0.38'
+check "agent_usd rounds to the nearest cent" test "${| agent_usd 1.4760; }" = '$1.48'
+check "agent_usd shows a sum from the database in cents" test "${| agent_usd 12.0000; }" = '$12.00'
+check "agent_usd shows zero as zero" test "${| agent_usd 0.0000; }" = '$0.00'
+check "agent_usd marks a cost below a cent" test "${| agent_usd 0.0031; }" = '<$0.01'
+check "agent_usd passes through a value that is not a cost" test "${| agent_usd '?'; }" = '$?'
+
 # A caller's variable may share a name with the function's own locals.
 values="untouched"
 declare -A values_usage
