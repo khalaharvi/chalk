@@ -90,6 +90,9 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS failing INT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS first_error TEXT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS tree_id TEXT;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS verdict TEXT;
+-- fp_rules is CHALK_FP_RULES for the call: off | shadow | on. NULL for
+-- calls recorded before it was, when shadow was the default.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS fp_rules TEXT;
 -- The failing test IDs behind tests_hash, one per line and sorted, for the
 -- report card's tests that keep failing. Only the first 100 are kept, so a
 -- row stays small; NULL when they are unknown.

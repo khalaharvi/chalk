@@ -134,3 +134,46 @@ chalk_unlock t
 check "mkdir: releasing removes the lock" test ! -e "$lock"
 mkdir -p "$lock"
 check "mkdir: a lock still being taken (no pid yet) is not cleared" fails chalk_lock t 0
+
+# A holder that died between mkdir and writing its pid left a lock with no
+# pid. Once that is older than the grace period, it is cleared.
+touch -t 202001010000 "$lock"
+check "mkdir: a lock with no pid past the grace period is cleared" chalk_lock t 0
+check "mkdir: ... and taken" test "$(<"$lock/pid")" = "$BASHPID"
+chalk_unlock t
+
+# Two waiters find the same dead lock stale. The first clears it and takes
+# it before the second gets to clear it. Played in that order: A takes the
+# lock in another process, then B, having found it stale, clears.
+mkdir -p "$lock"
+echo "$dead" > "$lock/pid"
+check "race: both waiters find the dead lock stale" chalk_lock_stale "$lock"
+rm -f "$tmp/a-held" "$tmp/a-done"
+( chalk_lock t 0; touch "$tmp/a-held"; until [[ -e $tmp/a-done ]]; do sleep 0.05; done; chalk_unlock t ) &
+for _ in $(seq 1 50); do [[ -e $tmp/a-held ]] && break; sleep 0.1; done
+holder="$(<"$lock/pid")"
+check "race: the first waiter cleared the lock and holds it" kill -0 "$holder"
+check "race: the second waiter's clear removes nothing" fails chalk_lock_clear "$lock"
+check "race: the first waiter still holds the lock" test "$(<"$lock/pid")" = "$holder"
+check "race: the second waiter cannot take it" fails other_takes t
+touch "$tmp/a-done"
+wait
+
+# The same, when the first waiter has made the lock but not yet written
+# its pid: the second must not take that for a dead holder.
+mkdir -p "$lock"
+check "race: a lock just made, with no pid yet, is not cleared" fails chalk_lock_clear "$lock"
+check "race: ... and is kept" test -d "$lock"
+rmdir "$lock"
+
+# Clearing has a lock of its own. While another waiter is clearing, a dead
+# lock is left to it; a clearing lock abandoned past the grace period is
+# removed, and the dead lock is then cleared.
+mkdir -p "$lock" "$lock.clear"
+echo "$dead" > "$lock/pid"
+check "clear: a dead lock is left to the waiter already clearing it" fails chalk_lock_clear "$lock"
+check "clear: ... and is kept" test "$(<"$lock/pid")" = "$dead"
+touch -t 202001010000 "$lock.clear"
+check "clear: an abandoned clearing lock does not block forever" chalk_lock t 1
+check "clear: ... the clearing lock is gone" test ! -e "$lock.clear"
+chalk_unlock t

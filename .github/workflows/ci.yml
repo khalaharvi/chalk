@@ -44,3 +44,14 @@ jobs:
       - run: make test-db
         env:
           FAKE_PG_URL: postgresql://chalk:chalk@127.0.0.1:5432/chalk
+
+  # A real Postgres 16 -> 17 upgrade with `chalk db upgrade`, against the
+  # runner's Docker: rollback on two injected failures, then the upgrade
+  # and its cleanup, with every row compared (issue #13).
+  db-upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bash
+      - run: docker pull -q postgres:16-alpine && docker pull -q pgvector/pgvector:pg17
+      - run: scripts/ci-db-upgrade.sh

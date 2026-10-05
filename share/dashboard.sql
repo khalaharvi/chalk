@@ -95,12 +95,18 @@ SELECT json_build_object(
   -- no_change), so the loops after that one are what it would have saved.
   -- A run is detained when a lesson names it; fingerprinted when any of its
   -- loops has a verdict (not CHALK_FP_RULES=off).
+  -- Only runs in shadow mode are counted (fp_rules shadow, or NULL from
+  -- before it was recorded, when shadow was the default). A run under
+  -- CHALK_FP_RULES=on already stopped at its first stop: nothing ran after
+  -- it, so it would add spend with no progress and no savings, and could
+  -- never show a false stop. Those runs are only counted, as stopped_on.
   'ledger', (WITH l AS (
       SELECT * FROM r WHERE is_loop AND run_id IS NOT NULL
     ), per_run AS (
       SELECT run_id, min(repo) AS repo, min(ticket) AS ticket,
              EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = l.run_id) AS detained,
              bool_or(verdict IS NOT NULL) AS fingerprinted,
+             coalesce(bool_or(fp_rules = 'on'), false) AS rules_on,
              min(loop) FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')) AS stop_loop,
              (array_agg(verdict ORDER BY loop)
                 FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')))[1] AS stop_verdict,
@@ -117,6 +123,7 @@ SELECT json_build_object(
              coalesce((SELECT bool_or(progressed) FROM l
                         WHERE l.run_id = p.run_id AND l.loop > p.stop_loop), false) AS false_stop
         FROM per_run p
+       WHERE NOT p.rules_on
     )
     SELECT json_build_object(
       'detained_runs', count(*) FILTER (WHERE detained AND fingerprinted),
@@ -128,6 +135,8 @@ SELECT json_build_object(
       'false_stops', count(*) FILTER (WHERE false_stop),
       'false_stop_cost', coalesce(sum(after_cost) FILTER (WHERE false_stop), 0),
       'converging', count(*) FILTER (WHERE detained AND last_verdict = 'improving'),
+      'stopped_on', (SELECT count(*) FROM per_run
+                      WHERE rules_on AND detained AND stop_loop IS NOT NULL),
       'runs', (SELECT coalesce(json_agg(x ORDER BY x.last DESC), '[]') FROM (
           SELECT run_id, repo, ticket, detained, stop_verdict, stop_loop, after_cost,
                  false_stop, detained AND last_verdict = 'improving' AS converging,

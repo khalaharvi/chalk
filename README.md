@@ -186,7 +186,8 @@ set, cost, duration, tokens, cache use and outcome. Query it directly with
 `chalk db psql`.
 
 The database runs Postgres 17 with pgvector. A machine set up before that
-keeps working on Postgres 16, with a warning, until you run
+keeps working on Postgres 16, with a warning once a day (`chalk doctor`
+shows it every time), until you run
 `chalk db upgrade` (no runs may be active). It dumps the old database,
 restores it into a new container on a new volume and checks the row counts;
 if anything fails, the old container is put back as it was. The old
@@ -327,6 +328,7 @@ review practice, including people actually reviewing agent-written diffs.
 ```sh
 make check    # shellcheck, convention lint, unit tests, end-to-end test with fakes
 make test-db  # the end-to-end test with SQL run against a real Postgres (FAKE_PG_URL)
+scripts/ci-db-upgrade.sh  # a real Postgres 16 -> 17 `chalk db upgrade` on Docker, on throwaway containers
 ```
 
 The tests need bash 5.3 first on your `PATH`. Setup, prerequisites and how
