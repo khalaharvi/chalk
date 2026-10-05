@@ -110,12 +110,14 @@ db_sql() {
 # Records one agent call for the current run (RUN_* globals). The model is the
 # one the result reports; MODEL, the one requested, is the fallback. FP names
 # an associative array filled like fp_compute's, plus its verdict; a key it
-# does not set is stored as NULL.
+# does not set is stored as NULL. Of its failing tests, the first 100 are
+# stored, which also keeps them well inside one command-line argument.
 db_record_call() {
   local kind="$1" status="$2" rubric_exit="$3" progressed="$4" model="$5"
-  local seconds="$6" lessons="$7" result="$8" ran
+  local seconds="$6" lessons="$7" result="$8" ran tests=""
   local -A usage __no_fp=()
   local -n __fp="${9:-__no_fp}"
+  if [[ ${__fp[tests]:-UNKNOWN} != UNKNOWN ]]; then tests="$(head -n 100 <<<"${__fp[tests]}")"; fi
   agent_usage "$result" usage
   ran="$(agent_model "$result")"
   model="${ran:-$model}"
@@ -126,16 +128,17 @@ db_record_call() {
     -v input="${usage[input]}" -v output="${usage[output]}" -v cache_read="${usage[cache_read]}" \
     -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
     -v lessons="$lessons" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
-    -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
+    -v failing_tests="$tests" -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
     -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
                   model, prompts, cost_usd, budget_usd, duration_s, input_tokens,
                   output_tokens, cache_read_tokens, cache_write_tokens, turns, denials, lessons,
-                  run_id, tests_hash, failing, first_error, tree_id, verdict)
+                  run_id, tests_hash, failing_tests, failing, first_error, tree_id, verdict)
 VALUES (:'repo', :'ticket', :'branch', :'loop', :'kind', :'status', :'rubric_exit', :'progressed',
         :'model', :'prompts', :'cost', :'budget', :'seconds', :'input',
         :'output', :'cache_read', :'cache_write', :'turns', :'denials', :'lessons',
-        nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing', '')::int,
+        nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing_tests', ''),
+        nullif(:'failing', '')::int,
         nullif(:'first_error', ''), nullif(:'tree_id', ''), nullif(:'verdict', ''));
 SQL
 }

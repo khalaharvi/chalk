@@ -159,8 +159,9 @@ run_fingerprint() {
     __loop_fp=(["tree_id"]="${| fp_tree_id "$RUN_SANDBOX"; }")
     return 0
   fi
-  fp_report_fetch "$RUN_SANDBOX" "$RUN_IO/report.xml"
-  fp_compute "$1" "$RUN_SANDBOX" "$RUN_IO/rubric.log" "$RUN_IO/report.xml"
+  # The copy has no extension: the report may be XML or JSON.
+  fp_report_fetch "$RUN_SANDBOX" "$RUN_IO/report"
+  fp_compute "$1" "$RUN_SANDBOX" "$RUN_IO/rubric.log" "$RUN_IO/report"
   if [[ ${__loop_fp[tests]} != UNKNOWN ]]; then
     RUN_OPEN_TICKET="${| db_open_match "$RUN_TICKET" "${__loop_fp[fingerprint]}"; }"
     if [[ -n $RUN_OPEN_TICKET ]]; then __loop_fp["open_match"]=1; fi
@@ -187,18 +188,23 @@ run_verdict() {
 
 # run_fp_feedback REASON FP -> REPLY: the retry feedback for a failed rubric
 # with CHALK_FP_FEEDBACK=true. FP names an array filled by fp_compute. In
-# place of the last 60 lines of output: the failing tests (T), the first
-# error (E), both normalized, and only the last 20 lines.
+# place of the last 60 lines of output: the tests that still fail (T), the
+# first error (E), both normalized, and only the last 20 lines. The retry
+# prompt points the agent at this <failure> block.
 run_fp_feedback() {
   local -n __feedback_fp=$2
   local tests="${__feedback_fp[tests]-UNKNOWN}"
+  local -a ids
   if [[ $tests == UNKNOWN ]]; then
-    tests="unknown (the output names none)"
+    tests="failing tests: unknown (the output names none)"
   else
-    tests="$(printf '%s\n' "$tests" | sed 's/^/- /')"
+    mapfile -t ids <<<"$tests"
+    if (( ${#ids[@]} == 1 )); then tests="this test still fails:"
+    else tests="these ${#ids[@]} tests still fail:"
+    fi
+    tests+=$'\n'"$(printf -- '- %s\n' "${ids[@]}")"
   fi
   REPLY="$1
-failing tests:
 $tests
 first error: ${__feedback_fp[first_error]:-none found}
 last 20 lines of output:

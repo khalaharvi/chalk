@@ -159,6 +159,28 @@ check "rules on: the loops record first, then repeat, with the failing test coun
   sh -c "grep -q -e '-v failing=1 .*-v verdict=first$' '$tmp/db12.log' && grep -q -e '-v failing=1 .*-v verdict=repeat$' '$tmp/db12.log'"
 check "rules on: the lesson carries the failing loop's fingerprint and first error" \
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
+check "rules on: the failing loops record their failing test IDs" \
+  test "$(grep -c -e '-v failing_tests=demo::no_marker ' "$tmp/db12.log")" -eq 2
+cd "$tmp/demo"
+
+# 2b'. A go test -json report is read like a JUnit one: the format is told
+# by content, so the same failing test is named whatever the file is called.
+chalk new PROJ-19 Go report feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-19"
+git add -A && git commit -q -m "spec"
+gojson='{"Action":"run","Package":"demo","Test":"TestNoMarker"}
+{"Action":"fail","Package":"demo","Test":"TestNoMarker","Elapsed":0}
+{"Action":"fail","Package":"demo","Elapsed":0.1}'
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+if FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=1 CHALK_TEST_REPORT=out/report.json \
+   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$gojson' > out/report.json; echo 'FAIL demo'; exit 1; fi" \
+   chalk run > "$tmp/run19.log" 2>&1; then
+  fail "a failing run with a go -json report should exit non-zero"
+fi
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db19.log"
+check "go -json report: the failing test is named as package::test, with its count" \
+  sh -c "grep -q -e '-v tests_hash=[0-9a-f]\{64\} -v failing_tests=demo::TestNoMarker -v failing=1 ' '$tmp/db19.log'"
+check "go -json report: the second loop repeats the first" grep -q -e '-v failing=1 .*-v verdict=repeat$' "$tmp/db19.log"
 cd "$tmp/demo"
 
 # 2b'. Every detention says what to do next, in one line. These runs share
@@ -215,13 +237,19 @@ if FAKE_CLAUDE_MODE=break CHALK_FP_FEEDBACK=true CHALK_MAX_RETRIES=1 CHALK_TEST_
   fail "a failing run with fp feedback should exit non-zero"
 fi
 sed -n '/^<failure>$/,/^<\/failure>$/p' "$XDG_STATE_HOME/chalk/demo/runs/PROJ-17/io/prompt.md" > "$tmp/failure13.txt"
-check "fp feedback: the retry is told the failing tests" grep -qx -- '- demo::no_marker' "$tmp/failure13.txt"
+check "fp feedback: the retry is told which test still fails" \
+  test "$(grep -A1 -x 'this test still fails:' "$tmp/failure13.txt")" = $'this test still fails:\n- demo::no_marker'
 check "fp feedback: the retry is told the normalized first error" \
   grep -qx 'first error: AssertionError: BROKEN exists at 0x?' "$tmp/failure13.txt"
 check "fp feedback: the output is cut to its last 20 lines" \
   sh -c "grep -qx line-22 '$tmp/failure13.txt' && ! grep -qx line-21 '$tmp/failure13.txt'"
+# PROJ-19 ran with the default CHALK_FP_FEEDBACK=false and a report that
+# named its failing test: its retry still gets only the reason and output.
+prompt19="$XDG_STATE_HOME/chalk/demo/runs/PROJ-19/io/prompt.md"
 check "fp feedback: a run without it is told the reason and 60 lines, as before" \
-  sh -c "! grep -q '^failing tests:' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-2/io/prompt.md'"
+  test "$(sed -n '/^<failure>$/,/^<\/failure>$/p' "$prompt19")" = $'<failure>\nrubric failed (exit 1)\nFAIL demo\n</failure>'
+check "fp feedback: the retry instructions are the retry prompt, unchanged" \
+  sh -c "tail -n \"\$(wc -l < '$here/../share/prompts/retry.md')\" '$prompt19' | cmp -s - '$here/../share/prompts/retry.md'"
 cd "$tmp/demo"
 
 # 3. Fleet: a plan with two workstreams runs in parallel in the background.
@@ -295,9 +323,9 @@ if [ -n "${FAKE_PG_URL:-}" ]; then
   psql "$FAKE_PG_URL" -q -v ON_ERROR_STOP=1 <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
                   prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
-                  cache_read_tokens, cache_write_tokens, turns, denials, lessons)
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, failing_tests)
 VALUES ('</script>', 'PROJ-99', 'chalk/PROJ-99', 1, 'continue', 'ok', 0, true, 'm',
-        'p', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0);
+        'p', 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 'x::</script><b>');
 SQL
 fi
 chalk dashboard --no-open --days 7 --output "$tmp/report.html" >/dev/null
@@ -305,6 +333,10 @@ check "dashboard page is built with its data embedded" \
   sh -c "grep -q 'Chalk report card' '$tmp/report.html' && grep -q '\"generated_at\"' '$tmp/report.html' && ! grep -q 'CHALK_DATA' '$tmp/report.html'"
 check "stored text cannot close the dashboard's script tag" \
   sh -c "grep -qF '\"<\\/script>\"' '$tmp/report.html' && ! grep -qF '\"</script>\"' '$tmp/report.html'"
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  check "a stored failing test name cannot close the dashboard's script tag" \
+    sh -c "grep -qF '\"x::<\\/script><b>\"' '$tmp/report.html' && ! grep -qF 'x::</script>' '$tmp/report.html'"
+fi
 
 # 3c'. Against a real Postgres: the schema upgrades a populated database in
 # place, and the verdict ledger adds up. Both run in a schema of their own,
@@ -326,6 +358,7 @@ ALTER TABLE runs DROP COLUMN run_id, DROP COLUMN tests_hash, DROP COLUMN failing
                  DROP COLUMN first_error, DROP COLUMN tree_id, DROP COLUMN verdict;
 DROP INDEX lessons_fingerprint_idx;
 ALTER TABLE lessons DROP COLUMN run_id, DROP COLUMN fingerprint, DROP COLUMN first_error;
+ALTER TABLE runs DROP COLUMN failing_tests;
 SQL
   pg -f "$here/../share/schema.sql"
   pg -f "$here/../share/schema.sql"
@@ -337,6 +370,8 @@ SQL
                                          'verdict', 'fingerprint')"):$(pg -c 'SELECT count(*) FROM runs WHERE verdict IS NULL')" = 9:1
   check "schema: lessons are indexed by fingerprint" \
     test "$(pg -c "SELECT count(*) FROM pg_indexes WHERE schemaname = 'chalk_e2e' AND indexname = 'lessons_fingerprint_idx'")" = 1
+  check "schema: the failing test IDs column is added, and old rows read as NULL" \
+    test "$(pg -c 'SELECT count(*) FROM runs WHERE failing_tests IS NULL')" = 1
 
   # Four runs, ten cents a loop unless noted:
   #   L-1 detained:  first, no_change, no_change (30c)   saves 30c by no_change
@@ -380,6 +415,31 @@ SQL
       = "L-1-100:no_change:2:30:false:false L-2-100:repeat:2:40:false:false L-3-100:no_change:2:50:true:false L-4-100:null:null:0:false:true"
   check "ledger: failed loops that named no tests, per repository" \
     test "$(ledger '[.unknown_tests[] | "\(.repo) \(.loops) \(.unknown)"] | join(" ")')" = "ledger 11 5"
+
+  # Tests that keep failing: in ft, test a fails in four loops on two
+  # tickets, b in two and c in one; a review naming z is not a loop. In
+  # ft2 one loop names twelve tests, of which ten are shown.
+  pg <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, failing_tests)
+SELECT repo, t, 'chalk/' || t, n, kind, 'ok', 1, false, 'm', 'p', 0.1, 1, 1, 0, 0, 0, 0, 0, 0, 0, tests
+  FROM (VALUES
+    ('ft', 'F-1', 1, 'continue', E'a\nb'), ('ft', 'F-1', 2, 'retry', E'a\nb'),
+    ('ft', 'F-1', 3, 'retry', 'a'), ('ft', 'F-2', 1, 'continue', E'a\nc'),
+    ('ft', 'F-2', 2, 'review', 'z'),
+    ('ft2', 'G-1', 1, 'continue', (SELECT string_agg(format('t%s', lpad(i::text, 2, '0')), E'\n')
+                                     FROM generate_series(1, 12) i))
+  ) v(repo, t, n, kind, tests);
+SQL
+  pg -v days=30 -f "$here/../share/dashboard.sql" | jq -c .failing_tests > "$tmp/failing.json"
+  check "failing tests: counted per repository by failed loops and tickets, most first" \
+    test "$(jq -r '[.[] | select(.repo == "ft") | "\(.test) \(.loops) \(.tickets)"] | join(", ")' "$tmp/failing.json")" \
+      = "a 4 2, b 2 1, c 1 1"
+  check "failing tests: at most ten per repository" \
+    test "$(jq -r '[.[] | select(.repo == "ft2") | .test] | "\(length) \(first) \(last)"' "$tmp/failing.json")" = "10 t01 t10"
+  check "failing tests: each row says when the test last failed" \
+    test "$(jq '[.[] | .last | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$")] | all' "$tmp/failing.json")" = true
   pg -c 'DROP SCHEMA chalk_e2e CASCADE'
 fi
 

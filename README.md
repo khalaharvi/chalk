@@ -149,7 +149,7 @@ documented in the file. Environment variables override it. The important ones:
 | `CHALK_MAX_LOOPS` | `20` | Loops per run; worst-case spend is budget × loops |
 | `CHALK_MAX_RETRIES` | `2` | Consecutive failed loops before detention |
 | `CHALK_FP_RULES` | `shadow` | Loop verdicts: `shadow` records them, `on` also detains a run that repeats itself, `off` skips them |
-| `CHALK_TEST_REPORT` | none | JUnit XML report the rubric writes, as a path in the repo; names failing tests for the verdicts |
+| `CHALK_TEST_REPORT` | none | Test report the rubric writes, as a path in the repo: JUnit XML, `go test -json` or `jest --json`, told apart by content; names failing tests for the verdicts |
 | `CHALK_FP_FEEDBACK` | `false` | `true` tells a retry the failing tests and first error, plus 20 lines of output, instead of 60 lines |
 | `CHALK_MAX_PARALLEL` | `auto` | Concurrent agents for `chalk fleet`; `auto` sizes it to Docker's CPUs and memory (4 if unknown) |
 | `CHALK_SPEC_CHECK` | `true` | Check the spec before the first loop |
@@ -177,6 +177,7 @@ machine and opens it. Nothing is served and nothing is sent anywhere. It shows:
 - results by prompt set and by model, so a prompt or model change shows up as
   a before and after;
 - whether the spec check and final review are earning their cost;
+- the tests that failed in the most loops, per repository;
 - "Notes for next term": plain rules over the numbers, such as a cap that is
   far above what loops use, or a review that never fails anything.
 

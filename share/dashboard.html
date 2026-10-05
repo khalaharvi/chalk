@@ -242,8 +242,8 @@ function notes(d) {
   for (const u of (g && g.unknown_tests) || []) {
     if (u.loops >= 10 && share(u.unknown, u.loops) > 0.5) {
       out.push(`In ${esc(u.repo)}, ${pct(share(u.unknown, u.loops))} of failed loops named no failing tests, so
-        their verdicts lean on the error text alone. Have the rubric write a JUnit XML report and set
-        <code>CHALK_TEST_REPORT</code> to its path.`);
+        their verdicts lean on the error text alone. Have the rubric write a test report (JUnit XML,
+        <code>go test -json</code> or <code>jest --json</code>) and set <code>CHALK_TEST_REPORT</code> to its path.`);
     }
   }
   if (!out.length) {
@@ -328,6 +328,19 @@ function ledger(d) {
     ${table(["Run", "Repository", "First stop", "Spend after it", "Outcome", "Last activity"], runs, [0, 1, 2, 4])}`;
 }
 
+// The tests named most often by failed loops: a test that fails loop after
+// loop, or on ticket after ticket, is where a lesson or a person helps most.
+function failingTests(d) {
+  const rows = (d.failing_tests || []).map((f) => [
+    esc(f.test), esc(f.repo), count(f.loops), count(f.tickets), esc(localTime(f.last)),
+  ]);
+  if (!rows.length) return "";
+  return `<h2>Which tests keep failing?</h2>
+    <p>The tests that failed in the most loops, up to ten per repository. A test that fails loop after loop,
+       or on more than one ticket, is worth a closer look or an office-hours note.</p>` +
+    table(["Test", "Repository", "Failed loops", "Tickets", "Last failed"], rows, [0, 1]);
+}
+
 function tickets(d) {
   const rows = d.tickets.map((t) => [
     esc(t.ticket), esc(t.repo), count(t.loops), money(t.cost), count(t.detentions),
@@ -346,7 +359,7 @@ function render(d) {
       <code>chalk run</code>, then open this page again.</span></p>`;
   }
   return head + grade(d.totals) + marks(d) + notes(d) + spendByKind(d) + spendByDay(d) +
-    budget(d) + strategies(d) + checks(d) + ledger(d) + tickets(d);
+    budget(d) + strategies(d) + checks(d) + ledger(d) + failingTests(d) + tickets(d);
 }
 
 document.getElementById("app").innerHTML = render(DATA);
