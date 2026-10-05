@@ -104,7 +104,8 @@ cmd_office_hours() {
   esac
   # Its embedding, for semantic recall. When chalk-embed is not running,
   # the local decider writes it the next time it starts.
-  if [[ $CHALK_DECIDER != off ]] && decider_healthy "$CHALK_EMBED_URL"; then
+  decider_gate
+  if [[ $CHALK_DECIDER != off ]] && decider_embed_healthy "$CHALK_EMBED_URL"; then
     decider_embed_lessons 16
   fi
 

@@ -37,7 +37,13 @@ first time), starts both services on 127.0.0.1, measures the time per
 decision and records the model revisions it resolved. `down` stops them;
 a run starts them again. `status` shows whether they run, the revisions
 and the measured time, or, for a hosted `CHALK_DECIDER_URL`, whether it
-answers.
+was acknowledged, what it receives and whether it answers.
+
+**`chalk decider trust URL`** prints exactly what a decider or embedding
+service at URL, on another machine, would receive, then records URL as
+acknowledged. Until then Chalk sends it nothing, and runs go on with the
+decider off. **`chalk decider untrust URL`** takes it back. See
+[a hosted decider](../guide/configuring/decider.md#a-hosted-decider).
 
 **`chalk sandbox build`** builds the default sandbox image,
 `chalk-sandbox:local`, from `share/sandbox/Dockerfile`. The first run does

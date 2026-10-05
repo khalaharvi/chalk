@@ -17,6 +17,8 @@
 #                          times out (exit 28) as the real one does
 #   FAKE_DECIDER_DOWN=1    nothing listens (exit 7), decider and chalk-embed
 #   FAKE_DECIDER_STATUS    an HTTP status to answer with instead of 200
+#   FAKE_DECIDER_HEALTH    an HTTP status for /health alone, such as 404
+#                          for a service without it
 #   FAKE_DECIDER_PROTOCOL  a protocol version to put in answers
 #   FAKE_DECIDER_TOKEN     the bearer token the decider requires (401 without)
 #   FAKE_EMBED_INDEX       the vectors are one-hot at this index (default 0)
@@ -90,6 +92,9 @@ if [ -n "${FAKE_DECIDER_DELAY:-}" ]; then
   sleep "$FAKE_DECIDER_DELAY"
 fi
 [ -z "${FAKE_DECIDER_STATUS:-}" ] || reply "$FAKE_DECIDER_STATUS" '{"error":"scripted"}'
+if [ "$path" = /health ] && [ -n "${FAKE_DECIDER_HEALTH:-}" ]; then
+  reply "$FAKE_DECIDER_HEALTH" '{"detail":"Not Found"}'
+fi
 
 case "$path" in
   /health)

@@ -261,6 +261,7 @@ Setup
   chalk db upgrade [--cleanup] Move the database to Postgres 17, then drop the old one
   chalk sandbox build          Build the default sandbox image
   chalk decider up|down|status Install and start the local decider, stop it, or check it
+  chalk decider trust|untrust URL  Allow (or stop) sending to a decider on another machine
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
 
 Work
@@ -292,7 +293,8 @@ leaves your machine. Set `CHALK_DECIDER=shadow` to record its answers on
 the report card, and `on` to let confident answers act. It never holds a
 run up: when it is down or slow, runs go on as without it. Any hosted
 model that speaks the [decider protocol](docs/decider-protocol.md) works
-too.
+too, once `chalk decider trust URL` has shown you exactly what it will
+receive; until then it is sent nothing.
 
 ## For teams
 

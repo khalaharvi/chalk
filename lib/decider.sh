@@ -97,6 +97,174 @@ decider_local() {
   [[ ${CHALK_DECIDER_URL%/} == "$DECIDER_LOCAL_URL" ]]
 }
 
+# ---------------------------------------------------------------- hosted services
+
+# A host service on another machine (the decider at CHALK_DECIDER_URL, or
+# chalk-embed at CHALK_EMBED_URL) is sent nothing, not even a health
+# check, until the user has run `chalk decider trust URL`, which shows what
+# it would receive and records URL in decider_trust_file. Until then a run
+# goes on with the decider off and says why once (decider_gate). A service
+# on this machine (127.0.0.0/8, localhost, ::1) needs no acknowledgement.
+
+# decider_loopback URL: true when URL's host is this machine.
+decider_loopback() {
+  local host="${1#*://}"
+  host="${host%%/*}"
+  host="${host##*@}"
+  if [[ $host == \[* ]]; then host="${host#\[}"; host="${host%%\]*}"
+  else host="${host%%:*}"
+  fi
+  host="${host@L}"
+  [[ $host == localhost || $host == ::1 || $host =~ ^127(\.[0-9]{1,3}){3}$ ]]
+}
+
+# decider_trust_file -> REPLY: where `chalk decider trust` records the URLs
+# it was given, one a line.
+decider_trust_file() {
+  REPLY="${| decider_dir; }/trusted"
+}
+
+# decider_acknowledged URL: true when Chalk may send to URL, which may name
+# an endpoint under a service's base URL: it is on this machine, or its
+# service was acknowledged with `chalk decider trust`.
+decider_acknowledged() {
+  local url="$1" line file
+  decider_loopback "$url" && return 0
+  file="${| decider_trust_file; }"
+  [[ -f $file ]] || return 1
+  while IFS= read -r line; do
+    [[ -n $line && $line != \#* ]] || continue
+    if [[ $url == "$line" || $url == "$line"/* ]]; then return 0; fi
+  done < "$file"
+  return 1
+}
+
+# decider_unacknowledged VAR: fills the indexed array VAR with the host
+# services in use, CHALK_DECIDER_URL and CHALK_EMBED_URL, that are on
+# another machine and not acknowledged.
+decider_unacknowledged() {
+  local -n __unacked=$1
+  local url
+  __unacked=()
+  for url in "${CHALK_DECIDER_URL%/}" "${CHALK_EMBED_URL%/}"; do
+    decider_acknowledged "$url" || __unacked+=("$url")
+  done
+}
+
+# decider_disclosure PREFIX DECIDER_URL EMBED_URL: prints, each line after
+# PREFIX, exactly what Chalk sends the decider at DECIDER_URL and
+# chalk-embed at EMBED_URL; an empty URL leaves its part out.
+decider_disclosure() {
+  local p="$1" where
+  if [[ -n $2 ]]; then
+    where="${2%/}"
+    if decider_loopback "$where"; then where+=", on this machine"; fi
+    printf '%s\n' \
+      "${p}The decider ($where) gets, in POST /v1/systemone:" \
+      "${p}- Is a loop stuck? Asked after a failed loop the verdicts call spinning or other:" \
+      "${p}  the failing test IDs (up to 20) and the first error line of that loop and" \
+      "${p}  the one before, and git diff --stat between their working trees (file paths" \
+      "${p}  and line counts, not the changes); at most $DECIDER_STATE_CHARS characters." \
+      "${p}- Which lessons apply? Asked once $CHALK_DECIDER_MIN_LESSONS lessons are resolved: the current failure," \
+      "${p}  up to $DECIDER_RERANK_STATE_CHARS characters (its first error and failing test IDs; before the first" \
+      "${p}  loop, the start of the spec; when the rubric gave neither, the failure reason" \
+      "${p}  and the last lines of its output, which can quote source lines), and the" \
+      "${p}  failure and fix note of up to $DECIDER_SHORTLIST past lessons; at most $DECIDER_RERANK_CHARS characters in all." \
+      "${p}- CHALK_DECIDER_TOKEN, when it is set, as a bearer token." \
+      "${p}- For chalk decider status and chalk doctor: GET /health or, without it, one" \
+      "${p}  fixed question about a fixed text."
+  fi
+  if [[ -n $3 ]]; then
+    where="${3%/}"
+    if decider_loopback "$where"; then where+=", on this machine"; fi
+    printf '%s\n' \
+      "${p}The embedding service ($where) gets, in POST /v1/embeddings, with Postgres 17:" \
+      "${p}- the same current failure, up to 4000 characters, and the failure (up to" \
+      "${p}  1500 characters) and fix note of each resolved lesson." \
+      "${p}- For office hours and chalk doctor: GET /health or, without it, the word \"health\"."
+  fi
+  printf '%s\n' "${p}Never the repository's files, the changes themselves, or your Claude credentials."
+}
+
+# decider_untrusted_hint URL... -> REPLY: why nothing is sent to the URLs,
+# and what to run to send.
+decider_untrusted_hint() {
+  local url verb=is
+  (( $# == 1 )) || verb=are
+  REPLY=""
+  for url in "$@"; do REPLY+="${REPLY:+ and }$url"; done
+  REPLY+=" $verb on another machine, and nothing is sent there until you acknowledge what it receives (see: chalk decider status); to send it, run:"
+  for url in "$@"; do REPLY+=" chalk decider trust $url;"; done
+  REPLY="${REPLY%;}"
+}
+
+# decider_gate: before a run or office hours asks anything. When
+# CHALK_DECIDER is not off and the decider or chalk-embed is on another
+# machine that was not acknowledged, turns the decider off for this
+# process and says so, once, with what it would receive. With an
+# acknowledged one, says where questions go.
+decider_gate() {
+  local -a unacked=()
+  [[ ${CHALK_DECIDER:-off} != off ]] || return 0
+  decider_unacknowledged unacked
+  if (( ${#unacked[@]} )); then
+    CHALK_DECIDER=off
+    if [[ ! -v DECIDER_WARNED[untrusted] ]]; then
+      decider_warn_once untrusted "continuing with the decider off: ${| decider_untrusted_hint "${unacked[@]}"; }"
+      decider_disclosure "  " "$CHALK_DECIDER_URL" "$CHALK_EMBED_URL" >&2
+    fi
+    return 0
+  fi
+  if ! decider_loopback "$CHALK_DECIDER_URL" && [[ ! -v DECIDER_WARNED[hosted] ]]; then
+    DECIDER_WARNED[hosted]=1
+    info "decider: questions go to ${CHALK_DECIDER_URL%/} (acknowledged; what it gets: chalk decider status)"
+  fi
+}
+
+# decider_trust URL: shows what URL would receive, then records it as
+# acknowledged.
+decider_trust() {
+  local url="${1:-}" file decider="" embed="" line
+  [[ -n $url ]] || die "usage: chalk decider trust URL"
+  [[ $url =~ ^https?://[^[:space:]]+$ ]] || die "not an http:// or https:// URL: $url"
+  url="${url%%+(/)}"
+  if decider_loopback "$url"; then
+    info "$url is on this machine: nothing to acknowledge"
+    return 0
+  fi
+  # What it gets as the configured decider, chalk-embed or, for neither, either.
+  [[ $url != "${CHALK_DECIDER_URL%/}" ]] || decider="$url"
+  [[ $url != "${CHALK_EMBED_URL%/}" ]] || embed="$url"
+  if [[ -z $decider$embed ]]; then decider="$url" embed="$url"; fi
+  decider_disclosure "" "$decider" "$embed"
+  file="${| decider_trust_file; }"
+  mkdir -p "${file%/*}"
+  if [[ -f $file ]]; then
+    while IFS= read -r line; do
+      if [[ $line == "$url" ]]; then info "already acknowledged: $url"; return 0; fi
+    done < "$file"
+  fi
+  printf '%s\n' "$url" >> "$file"
+  info "acknowledged: runs with CHALK_DECIDER shadow or on now send the above to $url (to stop: chalk decider untrust $url)"
+}
+
+# decider_untrust URL: takes back `chalk decider trust URL`.
+decider_untrust() {
+  local url="${1:-}" file line found=0
+  local -a keep=()
+  [[ -n $url ]] || die "usage: chalk decider untrust URL"
+  url="${url%%+(/)}"
+  file="${| decider_trust_file; }"
+  if [[ -f $file ]]; then
+    while IFS= read -r line; do
+      if [[ $line == "$url" ]]; then found=1; else keep+=("$line"); fi
+    done < "$file"
+  fi
+  if (( ! found )); then info "$url was not acknowledged"; return 0; fi
+  if (( ${#keep[@]} )); then printf '%s\n' "${keep[@]}" > "$file"; else rm -f "$file"; fi
+  info "nothing more is sent to $url; runs go on with the decider off while it is configured"
+}
+
 # decider_info VAR: fills the associative array VAR with what `chalk
 # decider up` recorded: the models and the revisions it resolved, the
 # device, the strands-decider version and the measured median (bench_ms).
@@ -193,6 +361,12 @@ decider_post() {
   local -a auth=()
   DECIDER_ERROR="" DECIDER_MS=0
   if [[ -n ${3:-} ]]; then token="${!3-}"; fi
+  # Nothing goes to another machine before the user acknowledged it.
+  if ! decider_acknowledged "$url"; then
+    DECIDER_ERROR=untrusted
+    decider_warn_once untrusted "${| decider_untrusted_hint "${url%/v1/*}"; }"
+    return 1
+  fi
   left=$((DECIDER_LIMIT_MS - DECIDER_SPENT_MS))
   if (( left < DECIDER_MIN_CALL_MS )); then
     DECIDER_ERROR=budget
@@ -539,19 +713,70 @@ decider_alive() {
   [[ -n ${| decider_pid decider; } || -n ${| decider_pid embed; } ]]
 }
 
-# decider_healthy [URL] [TOKEN_VAR]: true when the service at URL (default
-# CHALK_DECIDER_URL) answers GET /health with status ok within two seconds.
+# How long a health check may take: /health, and the probe after it.
+DECIDER_HEALTH_MS=2000
+
+# decider_healthy URL [TOKEN_VAR]: true when the decider at URL answers
+# within two seconds: GET /health with status ok or, from a decider with no
+# /health (404 or 405: the endpoint is optional), one noul question
+# (decider_probe). TOKEN_VAR names the variable holding its bearer token.
 decider_healthy() {
-  local url="${1:-$CHALK_DECIDER_URL}" token="" hfd="" status=0
+  decider_health "$1" "${2:-}" systemone
+}
+
+# decider_embed_healthy URL: the same for chalk-embed, whose probe is one
+# embedding.
+decider_embed_healthy() {
+  decider_health "$1" "" embeddings
+}
+
+# decider_health URL TOKEN_VAR PROBE: decider_healthy and
+# decider_embed_healthy, PROBE being systemone or embeddings. A service on
+# another machine that was not acknowledged is not asked.
+decider_health() {
+  local url="${1%/}" token="" hfd="" status=0 code="" out healthy=1
   local -a auth=()
-  if [[ -n ${2:-} ]]; then token="${!2-}"; fi
+  decider_acknowledged "$url" || return 1
+  if [[ -n $2 ]]; then token="${!2-}"; fi
   if [[ -n $token ]]; then
     exec {hfd}< <(printf 'Authorization: Bearer %s\n' "$token")
     auth=(-H "@/dev/fd/$hfd")
   fi
-  curl -sS --max-time 2 "${auth[@]}" "${url%/}/health" 2>/dev/null | jq -e '.status == "ok"' >/dev/null 2>&1 || status=$?
+  out="$(mktemp)"
+  code="$(curl -sS -o "$out" -w '%{http_code}' --max-time $((DECIDER_HEALTH_MS / 1000)) "${auth[@]}" \
+            "$url/health" 2>/dev/null)" || status=$?
   if [[ -n $hfd ]]; then exec {hfd}<&-; fi
-  return "$status"
+  if (( status == 0 )) && [[ $code == 200 ]] && jq -e '.status == "ok"' "$out" >/dev/null 2>&1; then healthy=0; fi
+  rm -f "$out"
+  if (( healthy && status == 0 )) && [[ $code == 404 || $code == 405 ]]; then
+    if decider_probe "$url" "$2" "$3"; then healthy=0; fi
+  fi
+  return "$healthy"
+}
+
+# decider_probe URL TOKEN_VAR PROBE: true when the service at URL answers
+# the smallest real request: for systemone, one noul question about a fixed
+# text; for embeddings, one word. It has DECIDER_HEALTH_MS of its own,
+# outside any loop's budget, which it leaves as it was; at the local
+# decider it waits its turn like any question.
+decider_probe() {
+  local url="$1" out body path check ok=1
+  local spent="$DECIDER_SPENT_MS" limit="$DECIDER_LIMIT_MS" error="$DECIDER_ERROR" ms="$DECIDER_MS"
+  if [[ $3 == embeddings ]]; then
+    path=/v1/embeddings check='(.data | type) == "array" and (.data | length) == 1'
+    body="$(jq -cn --arg model "$DECIDER_EMBED_MODEL" '{model: $model, input: ["health"]}')"
+  else
+    path=/v1/systemone check='(.answers | type) == "object"'
+    body="$(jq -cn --argjson protocol "$DECIDER_PROTOCOL" '{protocol: $protocol, state: "Chalk health check.",
+      questions: {health: {type: "noul", instructions: "Is this text a health check?"}}}')"
+  fi
+  out="$(mktemp)"
+  decider_budget_reset "$DECIDER_HEALTH_MS"
+  # Not a pipe: decider_post must run in this shell, so the budget is restored.
+  if decider_post "$url$path" "$out" "$2" <<<"$body" && jq -e "$check" "$out" >/dev/null 2>&1; then ok=0; fi
+  rm -f "$out"
+  DECIDER_SPENT_MS="$spent" DECIDER_LIMIT_MS="$limit" DECIDER_ERROR="$error" DECIDER_MS="$ms"
+  return "$ok"
 }
 
 # decider_bin -> REPLY: the strands-decider command uv installed; empty
@@ -741,7 +966,7 @@ decider_start_once() {
   # Lessons resolved while it was stopped get their embeddings, once
   # chalk-embed, which loads faster, is up too.
   for waited in {1..30}; do
-    if decider_healthy "$DECIDER_EMBED_LOCAL_URL"; then
+    if decider_embed_healthy "$DECIDER_EMBED_LOCAL_URL"; then
       info "embedded ${| decider_embed_lessons; } resolved lesson(s)"
       break
     fi
@@ -803,7 +1028,7 @@ decider_revision() {
 decider_up_wait() {
   local -n __waited=$2
   __waited=0
-  until decider_healthy "$DECIDER_LOCAL_URL" && decider_healthy "$DECIDER_EMBED_LOCAL_URL"; do
+  until decider_healthy "$DECIDER_LOCAL_URL" && decider_embed_healthy "$DECIDER_EMBED_LOCAL_URL"; do
     __waited=$((__waited + 1))
     if (( __waited >= $1 )) || [[ -z ${| decider_pid decider; } ]]; then return 1; fi
     sleep 1
@@ -931,14 +1156,37 @@ decider_device_note() {
   esac
 }
 
+# decider_status_hosted: for `chalk decider status`, when the decider or
+# chalk-embed is on another machine: whether it was acknowledged, and
+# exactly what it receives.
+decider_status_hosted() {
+  local url
+  local -a hosted=() unacked=()
+  for url in "${CHALK_DECIDER_URL%/}" "${CHALK_EMBED_URL%/}"; do
+    decider_loopback "$url" || hosted+=("$url")
+  done
+  (( ${#hosted[@]} )) || return 0
+  decider_unacknowledged unacked
+  for url in "${hosted[@]}"; do
+    if [[ " ${unacked[*]} " == *" $url "* ]]; then
+      info "$url: on another machine and not acknowledged, so nothing is sent to it, and runs go on with the decider off; to send it what is below, run: chalk decider trust $url"
+    else
+      info "$url: on another machine, acknowledged with chalk decider trust (to stop: chalk decider untrust $url)"
+    fi
+  done
+  decider_disclosure "  " "$CHALK_DECIDER_URL" "$CHALK_EMBED_URL"
+}
+
 decider_status() {
   local -A got
   local mode slow note
   mode="${| decider_mode; }"
   info "CHALK_DECIDER=$CHALK_DECIDER (acting as $mode), CHALK_DECIDER_URL=$CHALK_DECIDER_URL"
+  decider_status_hosted
   if ! decider_local; then
-    if decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN; then info "decider: healthy"
-    else info "decider: not answering at $CHALK_DECIDER_URL/health"
+    if ! decider_acknowledged "$CHALK_DECIDER_URL"; then :
+    elif decider_healthy "$CHALK_DECIDER_URL" CHALK_DECIDER_TOKEN; then info "decider: healthy"
+    else info "decider: not answering at ${CHALK_DECIDER_URL%/} (GET /health, or one question without it)"
     fi
     return 0
   fi
@@ -972,6 +1220,8 @@ cmd_decider() {
     up)     decider_up ;;
     down)   decider_stop; info "the local decider is stopped" ;;
     status) decider_status ;;
-    *)      die "usage: chalk decider up|down|status" ;;
+    trust)  decider_trust "${2:-}" ;;
+    untrust) decider_untrust "${2:-}" ;;
+    *)      die "usage: chalk decider up|down|status|trust URL|untrust URL" ;;
   esac
 }

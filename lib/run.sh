@@ -95,6 +95,7 @@ run_start_services() {
   local -A started
   local name failed=""
   jobs_init "$RUN_IO/startup"
+  decider_gate
   if [[ $CHALK_DECIDER != off ]] && decider_autostart_ok; then
     jobs_detach "$RUN_IO/startup/decider.log" decider_start_once
   fi
