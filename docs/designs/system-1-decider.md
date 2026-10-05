@@ -1124,11 +1124,11 @@ Effort ratios assume features ~30x, tests ~50x, architecture ~5x.
   - Surfaced by: Test review critical paths
   - Files: tests/e2e.sh
   - Verify: make check
-- [ ] **T5 (P1, human: ~4h / CC: ~20min)** — tests/e2e.sh — Real-Postgres recall regression contract replacing Hindsight §4
+- [x] **T5 (P1, human: ~4h / CC: ~20min)** — tests/e2e.sh — Real-Postgres recall regression contract replacing Hindsight §4
   - Surfaced by: Test review T1/D10
   - Files: tests/e2e.sh, lib/memory.sh, lib/db.sh
   - Verify: make test-db
-- [ ] **T6 (P2, human: ~20min / CC: ~3min)** — lib/run.sh — Fold CHALK_FP_FEEDBACK into run_prompts_version, with a unit test
+- [x] **T6 (P2, human: ~20min / CC: ~3min)** — lib/run.sh — Fold CHALK_FP_FEEDBACK into run_prompts_version, with a unit test
   - Surfaced by: Scope S5/D5
   - Files: lib/run.sh, tests/unit/
   - Verify: make check

@@ -65,10 +65,6 @@ cmd_doctor() {
   doctor_check optional "sandbox image"     "built on first run, or: chalk sandbox build" docker image inspect "$CHALK_IMAGE"
   doctor_check optional "sandbox bash ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]}+" \
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
-  if memory_enabled; then
-    doctor_check required "curl"            "install curl"                        command -v curl
-    doctor_check optional "lesson memory"   "starts on first run, or: chalk memory up" memory_healthy
-  fi
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured
   [ "$DOCTOR_FAILED" -eq 0 ] || die "fix the FAIL items above"
 }

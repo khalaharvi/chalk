@@ -57,7 +57,9 @@ CREATE INDEX IF NOT EXISTS events_ticket_idx ON events (repo, ticket);
 
 -- One row per detention. `resolution` is the engineer's note from office
 -- hours and is the record of human intervention; `lesson` is that note
--- generalised into a reusable rule.
+-- generalised into a reusable rule. `memory_synced_at` is no longer
+-- written: it recorded when a lesson was sent to Hindsight, which was
+-- removed. It is kept so that existing databases need no migration.
 CREATE TABLE IF NOT EXISTS lessons (
     id                BIGSERIAL PRIMARY KEY,
     repo              TEXT NOT NULL,

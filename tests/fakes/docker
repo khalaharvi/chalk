@@ -146,8 +146,6 @@ case "$cmd" in
         *"'generated_at'"*)
           echo '{"generated_at":"2026-01-01 00:00","days":30,"submitted":0,"detentions":0,"totals":{"calls":0},"note":"</script>"}' ;;
         *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;
-        *"memory_synced_at IS NULL"*)
-          echo '{"id":7,"repo":"demo","ticket":"PROJ-3","signature":"rubric failed","resolution":"note"}' ;;
       esac
       exit 0
     fi

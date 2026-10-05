@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Fake curl standing in for a Hindsight server.
+# Fake curl: no test reaches the network. Records each call and its body,
+# and answers with an empty JSON object.
 url="${*: -1}"
 body=""
 case " $* " in *" @- "*) body="$(cat)" ;; esac
 printf '%s\n%s\n' "$url" "$body" >> "$FAKE_STATE/curl.log"
-case "$url" in
-  */memories/recall) echo '{"results":[{"text":"Use the sandbox base URL in tests"}]}' ;;
-  */memories)        echo '{"success":true}' ;;
-  *)                 echo '{}' ;;
-esac
+echo '{}'

@@ -44,7 +44,6 @@ Setup
   chalk db up|down|psql        Manage the local telemetry database
   chalk db upgrade [--cleanup] Move the database to Postgres 17, then drop the old one
   chalk sandbox build          Build the default sandbox image
-  chalk memory up|down|sync    Manage the optional Hindsight lesson memory
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
 
 Work

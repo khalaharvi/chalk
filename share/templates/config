@@ -35,6 +35,12 @@ CHALK_MAX_RETRIES=2
 #           or fails like an open detention on another ticket
 #   off     compute nothing
 CHALK_FP_RULES=shadow
+# What a retry is told about the failed loop before it:
+#   false  the reason and the last 60 lines of the rubric's output
+#   true   the failing tests and first error, normalized, and the last 20
+#          lines (needs CHALK_FP_RULES shadow or on). The dashboard's prompt
+#          sets compare the two.
+CHALK_FP_FEEDBACK=false
 # Agents `chalk fleet` will run at once on one machine. auto picks the
 # smallest of 8, half of Docker's CPUs, and Docker's memory less 1 GiB
 # divided by CHALK_SANDBOX_MEM_MB (4 when Docker cannot be asked).
@@ -65,12 +71,6 @@ CHALK_REVIEW_MODEL=
 CHALK_CHEAP_MODEL=haiku
 # At office hours, turn the engineer's note and fix into a general lesson.
 CHALK_DISTILL=true
-
-# Lesson recall backend: builtin (text similarity, nothing extra to run) or
-# hindsight (a local Hindsight server per machine; needs an LLM key, see README).
-CHALK_MEMORY=builtin
-# Token budget for recalled lessons in each agent prompt.
-CHALK_MEMORY_TOKENS=800
 
 # How loops are permitted to act inside the sandbox:
 #   auto    Claude Code's auto mode: a safety classifier reviews actions.
