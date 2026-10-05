@@ -234,7 +234,8 @@ function notes(d) {
   // The bar for turning the verdict rules on: enough detained runs, enough
   // saved, and at most one run that a stop would have cut short of progress.
   // The ledger counts only runs in shadow mode, so runs already under
-  // CHALK_FP_RULES=on cannot make the case for turning it on.
+  // CHALK_FP_RULES=on cannot make the case for turning it on, and only runs
+  // with a verdict the rules judge, so detentions for a blocker cannot.
   const g = d.ledger;
   if (g && g.detained_runs >= 20 && share(g.saved, g.no_progress_cost) >= 0.2 && g.false_stops <= 1) {
     out.push(`Over ${plural(g.detained_runs, "detained run")}, stopping at the first repeated failure, unchanged
@@ -308,7 +309,9 @@ function ledger(d) {
   if (!g || (!g.runs.length && !g.stopped_on)) return "";
   const stop = (v) => esc(STOPS[v] || v);
   const outcome = (x) => x.false_stop ? "Progressed after the stop"
-    : x.converging ? "Detained while improving" : x.detained ? "Detained" : "Not detained";
+    : x.converging ? "Detained while improving"
+    : x.detained && !x.could_stop ? "Detained, not counted: no verdict a rule judges"
+    : x.detained ? "Detained" : "Not detained";
   const verdicts = g.by_verdict.map((v) => [stop(v.verdict), count(v.runs), money(v.saved)]);
   const runs = g.runs.map((x) => [
     esc(x.run_id), esc(x.repo), x.stop_verdict ? `${stop(x.stop_verdict)}, loop ${count(x.stop_loop)}` : "none",
@@ -318,13 +321,18 @@ function ledger(d) {
     <p>Each loop that makes no progress gets a verdict. With <code>CHALK_FP_RULES=on</code>, a run stops at its
        first repeated failure, unchanged tree, or failure that matches an open detention on another ticket.
        These are the runs where that would have made a difference. Only runs in shadow mode count: there,
-       verdicts are only recorded.</p>
+       verdicts are only recorded. So do only runs with a loop the rules judge: a run whose loops all ended in
+       a blocker or an agent error is counted apart, since no rule could have stopped it.</p>
     ${markList([
       ["Detained runs with verdicts", count(g.detained_runs)],
       ["Their spend with no progress", money(g.no_progress_cost)],
       ["Stopping early would have saved", `${money(g.saved)} (${pct(share(g.saved, g.no_progress_cost))})`],
       ["False stops", `${count(g.false_stops)}, before ${money(g.false_stop_cost)} that led to progress`],
       ["Detained while still improving", count(g.converging)],
+      ...(g.blocked_only ? [["Detained runs with only blockers or agent errors (not counted above)",
+        `${count(g.blocked_only)}, ${money(g.blocked_only_cost)} with no progress`]] : []),
+      ...(g.no_verdicts ? [["Detained runs with no verdicts, under CHALK_FP_RULES=off (not counted above)",
+        count(g.no_verdicts)]] : []),
       ...(g.stopped_on ? [["Runs stopped early under CHALK_FP_RULES=on (not counted above)", count(g.stopped_on)]] : []),
     ])}
     ${verdicts.length ? "<h3>Savings by first stop</h3>" + table(["First stop", "Runs", "Would have saved"], verdicts) : ""}

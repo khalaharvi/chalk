@@ -156,7 +156,30 @@ case "$cmd" in
         exit
       fi
       case "$sql" in
-        *"FROM runs WHERE"*) echo "2 0.5000 0" ;;
+        # A ticket's summary. Its state is worked out from the calls and
+        # events logged so far, as db_ticket_summary's query does.
+        *"FROM runs r WHERE"*)
+          ticket="$(printf '%s\n' "$*" | sed -n 's/.* -v ticket=\([^ ]*\).*/\1/p')"
+          repo="$(printf '%s\n' "$*" | sed -n 's/.* -v repo=\([^ ]*\).*/\1/p')"
+          state="$(awk -v t="$ticket" -v r="$repo" '
+            /^psql -X/ { args = $0; sql = 0; next }
+            !sql && $0 == "---" { sql = 1; first = 1; next }
+            !sql { args = args " " $0; next }
+            !first { next }
+            {
+              first = 0
+              if (index(args " ", " -v ticket=" t " ") == 0 || index(args " ", " -v repo=" r " ") == 0) next
+              kind = ""; status = ""
+              if (match(args, / -v kind=[^ ]*/)) kind = substr(args, RSTART + 9, RLENGTH - 9)
+              if (match(args, / -v status=[^ ]*/)) status = substr(args, RSTART + 11, RLENGTH - 11)
+              if ($0 ~ /INSERT INTO events/) event = kind
+              else if ($0 ~ /INSERT INTO runs/ && kind != "distill") {
+                event = ""
+                last = (kind == "review" && status == "pass") ? "ready" : "stopped"
+              }
+            }
+            END { print (event != "" ? event : last != "" ? last : "new") }' "$FAKE_STATE/db.log")"
+          echo "2 0.5000 0 $state" ;;
         *"chalk db upgrade: row counts"*) echo "3 1 2" ;;
         *"'generated_at'"*)
           echo '{"generated_at":"2026-01-01 00:00","days":30,"submitted":0,"detentions":0,"totals":{"calls":0},"note":"</script>"}' ;;

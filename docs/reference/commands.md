@@ -58,8 +58,17 @@ workstreams, from Jira or from FILE, and launches them in the background,
 `CHALK_MAX_PARALLEL` at a time. See [Fleet runs](../guide/running/fleet.md).
 
 **`chalk status`** lists this repository's tickets, most recently active
-first: state (running or idle), loops, cost, office-hours fixes and
-detention branches.
+first: state, loops, cost, office-hours fixes and detention branches. The
+state is `running`, or what the ticket was left in:
+
+| State | Meaning |
+| :-- | :-- |
+| `submitted` | The branch was pushed and the pull or merge request opened |
+| `detained` | Waiting in detention for office hours |
+| `spec-blocked` | The spec check found checkpoints that are not ready |
+| `done` | Every checkpoint is done and reviewed, but nothing was submitted (`CHALK_AUTO_MR=false`, or the push failed); run `chalk submit` |
+| `stopped` | The run ended with none of these, as when it was stopped or failed |
+| `new` | No agent call was ever made |
 
 **`chalk logs TICKET [-f]`** prints the log of a background run; `-f`
 follows it.

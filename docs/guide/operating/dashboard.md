@@ -91,6 +91,16 @@ it ran under, so runs already stopped early under `on` cannot make the
 case for turning it on. They are shown apart, as "Runs stopped early under
 CHALK_FP_RULES=on".
 
+Only runs with a loop that the stopping rules judge count, too: a loop
+whose verdict is not `blocked` or `agent_error`. A run whose every loop
+ended in a blocker or an agent error, such as one detained because the
+agent reported a blocker, says nothing about `deja_vu`, `repeat` or
+`no_change`, and no rule could have saved its spend. Those runs, and
+detained runs with no verdicts at all (`CHALK_FP_RULES=off`), are shown
+apart, with their counts. The kind of detention does not decide it: a run
+detained at the loop limit or by the review counts when its loops were
+judged.
+
 When there are at least twenty detained runs with verdicts, stopping early
 would have saved at least a fifth of their spend without progress, and
 there was at most one false stop, the notes recommend turning the rules
@@ -101,8 +111,14 @@ on.
 - **`CHALK_TEST_REPORT`**: have the rubric write a test report and set
   this to its path in the repository. Three formats are read, told apart
   by their content: JUnit XML (`pytest --junitxml=report.xml`),
-  `go test -json` output (`go test -json ./... > report.json`) and a jest
-  report (`jest --json --outputFile=report.json`). The failing tests are
+  `go test -json` output and a jest report
+  (`jest --json --outputFile=report.json`). The rubric must still print
+  its failures, since a retry is told the last lines of its output:
+  `go test -json` prints only JSON, so for Go use
+  `go test -json ./... > report.json || { go test ./...; exit 1; }`,
+  which runs the tests again for readable output when they fail. A rubric
+  that prints nothing at all gets the failing tests and first error in
+  its retry, as with `CHALK_FP_FEEDBACK=true`. The failing tests are
   then read from the report instead of from the output, and are stored
   with the loop for "Which tests keep failing?". The notes point this out for repositories where most
   failed loops named no tests.

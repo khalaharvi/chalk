@@ -19,10 +19,15 @@ CHALK_SETUP_CMD=
 # Seconds before a hung rubric is killed.
 CHALK_RUBRIC_TIMEOUT=900
 # Optional test report the rubric writes, as a path inside the repo: JUnit
-# XML (e.g. report.xml for pytest --junitxml=report.xml), go test -json
-# output (go test -json ./... > report.json) or a jest --json report
-# (jest --json --outputFile=report.json). The format is read from the
-# content. Names the failing tests more reliably than the rubric's output.
+# XML, go test -json output or a jest --json report, told apart by content.
+# Names the failing tests more reliably than the rubric's output. The
+# rubric must still print its failures: a retry is told the last lines of
+# its output. For example, CHALK_TEST_CMD, then CHALK_TEST_REPORT:
+#   pytest --junitxml=report.xml                                    report.xml
+#   go test -json ./... > report.json || { go test ./...; exit 1; }  report.json
+#   npx jest --json --outputFile=report.json                        report.json
+# go test -json prints only JSON, so that rubric keeps it in the report and,
+# when the tests fail, runs them again for output a person can read.
 CHALK_TEST_REPORT=
 
 # Spend cap per agent loop, in USD, enforced by Claude Code.

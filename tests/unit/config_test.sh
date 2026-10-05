@@ -90,3 +90,49 @@ check "CHALK_FP_FEEDBACK accepts true" \
 check "an invalid CHALK_FP_FEEDBACK stops Chalk with a message" \
   "$BASH" -c '(CHALK_FP_FEEDBACK=yes; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>&1 |
     grep -q "CHALK_FP_FEEDBACK must be .true. or .false."' "$CHALK_HOME"
+
+# Every rubric the template suggests with a test report still prints its
+# failures, under the sandbox's bash and under CI's sh: a retry is told the
+# last lines of the rubric's output, not the report. Fakes stand in for the
+# runners and fail as the real ones do: pytest and go test print to stdout,
+# jest to stderr, and go test -json prints JSON events only.
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/pytest" <<'FAKE'
+#!/bin/sh
+for arg; do case "$arg" in --junitxml=*) echo '<testsuite/>' > "${arg#--junitxml=}" ;; esac; done
+echo 'FAILED test_demo.py::test_marker - AssertionError'
+exit 1
+FAKE
+cat > "$tmp/bin/go" <<'FAKE'
+#!/bin/sh
+case " $* " in
+  *" -json "*) echo '{"Action":"fail","Package":"demo","Test":"TestMarker"}' ;;
+  *) printf -- '--- FAIL: TestMarker (0.00s)\nFAIL\tdemo\t0.01s\n' ;;
+esac
+exit 1
+FAKE
+cat > "$tmp/bin/npx" <<'FAKE'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in --outputFile=*) echo '{"testResults":[]}' > "${1#--outputFile=}" ;; esac
+  shift
+done
+echo 'FAIL test/demo.test.js' >&2
+exit 1
+FAKE
+chmod +x "$tmp/bin/"*
+mapfile -t suggested < <(sed -n '/For example, CHALK_TEST_CMD, then CHALK_TEST_REPORT:/,/^# [^ ]/s/^#   //p' \
+  "$CHALK_HOME/share/templates/config")
+check "the template suggests a rubric with a report for pytest, go and jest" test "${#suggested[@]}" -eq 3
+for line in "${suggested[@]}"; do
+  rubric="${line%%  *}"
+  report="${line##* }"
+  for shell in bash sh; do
+    rm -rf "$tmp/work" && mkdir "$tmp/work"
+    status=0
+    (cd "$tmp/work" && PATH="$tmp/bin:$PATH" "$shell" -c "$rubric" > "$tmp/out" 2>&1) || status=$?
+    check "suggested rubric under $shell fails, prints the failure and writes $report: $rubric" \
+      sh -c 'test "$1" -ne 0 && grep -q FAIL "$2" && ! grep -q "^{" "$2" && test -s "$3"' _ \
+        "$status" "$tmp/out" "$tmp/work/$report"
+  done
+done

@@ -94,7 +94,16 @@ SELECT json_build_object(
   -- done. It detains a run at its first stopping verdict (deja_vu, repeat,
   -- no_change), so the loops after that one are what it would have saved.
   -- A run is detained when a lesson names it; fingerprinted when any of its
-  -- loops has a verdict (not CHALK_FP_RULES=off).
+  -- loops has a verdict (not CHALK_FP_RULES=off); could_stop when one of
+  -- those verdicts was judged by the stopping rules, that is, is not
+  -- blocked or agent_error. Only those runs count towards the bar for
+  -- turning the rules on: a run whose every verdict was a blocker or an
+  -- agent error (such as one detained because the agent reported a
+  -- blocker) holds no evidence about deja_vu, repeat or no_change, and its
+  -- spend is spend no rule could save. Detained runs left out are counted
+  -- apart: blocked_only, and no_verdicts for CHALK_FP_RULES=off.
+  -- The kind of detention is not the test: a run detained at the loop
+  -- limit or by the review can still have loops that repeat themselves.
   -- Only runs in shadow mode are counted (fp_rules shadow, or NULL from
   -- before it was recorded, when shadow was the default). A run under
   -- CHALK_FP_RULES=on already stopped at its first stop: nothing ran after
@@ -105,7 +114,8 @@ SELECT json_build_object(
     ), per_run AS (
       SELECT run_id, min(repo) AS repo, min(ticket) AS ticket,
              EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = l.run_id) AS detained,
-             bool_or(verdict IS NOT NULL) AS fingerprinted,
+             coalesce(bool_or(verdict IS NOT NULL), false) AS fingerprinted,
+             coalesce(bool_or(verdict NOT IN ('blocked', 'agent_error')), false) AS could_stop,
              coalesce(bool_or(fp_rules = 'on'), false) AS rules_on,
              min(loop) FILTER (WHERE verdict IN ('deja_vu', 'repeat', 'no_change')) AS stop_loop,
              (array_agg(verdict ORDER BY loop)
@@ -126,9 +136,13 @@ SELECT json_build_object(
        WHERE NOT p.rules_on
     )
     SELECT json_build_object(
-      'detained_runs', count(*) FILTER (WHERE detained AND fingerprinted),
-      'no_progress_cost', coalesce(sum(no_progress_cost) FILTER (WHERE detained AND fingerprinted), 0),
-      'saved', coalesce(sum(after_cost) FILTER (WHERE detained), 0),
+      'detained_runs', count(*) FILTER (WHERE detained AND could_stop),
+      'no_progress_cost', coalesce(sum(no_progress_cost) FILTER (WHERE detained AND could_stop), 0),
+      'saved', coalesce(sum(after_cost) FILTER (WHERE detained AND could_stop), 0),
+      'blocked_only', count(*) FILTER (WHERE detained AND fingerprinted AND NOT could_stop),
+      'blocked_only_cost', coalesce(sum(no_progress_cost)
+                                      FILTER (WHERE detained AND fingerprinted AND NOT could_stop), 0),
+      'no_verdicts', count(*) FILTER (WHERE detained AND NOT fingerprinted),
       'by_verdict', (SELECT coalesce(json_agg(v ORDER BY v.saved DESC), '[]') FROM (
           SELECT stop_verdict AS verdict, count(*) AS runs, sum(after_cost) AS saved
             FROM lr WHERE detained AND stop_loop IS NOT NULL GROUP BY stop_verdict) v),
@@ -138,8 +152,8 @@ SELECT json_build_object(
       'stopped_on', (SELECT count(*) FROM per_run
                       WHERE rules_on AND detained AND stop_loop IS NOT NULL),
       'runs', (SELECT coalesce(json_agg(x ORDER BY x.last DESC), '[]') FROM (
-          SELECT run_id, repo, ticket, detained, stop_verdict, stop_loop, after_cost,
-                 false_stop, detained AND last_verdict = 'improving' AS converging,
+          SELECT run_id, repo, ticket, detained, could_stop, stop_verdict, stop_loop, after_cost,
+                 false_stop, detained AND last_verdict IS NOT DISTINCT FROM 'improving' AS converging,
                  to_char(last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last
             FROM lr WHERE detained OR stop_loop IS NOT NULL
            ORDER BY lr.last DESC LIMIT 50) x),
