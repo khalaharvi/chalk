@@ -26,6 +26,16 @@ locally (detention) and a human unblocks it (office hours); the fix becomes a
 lesson that later loops receive. Success: a ticket goes from spec to reviewed
 pull request with no babysitting, and every dollar is accounted for.
 
+## Name
+
+"chalk" is also one of the most downloaded npm packages (terminal colors), so
+"chalk cli" or "chalk github" searches find that first. Without renaming,
+always qualify the name as **Chalk harness** wherever it stands alone or gets
+indexed: the README and docs site title, the GitHub repository description,
+the `chalk-harness` repository topic, and the title and first line of every
+post, announcement or talk. Body copy that already sits under that title can
+say plain "Chalk". Never write "chalk CLI" as a name.
+
 ## Positioning
 
 The harness, not the agent, decides whether a checkpoint is done: it runs the

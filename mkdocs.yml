@@ -5,7 +5,7 @@
 #   .venv/bin/mkdocs serve        # or: make docs
 #
 # Design: docs/superpowers/specs/2026-10-03-docs-and-visuals-design.md
-site_name: Chalk
+site_name: Chalk harness
 site_description: >-
   Runs Claude Code agents in disposable sandboxes, one checkpoint at a time,
   with a spend cap per loop, a test gate and a human escalation path.
