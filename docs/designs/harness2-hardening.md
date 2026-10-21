@@ -3,7 +3,7 @@
 Generated on 2026-10-21
 Branch: main
 Repo: khalaharvi/chalk
-Status: DRAFT, for review
+Status: DRAFT, four review decisions recorded (see Decisions)
 Mode: Research. No code changes; each part below proposes PRs to be approved one at a time.
 Reference: [google-research/harness2](https://github.com/google-research/harness2) (Apache-2.0), read at its default branch on 2026-10-21. Nothing from it was run.
 
@@ -110,7 +110,7 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 - `agent_call` records its exit code in `$io/$name.exit` and wraps the call in `timeout "$CHALK_AGENT_TIMEOUT"` (new key, default 1800 s), as `agent_start_mode` already does.
 - `agent_failure -> REPLY` classifies a failed call from the exit code, `.subtype` and the last lines of `.err` into one of `timeout`, `auth`, `rate_limit`, `usage_limit`, `overloaded`, `budget`, `cli_missing`, `crash`. Patterns live in one table with tests against recorded CLI outputs. It is a value function and never fails.
 - The detention reason and the `runs` row (new nullable `failure` column) carry the class and the first useful `.err` line; the lesson signature for `agent_error` uses that, not `rubric.log`.
-- Review and spec check: "no verdict" becomes its own outcome. `CHALK_REVIEW_REQUIRED` (new key, default `true`) detains with kind `review_error`; when `false`, the PR body says "the final review did not run: <class>".
+- Review and spec check: "no verdict" becomes its own outcome. `CHALK_REVIEW_REQUIRED` (new key, default `true`, Decision 2) detains with kind `review_error` and exit 3, so no pull request opens without a review; when `false`, the PR body says "the final review did not run: <class>".
 - Rubric exit codes 124, 137 and 125-127 map to `rubric_timeout` (names `CHALK_RUBRIC_TIMEOUT`), `rubric_oom` and `rubric_broken`; `rubric_broken` detains at once instead of asking the agent to fix it.
 
 **E-PR3: Evidence that survives (`fix(run)`)**, covering E6, E25 and E26.
@@ -120,7 +120,7 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 - `run_claim` takes `chalk_lock "run-$TICKET" 0`.
 
 **E-PR4: Exit codes, the ERR trap and value functions (`fix(core)`)**, covering E12, E13, E18, E19 and E23.
-- Exit codes, documented in `docs/reference/exit-codes.md` and frozen at 1.0: `0` success, `1` Chalk internal error, `2` usage, `3` detention (a human is needed), `4` environment not ready (doctor or pre-flight), `5` a fleet where some tickets did not launch, `128+n` signals.
+- Exit codes (Decision 1), documented in `docs/reference/exit-codes.md`, with the CI gate templates updated in the same PR, and frozen at 1.0: `0` success, `1` Chalk internal error, `2` usage, `3` detention (a human is needed), `4` environment not ready (doctor or pre-flight), `5` a fleet where some tickets did not launch, `128+n` signals.
 - The ERR trap tells a failed substitution apart with a `RUNTIME_IN_SUBST` flag set by the substitution helpers, instead of matching command text.
 - The three value functions end with `:` and return an empty REPLY. A `make check` lint flags any `-> REPLY` function whose last command can fail.
 - `jobs` kills `JOBS_RUNNING` from the EXIT handler; one per-process temp directory is removed on EXIT.
@@ -166,7 +166,13 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 
 **F-PR3: Do shared work once (`perf(sandbox)`)**, covering F4, F5 and F6.
 - The image build and the schema apply run under `chalk_lock`; the schema carries a version row and is skipped when current.
-- Opt-in `CHALK_CACHE_DIRS` (for example `~/.npm ~/.cache/pip ~/go/pkg/mod`) mounts a per-repo named volume, `chalk-cache-$REPO_ID`, read-write at those paths in the sandbox. Default off, because a shared cache is a channel between runs; `chalk doctor` reports its size. The report card shows setup time with and without it.
+- Opt-in `CHALK_CACHE_DIRS` (for example `~/.npm ~/.cache/pip ~/go/pkg/mod`), default off. The rules (Decision 4):
+  - **Keyed by the base commit's dependency files.** The key is a hash of the lockfiles and manifests (`package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `requirements*.txt`, `go.sum`, `Cargo.lock`, …) *at the run's base commit*, plus the image digest. A merge to main that changes dependencies changes the key, so the next run never sees stale libraries.
+  - **Seeded only before the agent runs.** A snapshot for a key is written once, from the state after `CHALK_SETUP_CMD` succeeds at the base commit, before loop 1. Installs the agent makes later stay in that run's tmpfs and are thrown away with the sandbox; they never reach the snapshot.
+  - **Copy-on-start, never shared writable.** Each run gets its own copy of the snapshot (`docker cp` from a read-only volume, or an overlay); concurrent runs never write to the same directory. Seeding takes `chalk_lock "cache-$KEY"`; a run that finds the lock held runs setup without a cache instead of waiting.
+  - **Setup still runs.** With a hit, `CHALK_SETUP_CMD` still runs and is expected to be fast; a hit is never trusted in place of setup.
+  - **Bounded.** The newest 3 keys per repo are kept; `chalk cleanup` and `chalk doctor` report and prune them.
+  - The report card shows setup time with and without a hit.
 - The decider queue grows with the fleet: `DECIDER_QUEUE_MS` scales with live runs up to the loop's 2 s host budget, and `busy` answers are counted on the decider panel so the starvation is visible. A decider with `parallel > 1` in its `/health` is not serialised.
 
 ---
@@ -223,7 +229,7 @@ Harness² optimises without ground truth and spends most of its machinery making
 **T-PR2: The harness pack (`feat(agent)`).**
 - `.chalk/harness/`, committed in the repo, is a file tree with Harness²'s "omitted is inherited" rule on top of Chalk's defaults: `system.md`, `textbook.md`, `skills/<name>/SKILL.md`, `scripts/<name>.sh`. The allowed paths come from `harness_surface` (Part 3); for Claude Code, skills are materialised into `/work/repo/.claude/skills/` in the sandbox clone only, never in the user's checkout.
 - `harness_validate` checks what Harness²'s `tree.py:336-390` checks, translated: an always-on size cap (`CHALK_HARNESS_ALWAYS_ON_MAX`, 8000 chars), skill frontmatter with a trigger line, scripts pass `bash -n` and `shellcheck`, every referenced script exists, and nothing names a forge credential or a path outside the repo.
-- `.chalk/prompts/` keeps working; `chalk prompts eject` writes into the pack. `chalk doctor` validates the pack.
+- `.chalk/prompts/` keeps working as a legacy location; `.chalk/harness/` wins when both define a prompt, and `chalk doctor` warns (Decision 3). `chalk prompts eject` writes into the pack. `chalk doctor` validates the pack.
 - **Done when:** a pack with one skill runs a ticket end to end with fake claude, the skill reaches the sandbox, and a pack that fails validation stops before loop 1 with exit 4 and the reason.
 
 **T-PR3: Evidence-gated lessons (`feat(lifecycle)`).** Harness²'s library gate applied to what Chalk already has.
@@ -260,14 +266,19 @@ Harness² optimises without ground truth and spends most of its machinery making
 
 Housekeeping found along the way: the detailed roadmap describes `lib/decider.sh` as new Q2 work, but it is already on main (1491 lines, with off/shadow/on, the calibration gate and the rerank). The roadmap should be updated to say so.
 
+## Decisions
+
+Settled in review on 2026-10-21:
+
+1. **Detention gets its own exit code, 3, now, before 1.0.** Every consumer that learns from outcomes (the fleet supervisor, `chalk tune`'s ledger, CI mode) needs to tell "a human is needed" from "Chalk broke" without parsing logs, and a crash counted as a detention would teach the tuner the wrong thing. E-PR4 updates the CI gate templates in `share/templates/` in the same PR, and the release notes call out the change for scripts that test for 1.
+2. **A review that fails to run blocks the pull request.** `CHALK_REVIEW_REQUIRED` defaults to `true` and the run detains with kind `review_error` (exit 3). `false` remains for repos that opt out, and then the request body says the review did not run, and why.
+3. **The harness pack lives in `.chalk/harness/`.** `.chalk/prompts/` keeps working as a legacy location; when both define the same prompt, `.chalk/harness/` wins and `chalk doctor` warns. "Syllabus" stays an internal metaphor for now and is not added to the glossary.
+4. **Dependency caches never carry one run's dependency changes into another.** Each run starts from a fresh branch off the latest base, and something may have merged in between, so a cache must reflect the run's own base commit, never another run's edits. See F-PR3's cache rules.
+
 ## Open Questions
 
-1. **Exit code 3 for detention** changes what scripts and the CI gate templates see today (1). Ship it behind a release note only, or keep 1 until 1.0?
-2. **`CHALK_REVIEW_REQUIRED` default.** `true` turns today's silent pass into a detention. Proposed `true`, because a PR that claims review and did not get one is the worse failure.
-3. **The harness pack's name and place.** `.chalk/harness/` versus extending `.chalk/prompts/`; and whether "syllabus" earns a place in the glossary or stays internal.
-4. **Sharing tune results.** Should `chalk share` include "packs accepted" and "tune: effect / no effect" counts? Proposed: counts only, never pack contents; needs a `PRIVACY.md` update.
-5. **Cache volumes.** Is a per-repo cache shared between concurrent runs of the same repo acceptable, or should it be copy-on-start (slower, isolated)?
-6. **Improver model.** Proposals use `CHALK_REVIEW_MODEL` by default. Should a decider ever propose edits, or stay limited to bounded questions?
+1. **Sharing tune results.** Should `chalk share` include "packs accepted" and "tune: effect / no effect" counts? Proposed: counts only, never pack contents; needs a `PRIVACY.md` update.
+2. **Improver model.** Proposals use `CHALK_REVIEW_MODEL` by default. Should a decider ever propose edits, or stay limited to bounded questions?
 
 ## Not doing
 
