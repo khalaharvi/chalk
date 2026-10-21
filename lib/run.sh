@@ -21,6 +21,11 @@ run_context() {
   RUN_LOOP=0
   RUN_REVIEW_SUMMARY=""
   RUN_REVIEW_FINDINGS=""
+  # Why the final review did not run, when it did not (run_review).
+  RUN_REVIEW_ERROR=""
+  # Why the latest agent call failed, as agent_failure says; empty when it
+  # did not. Recorded with the call, and read by run_next_step.
+  RUN_CALL_FAILURE=""
   RUN_LESSONS=0
   RUN_CALL_SECONDS=0
   # Permission refusals in the latest loop, and the ticket whose open
@@ -68,12 +73,46 @@ run_prompts_version() {
 }
 
 # run_call NAME MODEL SCHEMA ACCESS, with the prompt on stdin: an agent call
-# in this run's sandbox, timed into RUN_CALL_SECONDS.
+# in this run's sandbox, timed into RUN_CALL_SECONDS, with why it failed, if
+# it did, in RUN_CALL_FAILURE.
 run_call() {
   local started=$SECONDS status=0
   agent_call "$RUN_SANDBOX" "$RUN_IO" "$@" || status=$?
   RUN_CALL_SECONDS=$((SECONDS - started))
+  RUN_CALL_FAILURE="${| agent_failure "$RUN_IO" "$1"; }"
   return "$status"
+}
+
+# run_failure_step CLASS [RESUME] -> REPLY: what to do about an agent call
+# that failed with CLASS (see agent_failure). RESUME says how to go on
+# afterwards; by default, from a detention, with office hours.
+run_failure_step() {
+  local resume="${2:-resume with chalk office-hours}"
+  case "$1" in
+    tls)         REPLY="the sandbox does not trust this network's TLS certificates, as behind a proxy that re-signs HTTPS: set CHALK_EXTRA_CA_CERTS to a PEM file of its CA certificates (see Troubleshooting), then $resume" ;;
+    network)     REPLY="the sandbox could not reach the API: check the network and any proxy, then $resume" ;;
+    auth)        REPLY="the agent's credentials were refused: check ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN (chalk doctor says which one is used), then $resume" ;;
+    cli_missing) REPLY="the claude CLI could not start in sandbox image $CHALK_IMAGE: rebuild the default image with chalk sandbox build, or install Claude Code in your own image" ;;
+    usage_limit) REPLY="the Claude plan's usage limit was reached: wait until it resets, then $resume" ;;
+    rate_limit|overloaded|server)
+                 REPLY="the API was busy or failing: in a few minutes, $resume" ;;
+    timeout)     REPLY="the agent gave no answer within CHALK_AGENT_TIMEOUT (now ${CHALK_AGENT_TIMEOUT}s): make the checkpoint smaller, or raise it" ;;
+    budget)      REPLY="the call reached its spend cap: raise CHALK_BUDGET_USD (now $CHALK_BUDGET_USD), or make the checkpoint smaller" ;;
+    max_turns)   REPLY="the agent ran out of turns: make the checkpoint smaller" ;;
+    *)           REPLY="see why the agent stopped in $RUN_IO/loop.json and loop.err" ;;
+  esac
+}
+
+# run_rubric_reason EXIT -> REPLY: why a loop failed, for a rubric that
+# exited with EXIT. timeout(1) exits 124, a killed process 137 (usually out
+# of memory), and bash 126 or 127 when a command cannot run.
+run_rubric_reason() {
+  case "$1" in
+    124)     REPLY="rubric timed out after ${CHALK_RUBRIC_TIMEOUT}s (CHALK_RUBRIC_TIMEOUT)" ;;
+    137)     REPLY="rubric was killed (exit 137), usually because the sandbox ran out of memory" ;;
+    126|127) REPLY="rubric failed (exit $1): a command it runs was not found or cannot be executed" ;;
+    *)       REPLY="rubric failed (exit $1)" ;;
+  esac
 }
 
 run_teardown() {
@@ -435,6 +474,12 @@ run_spec_check() {
   } > "$RUN_IO/spec-check.prompt.md"
   run_call spec-check "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[spec]}" read < "$RUN_IO/spec-check.prompt.md" || true
   sandbox_reset "$RUN_SANDBOX"
+  local class
+  class="${| agent_failure_class "$RUN_CALL_FAILURE"; }"
+  if [[ -n $RUN_CALL_FAILURE ]] && ! agent_failure_retryable "$class"; then
+    run_db db_record_call spec-check none 0 false "$CHALK_CHEAP_MODEL" "$RUN_CALL_SECONDS" 0 "$result"
+    die "the spec check could not run ($RUN_CALL_FAILURE); ${| run_failure_step "$class" "run chalk run again"; }"
+  fi
 
   verdict="$(agent_field "$result" '.verdict')"
   run_db db_record_call spec-check "${verdict:-none}" 0 false "$CHALK_CHEAP_MODEL" "$RUN_CALL_SECONDS" 0 "$result"
@@ -448,14 +493,16 @@ run_spec_check() {
       run_log "$(agent_field "$result" '.problems[] | "  - \(.checkpoint)\n    problem: \(.problem)"
         + (if .suggestion then "\n    suggestion: \(.suggestion)" else "" end)')"
       return 1 ;;
-    *) warn "spec check returned no verdict; continuing without it" ;;
+    *) warn "spec check returned no verdict${RUN_CALL_FAILURE:+ ($RUN_CALL_FAILURE)}; continuing without it" ;;
   esac
 }
 
-# Independent review of the finished work. Returns non-zero only on an
-# explicit "fail" verdict, leaving the findings in RUN_REVIEW_FINDINGS.
+# Independent review of the finished work. Returns 1 on an explicit "fail"
+# verdict, leaving the findings in RUN_REVIEW_FINDINGS, and 2 when the
+# review gave no verdict and CHALK_REVIEW_REQUIRED is true, with why in
+# RUN_REVIEW_ERROR.
 run_review() {
-  RUN_REVIEW_FINDINGS=""
+  RUN_REVIEW_FINDINGS="" RUN_REVIEW_ERROR=""
   [ "$CHALK_REVIEW" = "true" ] || return 0
   local result="$RUN_IO/review.json" verdict
 
@@ -478,7 +525,11 @@ run_review() {
       '.findings[] | "- [\(.severity)] " + (if .file then "\(.file): " else "" end) + .issue')"
     return 1
   fi
-  if [ -z "$verdict" ]; then warn "final review returned no verdict; continuing without it"; fi
+  if [[ -z $verdict ]]; then
+    RUN_REVIEW_ERROR="${RUN_CALL_FAILURE:-it gave no verdict}"
+    [[ $CHALK_REVIEW_REQUIRED != true ]] || return 2
+    warn "the final review did not run ($RUN_REVIEW_ERROR); opening the request without it, as CHALK_REVIEW_REQUIRED=false"
+  fi
 }
 
 # A loop with at least this many permission refusals points to auto mode.
@@ -497,7 +548,8 @@ run_next_step() {
     loop_limit)  REPLY="split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now $CHALK_MAX_LOOPS)" ;;
     review)      REPLY="fix the review findings above, or raise CHALK_REVIEW_ROUNDS (now $CHALK_REVIEW_ROUNDS)" ;;
     failed)      REPLY="the rubric still fails after $CHALK_MAX_RETRIES retries; fix the failure in $RUN_IO/rubric.log, or make the checkpoint smaller" ;;
-    agent_error) REPLY="see why the agent stopped in $RUN_IO/loop.json; if it ran out of budget, raise CHALK_BUDGET_USD (now $CHALK_BUDGET_USD)" ;;
+    agent_error) run_failure_step "${| agent_failure_class "$RUN_CALL_FAILURE"; }" ;;
+    review_error) REPLY="the final review could not run: ${| run_failure_step "${| agent_failure_class "$RUN_CALL_FAILURE"; }"; }; or set CHALK_REVIEW_REQUIRED=false to open requests without a review" ;;
     sync)        REPLY="$RUN_BRANCH changed in $RUN_WT during the run, so the loop's commits could not be fast-forwarded onto it; merge the detention branch into $RUN_BRANCH yourself, and commit nothing to a branch while Chalk runs on it" ;;
     passed)      REPLY="the rubric passes but no checkpoint was ticked; tick it if it is done, or make it testable" ;;
     deja_vu)     REPLY="this fails like the open detention of ${RUN_OPEN_TICKET:-another ticket}; fix that one first" ;;
@@ -551,7 +603,7 @@ run_detain() {
   if [ -n "$detail" ]; then
     signature="$signature
 $detail"
-  elif [ -s "$RUN_IO/rubric.log" ]; then
+  elif [[ $kind != @(agent_error|review_error) && -s $RUN_IO/rubric.log ]]; then
     signature="$signature
 $(tail -n 40 "$RUN_IO/rubric.log")"
   fi
@@ -577,6 +629,9 @@ run_graduate() {
   if [ -n "$RUN_REVIEW_SUMMARY" ]; then
     review="
 - Agent review before submission: $RUN_REVIEW_SUMMARY"
+  elif [[ -n $RUN_REVIEW_ERROR ]]; then
+    review="
+- Agent review before submission: did not run ($RUN_REVIEW_ERROR)"
   fi
 
   need "${| forge_cli; }"
@@ -628,7 +683,7 @@ cmd_run() {
       die "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
   fi
 
-  local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke=""
+  local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke="" reviewed
   local open remaining result agent_status rubric_exit progressed output stuck key
   local -a lesson
   local -A usage fp base recall=()
@@ -640,9 +695,15 @@ cmd_run() {
 
     # Every checkpoint is ticked: review, then either submit or fix findings.
     if [ "$open" -eq 0 ] && [ -z "$findings" ]; then
-      if run_review; then
+      reviewed=0
+      run_review || reviewed=$?
+      if (( reviewed == 0 )); then
         run_graduate
         return 0
+      fi
+      if (( reviewed == 2 )); then
+        run_detain review_error "the final review did not run ($RUN_REVIEW_ERROR)"
+        return 1
       fi
       failed_reviews=$((failed_reviews + 1))
       if [ "$failed_reviews" -gt "$CHALK_REVIEW_ROUNDS" ]; then
@@ -665,9 +726,9 @@ cmd_run() {
 
     run_build_prompt "$mode" "$feedback" "$findings" recall > "$RUN_IO/prompt.md"
     run_log "loop $RUN_LOOP ($mode) started"
+    run_call loop "$CHALK_MODEL" "${CHALK_SCHEMA[loop]}" write < "$RUN_IO/prompt.md" || true
     agent_status="ok"
-    run_call loop "$CHALK_MODEL" "${CHALK_SCHEMA[loop]}" write < "$RUN_IO/prompt.md" || agent_status="error"
-    if [ -n "$(agent_error "$result")" ]; then agent_status="$(agent_error "$result")"; fi
+    if [[ -n $RUN_CALL_FAILURE ]]; then agent_status="${| agent_failure_class "$RUN_CALL_FAILURE"; }"; fi
     agent_usage "$result" usage
     RUN_DENIALS="${usage[denials]}"
 
@@ -689,10 +750,10 @@ cmd_run() {
     reason=""
     progressed="false"
     if [ "$agent_status" != "ok" ]; then
-      reason="agent stopped early ($agent_status)"
+      reason="agent stopped early ($RUN_CALL_FAILURE)"
       ended="agent_error"
     elif [ "$rubric_exit" -ne 0 ]; then
-      reason="rubric failed (exit $rubric_exit)"
+      reason="${| run_rubric_reason "$rubric_exit"; }"
       ended="failed"
     else
       sandbox_commit "$RUN_SANDBOX" "chalk($RUN_TICKET): $mode, loop $RUN_LOOP"
@@ -751,6 +812,12 @@ cmd_run() {
       continue
     fi
 
+    # A call that fails the same way every time, such as one whose
+    # credentials were refused, is not retried.
+    if [[ $ended == agent_error ]] && ! agent_failure_retryable "$agent_status"; then
+      run_detain agent_error "$reason"
+      return 1
+    fi
     # A lesson carries the fingerprint only of a loop whose rubric failed.
     lesson=("" "")
     if [ "$ended" = "failed" ]; then lesson=("${fp[fingerprint]-}" "${fp[first_error]-}"); fi

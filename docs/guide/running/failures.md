@@ -15,7 +15,9 @@ do about it.
 | :-- | :-- | :-- |
 | `agent reported a blocker` | The agent answered `blocked`, for example for a missing credential or a contradiction in the spec. Retrying cannot fix that, so there is no retry. | Provide what the agent asked for (printed above it): a credential, access or a decision |
 | `rubric failed (exit N)` | The rubric failed on `CHALK_MAX_RETRIES` + 1 loops in a row. | Fix the failure in `io/rubric.log`, or make the checkpoint smaller |
-| `agent stopped early (...)` | Retries ran out, and the last loop's Claude Code call ended with an error, for example at the spend cap. | See why in `io/loop.json`; if it ran out of budget, raise `CHALK_BUDGET_USD` |
+| `agent stopped early (CLASS: message)` | The loop's Claude Code call failed. CLASS says how, and the message is the CLI's own. A failure that would repeat (`tls`, `auth`, `cli_missing`, `usage_limit`) detains at once; the others (`network`, `rate_limit`, `overloaded`, `server`, `timeout`, `budget`, `max_turns`, `error`, `crash`) are retried first. | One line per class, for example: check `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (`auth`); set `CHALK_EXTRA_CA_CERTS` (`tls`); raise `CHALK_AGENT_TIMEOUT` (`timeout`) or `CHALK_BUDGET_USD` (`budget`) |
+| `rubric timed out after Ns (CHALK_RUBRIC_TIMEOUT)` | The rubric ran longer than `CHALK_RUBRIC_TIMEOUT` on every retry. A rubric killed with exit 137, usually for running out of memory, and one whose command was not found (126, 127) are named the same way. | Fix the failure in `io/rubric.log`, or make the checkpoint smaller |
+| `the final review did not run (CLASS: message)` | The final review's call failed, and `CHALK_REVIEW_REQUIRED` is `true` (the default), so nothing is pushed without a review. | Fix what the line for CLASS says, then `chalk office-hours`; or set `CHALK_REVIEW_REQUIRED=false` to open requests that say the review did not run |
 | `rubric passed but no checkpoint was ticked in the spec` | Retries ran out, and the last loop left the tests passing without finishing a checkpoint. | Tick it if it is done, or make it testable |
 | `loop limit of N reached with M checkpoints open` | The run used `CHALK_MAX_LOOPS` loops. | Split the open checkpoints, or raise `CHALK_MAX_LOOPS` |
 | `final review still finds problems after N fix round(s)` | The final review failed again after `CHALK_REVIEW_ROUNDS` fix rounds. The findings are printed. | Fix the findings, or raise `CHALK_REVIEW_ROUNDS` |
@@ -23,6 +25,9 @@ do about it.
 | `repeat: …` | Only with `CHALK_FP_RULES=on`: the same failing change as the loop before. | Fix the failure yourself; a retry would repeat it |
 | `no_change: …` | Only with `CHALK_FP_RULES=on`: the agent changed nothing. | Make the checkpoint clearer, or do the step yourself |
 | `the loop's commits could not be brought onto chalk/<TICKET>` | The branch changed in its worktree during the run (a commit or an edit there), so the loop's commits could not be fast-forwarded onto it. Git's reason is printed. | Merge the detention branch into `chalk/<TICKET>` yourself, and commit nothing to a branch while Chalk runs on it |
+
+When the spec check's call fails in a way that would repeat, such as a
+refused key, the run stops before the first loop with the same advice.
 
 The verdicts are explained in [Verdicts](../operating/dashboard.md#verdicts).
 Whatever the reason, when the last loop had three or more actions refused

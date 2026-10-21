@@ -13,7 +13,7 @@ $$;
 
 -- One row per agent call: what it cost, what it used and what came of it.
 --   kind          continue | retry | fix-review | spec-check | review | distill
---   agent_status  loops: ok | blocked | <cli error>; checks: pass | fail | none
+--   agent_status  loops: ok | blocked | <failure class>; checks: pass | fail | none
 --   loop          position in the run; 0 for calls outside the loop
 --   progressed    the call moved the ticket forward (a checkpoint was ticked
 --                 and committed, or review findings were fixed)
@@ -97,6 +97,9 @@ ALTER TABLE runs ADD COLUMN IF NOT EXISTS fp_rules TEXT;
 -- report card's tests that keep failing. Only the first 100 are kept, so a
 -- row stays small; NULL when they are unknown.
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS failing_tests TEXT;
+-- Why the call failed, as "CLASS: detail" (agent_failure in lib/agent.sh),
+-- such as "auth: Invalid API key (HTTP 401)"; NULL when it did not.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS failure TEXT;
 -- fingerprint is set only for detentions after a failed rubric.
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS run_id TEXT;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fingerprint TEXT;

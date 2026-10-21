@@ -47,7 +47,10 @@ agent_write_system() {
 CHALK_READ_TOOLS=(Read Grep Glob "Bash(git diff *)" "Bash(git log *)" "Bash(git show *)" "Bash(git status *)")
 
 # agent_call SANDBOX IO_DIR NAME MODEL SCHEMA ACCESS, with the prompt on stdin.
-# Writes the raw CLI result to IO_DIR/NAME.json. ACCESS is one of:
+# Writes the raw CLI result to IO_DIR/NAME.json, what it printed on stderr
+# to NAME.err and its exit status to NAME.exit; agent_failure reads them.
+# A call with no answer after CHALK_AGENT_TIMEOUT seconds is stopped
+# (exit 124). ACCESS is one of:
 #   write  the agent may edit and run commands, under CHALK_PERMISSION_MODE
 #   read   only the tools in CHALK_READ_TOOLS; everything else is denied
 agent_call() {
@@ -63,8 +66,11 @@ agent_call() {
   else
     args+=(--permission-mode auto)
   fi
-  docker exec -i -w /work/repo "$sandbox" claude "${args[@]}" \
-    > "$io/$name.json" 2> "$io/$name.err"
+  local status=0
+  docker exec -i -w /work/repo "$sandbox" timeout "$CHALK_AGENT_TIMEOUT" claude "${args[@]}" \
+    > "$io/$name.json" 2> "$io/$name.err" || status=$?
+  printf '%s\n' "$status" > "$io/$name.exit"
+  return "$status"
 }
 
 # The Agent SDK's first request to the CLI. Claude Code answers it with the
@@ -140,9 +146,81 @@ agent_usage() {
   )
 }
 
-# Prints the CLI's error subtype if the call ended in an error, else nothing.
-agent_error() {
-  jq -r 'select(.is_error == true) | .subtype // "error"' "$1" 2>/dev/null || true
+# What the CLI's messages say, in lower case, for agent_failure.
+AGENT_NO_CLI='*@(executable file not found|claude: not found|claude: command not found)*'
+AGENT_AUTH_TEXT='*@(invalid api key|authentication|oauth token)*'
+AGENT_TLS_TEXT='*@(self-signed certificate|self_signed_cert|unable to verify the first certificate|unable to get local issuer certificate|certificate has expired)*'
+AGENT_NETWORK_TEXT='*@(unable to connect|econnrefused|econnreset|enotfound|etimedout|eai_again)*'
+
+# agent_failure IO_DIR NAME -> REPLY: why the call NAME (see agent_call)
+# failed, as "CLASS: detail", or empty when it did not. The detail is the
+# CLI's own message where it gave one. CLASS is one of
+#   timeout      no answer within CHALK_AGENT_TIMEOUT
+#   cli_missing  the claude CLI could not be started in the sandbox
+#   tls          the sandbox does not trust the API's certificate, as behind
+#                a proxy that re-signs HTTPS (see CHALK_EXTRA_CA_CERTS)
+#   network      the API could not be reached
+#   auth         the credentials were refused (HTTP 401 or 403)
+#   rate_limit   the API asked to slow down (HTTP 429)
+#   usage_limit  the Claude plan's usage limit was reached
+#   overloaded   the API was overloaded (HTTP 529) or unavailable (503)
+#   server       another server error (HTTP 5xx)
+#   budget       the call reached --max-budget-usd (CHALK_BUDGET_USD)
+#   max_turns    the call ran out of turns
+#   error        any other error the CLI reported
+#   crash        the CLI exited without a readable answer
+# Claude Code reports an API error with is_error true, subtype "success",
+# terminal_reason "api_error" and the HTTP status in api_error_status, and
+# prints nothing on stderr (2.1.x), so the subtype alone says nothing.
+# shellcheck disable=SC2053 # the AGENT_* patterns are meant as patterns
+agent_failure() {
+  local io="$1" name="$2" status="" http="" subtype="" message="" err="" text
+  local -a row=()
+  REPLY=""
+  if [[ -f $io/$name.exit ]]; then read -r status < "$io/$name.exit" || true; fi
+  [[ $status =~ ^[0-9]+$ ]] || status=0
+  mapfile -t row < <(jq -r 'select(.is_error == true) | (.api_error_status // "" | tostring),
+      (.subtype // ""), ((((.result // "") | tostring | split("\n") | .[0]) // "")
+      | if length > 300 then .[0:300] + "…" else . end)' \
+    "$io/$name.json" 2>/dev/null || true)
+  http="${row[0]-}" subtype="${row[1]-}" message="${row[2]-}"
+  if [[ -s $io/$name.err ]]; then
+    err="$(grep -v '^[[:space:]]*$' "$io/$name.err" 2>/dev/null | tail -n 1 | cut -c1-300 || true)"
+  fi
+  text="${message@L}"
+  if (( status == 124 )); then
+    REPLY="timeout: no answer within ${CHALK_AGENT_TIMEOUT:-?}s (CHALK_AGENT_TIMEOUT)"
+  elif (( status >= 125 && status <= 127 )) || [[ ${err@L} == $AGENT_NO_CLI ]]; then
+    REPLY="cli_missing: ${err:-exit $status}"
+  elif (( ${#row[@]} )); then
+    if [[ $text == $AGENT_TLS_TEXT ]]; then REPLY="tls"
+    elif [[ $text == $AGENT_NETWORK_TEXT ]]; then REPLY="network"
+    elif [[ $http == @(401|403) || $text == $AGENT_AUTH_TEXT ]]; then REPLY="auth"
+    elif [[ $http == 429 ]]; then REPLY="rate_limit"
+    elif [[ $text == *"usage limit"* ]]; then REPLY="usage_limit"
+    elif [[ $http == @(503|529) || $text == *overloaded* ]]; then REPLY="overloaded"
+    elif [[ $http == 5[0-9][0-9] ]]; then REPLY="server"
+    elif [[ $subtype == *budget* ]]; then REPLY="budget"
+    elif [[ $subtype == error_max_turns ]]; then REPLY="max_turns"
+    else REPLY="error"
+    fi
+    REPLY+=": ${message:-${subtype:-the CLI gave no message}}${http:+ (HTTP $http)}"
+  elif (( status != 0 )) || ! jq -e 'type == "object"' "$io/$name.json" >/dev/null 2>&1; then
+    REPLY="crash: ${err:-exit $status, and no answer}"
+  fi
+}
+
+# agent_failure_class FAILURE -> REPLY: the CLASS of an agent_failure.
+agent_failure_class() {
+  REPLY="${1%%:*}"
+}
+
+# agent_failure_retryable CLASS: true when a retry of the same call can
+# succeed. An untrusted certificate, refused credentials, a CLI that cannot
+# start and a used-up plan fail the same way every time, so a run stops at
+# once instead.
+agent_failure_retryable() {
+  [[ $1 != @(tls|auth|cli_missing|usage_limit) ]]
 }
 
 cmd_prompts() {
