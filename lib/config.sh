@@ -60,6 +60,10 @@ declare -gA CHALK_ENV_DEFAULTS=(
   # Seconds a run's start of the local decider waits for it; auto adapts
   # to the machine.
   [CHALK_DECIDER_TIMEOUT]=auto
+  # An absolute path to a PEM file of extra CA certificates, for a network
+  # that intercepts TLS, such as a corporate proxy. The sandbox image build
+  # and every sandbox trust it, as well as the CAs the image already has.
+  [CHALK_EXTRA_CA_CERTS]=""
 )
 
 # Settings of the Hindsight lesson memory, which was removed. They are
@@ -72,6 +76,15 @@ declare -gA CHALK_REMOVED_KEYS=(
 )
 # Set once the warning about them has been given, so it is given once.
 CHALK_REMOVED_WARNED=""
+
+# config_check_ca: stops Chalk when CHALK_EXTRA_CA_CERTS is set but cannot
+# be mounted into a sandbox. Docker reads a relative path as a volume name.
+config_check_ca() {
+  local file="${CHALK_EXTRA_CA_CERTS:-}"
+  [[ -n $file ]] || return 0
+  [[ $file == /* ]] || die "CHALK_EXTRA_CA_CERTS must be an absolute path (got '$file')"
+  [[ -f $file && -r $file ]] || die "CHALK_EXTRA_CA_CERTS names no readable file: $file"
+}
 
 # load_config ROOT: sets every CHALK_* setting for the repository at ROOT.
 load_config() {
@@ -140,6 +153,7 @@ load_config() {
     die "CHALK_MAX_PARALLEL must be 'auto' or a positive whole number (got '$CHALK_MAX_PARALLEL')"
   [[ $CHALK_SANDBOX_MEM_MB =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
+  config_check_ca
   [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"
   case "$CHALK_DECIDER" in

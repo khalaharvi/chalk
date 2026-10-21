@@ -15,6 +15,7 @@ first use.
 | Docker CLI and daemon | yes | Install and start Docker Desktop, OrbStack or Colima |
 | `gh` or `glab`, signed in | yes | Install it and run `gh auth login` or `glab auth login`. Which one depends on the `origin` remote, or `CHALK_FORGE` |
 | Agent credentials | yes | Run `claude setup-token` and export `CLAUDE_CODE_OAUTH_TOKEN` to use your Claude subscription, or export `ANTHROPIC_API_KEY`. See [Sign in to Claude](../../getting-started.md#sign-in-to-claude) |
+| Extra CA certificates | only when `CHALK_EXTRA_CA_CERTS` is set | The file must hold PEM certificates; see [behind a proxy](#behind-a-proxy-that-intercepts-tls) |
 | `claude` on the host | no | Only `chalk fleet` planning needs it |
 | Telemetry database | no | Starts on the first run, or `chalk db up` |
 | Database on Postgres 17 | no | `chalk db upgrade`; see [the database](dashboard.md#the-database) |
@@ -57,6 +58,36 @@ mode is probably unavailable, so every edit is refused; a detention after
 a loop with three or more refusals says so in its `next:` line. Run
 `chalk doctor`, which checks auto mode for `CHALK_MODEL`, and see
 [auto mode requirements](../configuring/permissions.md#auto-mode-requirements).
+
+### Behind a proxy that intercepts TLS
+
+Some networks, such as many corporate ones, re-sign every HTTPS
+connection with their own certificate authority. Then the sandbox image
+build fails at `npm install`, and agent calls fail, with
+`SELF_SIGNED_CERT_IN_CHAIN` or `certificate verify failed`. Chalk's error
+says so and names the fix: export `CHALK_EXTRA_CA_CERTS` with the absolute
+path of a PEM file of the network's CA certificates (your IT team has it),
+then run `chalk sandbox build` again.
+
+```sh
+export CHALK_EXTRA_CA_CERTS=/etc/ssl/corp-ca.pem
+chalk doctor            # checks that the file holds certificates
+chalk sandbox build
+```
+
+The build reads the file as a build secret, so it is not kept in the image.
+Every sandbox mounts it read-only. The agent (Node) adds it to its own CAs,
+and OpenSSL, Python, pip, curl and git read a bundle of the image's CAs plus
+yours. If the error then says the certificates in `CHALK_EXTRA_CA_CERTS` do
+not include the network's CA, the file holds the wrong CA. A network may
+re-sign traffic from containers with a different CA than traffic from the
+host, so give the whole bundle your IT team provides. The key is set in the
+environment, never in `.chalk/config`.
+
+**"the registry is limiting how often this machine may pull".** Docker Hub
+answered `429 Too Many Requests` for the sandbox's base image or the
+database image. Wait a few minutes and try again, or sign in with
+`docker login`, which raises the limit.
 
 **"uncommitted changes in …; commit them first".** The sandbox clones the
 branch, so it sees only commits. Commit the spec and anything else first.

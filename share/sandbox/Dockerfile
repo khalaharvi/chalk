@@ -8,6 +8,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates jq ripgrep \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
+# CHALK_EXTRA_CA_CERTS arrives as the build secret extra_ca, for networks
+# that intercept TLS; it is trusted for this step only, not kept in the image.
+RUN --mount=type=secret,id=extra_ca \
+    if [ -s /run/secrets/extra_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/extra_ca; fi \
+ && npm install -g @anthropic-ai/claude-code
 
 WORKDIR /work
