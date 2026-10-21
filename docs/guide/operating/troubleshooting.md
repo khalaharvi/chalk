@@ -15,11 +15,12 @@ first use.
 | Docker CLI and daemon | yes | Install and start Docker Desktop, OrbStack or Colima |
 | `gh` or `glab`, signed in | yes | Install it and run `gh auth login` or `glab auth login`. Which one depends on the `origin` remote, or `CHALK_FORGE` |
 | Agent credentials | yes | Run `claude setup-token` and export `CLAUDE_CODE_OAUTH_TOKEN` to use your Claude subscription, or export `ANTHROPIC_API_KEY`. See [Sign in to Claude](../../getting-started.md#sign-in-to-claude) |
-| Extra CA certificates | only when `CHALK_EXTRA_CA_CERTS` is set | The file must hold PEM certificates; see [behind a proxy](#behind-a-proxy-that-intercepts-tls) |
+| Extra CA certificates | when `CHALK_EXTRA_CA_CERTS` is set | The file must hold PEM certificates. When it is not set but your shell points `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` or `CURL_CA_BUNDLE` at a file, a `--` line suggests it; see [behind a proxy](#behind-a-proxy-that-intercepts-tls) |
 | `claude` on the host | no | Only `chalk fleet` planning needs it |
 | Telemetry database | no | Starts on the first run, or `chalk db up` |
 | Database on Postgres 17 | no | `chalk db upgrade`; see [the database](dashboard.md#the-database) |
 | Host and Docker resources | no | Informational: CPUs, memory, how many fleet runs at once, how long Chalk waits for the database |
+| Sandbox reaches the API over TLS | yes, when it can be asked | One HTTPS request from `node` in the sandbox image, to `ANTHROPIC_BASE_URL` or `api.anthropic.com`, with `CHALK_EXTRA_CA_CERTS` mounted as a run mounts it. No credentials are sent. `FAIL` on an untrusted certificate (set `CHALK_EXTRA_CA_CERTS`, or give it the network's whole bundle) or when the API cannot be reached. "could not check" when Docker or the image is not ready |
 | Sandbox image and its bash | no | Built on the first run, or `chalk sandbox build`. A custom `CHALK_IMAGE` needs bash 5.2 or newer |
 | Auto mode for `CHALK_MODEL` | yes, when it can be asked | `FAIL` when loops would start in manual mode and have every edit refused: choose another `CHALK_MODEL`, ask an administrator to allow auto mode, or set `CHALK_PERMISSION_MODE=bypass`. "could not verify" when Docker or the image is not ready. See [auto mode requirements](../configuring/permissions.md#auto-mode-requirements) |
 | `uv` | no | Only the local [decider](../configuring/decider.md) needs it: `brew install uv` |
@@ -71,9 +72,12 @@ then run `chalk sandbox build` again.
 
 ```sh
 export CHALK_EXTRA_CA_CERTS=/etc/ssl/corp-ca.pem
-chalk doctor            # checks that the file holds certificates
 chalk sandbox build
+chalk doctor            # checks the file, and that a sandbox reaches the API over TLS
 ```
+
+If your shell already trusts the network's CA through `NODE_EXTRA_CA_CERTS`
+or `SSL_CERT_FILE`, `chalk doctor` names that file as the one to try.
 
 The build reads the file as a build secret, so it is not kept in the image.
 Every sandbox mounts it read-only. The agent (Node) adds it to its own CAs,

@@ -164,6 +164,24 @@ if CHALK_MODEL=haiku chalk doctor > "$tmp/doctor5.log" 2>&1; then fail "doctor m
 check "doctor: Haiku is refused for auto mode without asking the CLI" \
   grep -q 'auto mode does not support Haiku' "$tmp/doctor5.log"
 
+# chalk doctor makes one HTTPS request from the sandbox image, as the agent
+# would, so a proxy that re-signs HTTPS is found before the first run.
+check "doctor: a sandbox that reaches the API over TLS is ok" \
+  grep -q '^  ok    sandbox reaches api.anthropic.com over TLS$' "$tmp/doctor1.log"
+if FAKE_TLS="tls: SELF_SIGNED_CERT_IN_CHAIN" chalk doctor > "$tmp/doctor6.log" 2>&1; then fail "doctor must fail on an untrusted certificate"; fi
+check "doctor: an untrusted certificate in the sandbox fails and names CHALK_EXTRA_CA_CERTS" \
+  grep -q '^  FAIL  sandbox reaches api.anthropic.com over TLS: SELF_SIGNED_CERT_IN_CHAIN; this network intercepts TLS .*set CHALK_EXTRA_CA_CERTS' "$tmp/doctor6.log"
+if FAKE_TLS="network: ENOTFOUND" chalk doctor > "$tmp/doctor7.log" 2>&1; then fail "doctor must fail when the API cannot be reached"; fi
+check "doctor: an API the sandbox cannot reach fails, saying what to check" \
+  grep -q '^  FAIL  sandbox reaches api.anthropic.com: ENOTFOUND; check the network' "$tmp/doctor7.log"
+printf -- '-----BEGIN CERTIFICATE-----\nshell\n-----END CERTIFICATE-----\n' > "$tmp/shell-ca.pem"
+NODE_EXTRA_CA_CERTS="$tmp/shell-ca.pem" chalk doctor > "$tmp/doctor8.log" 2>&1 || true
+check "doctor: a CA the shell trusts is suggested for CHALK_EXTRA_CA_CERTS" \
+  grep -q "extra CA certificates: not set, but your shell sets NODE_EXTRA_CA_CERTS=$tmp/shell-ca.pem" "$tmp/doctor8.log"
+CHALK_EXTRA_CA_CERTS="$tmp/shell-ca.pem" chalk doctor > /dev/null 2>&1 || true
+check "doctor: the TLS probe mounts CHALK_EXTRA_CA_CERTS as a run does" \
+  sh -c "grep -F ' node -e ' '$FAKE_STATE/docker.log' | grep -F -- '-v $tmp/shell-ca.pem:/chalk-ca.pem:ro' | grep -qF 'NODE_EXTRA_CA_CERTS=/chalk-ca.pem'"
+
 # next_step LOG TEXT: LOG has exactly one "what to do next" line, and it
 # starts with TEXT.
 next_step() {
