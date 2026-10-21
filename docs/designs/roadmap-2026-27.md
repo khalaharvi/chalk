@@ -117,6 +117,8 @@ Desktop, OrbStack or Colima), the real `claude` CLI and real `gh`/`glab`.
 
 ### Docs site
 
+**Shipped in v0.7.0 ([#62](https://github.com/khalaharvi/chalk/pull/62)).**
+
 Milestone v0.7 · [#8](https://github.com/khalaharvi/chalk/issues/8) ·
 Depends on nothing
 
@@ -134,6 +136,8 @@ checks links.
 
 ### Test reports
 
+**Shipped in v0.7.0 ([#59](https://github.com/khalaharvi/chalk/pull/59)).**
+
 Milestone v0.7 · [#14](https://github.com/khalaharvi/chalk/issues/14),
 [#4](https://github.com/khalaharvi/chalk/issues/4) · Depends on nothing
 
@@ -148,6 +152,8 @@ JUnit XML shipped in v0.6.0 (`CHALK_TEST_REPORT`, read by
   as JUnit XML.
 
 ### Doctor
+
+**Shipped in v0.7.0 (auto mode check and a next-step line for every detention).**
 
 Milestone v0.7 · [#16](https://github.com/khalaharvi/chalk/issues/16) ·
 Depends on nothing
@@ -186,6 +192,8 @@ notes, or anything a user typed.
 
 ### Privacy page
 
+**Shipped in v0.8.0 ([#86](https://github.com/khalaharvi/chalk/pull/86)).**
+
 Milestone v0.7 · [#18](https://github.com/khalaharvi/chalk/issues/18)
 
 Write `PRIVACY.md` and a matching docs page. They list what Chalk stores on
@@ -201,6 +209,8 @@ the machine (the `runs` and `lessons` tables, and the run logs under
 - **`chalk share` and opt-in telemetry**, only when the user acts.
 
 ### chalk share
+
+**Shipped in v0.8.0 ([#86](https://github.com/khalaharvi/chalk/pull/86)).**
 
 Milestone v0.7 · [#19](https://github.com/khalaharvi/chalk/issues/19)
 
@@ -258,6 +268,8 @@ to tune the defaults.
 ## Q1 2027: Cheaper loops, open models (v0.8)
 
 ### Recall
+
+**Shipped in v0.7.0 ([#55](https://github.com/khalaharvi/chalk/pull/55)).**
 
 Milestone v0.8 · [#11](https://github.com/khalaharvi/chalk/issues/11) ·
 Depends on nothing · **Shipped on `main` in
@@ -442,6 +454,8 @@ or a hosted endpoint.
 
 #### Decider protocol
 
+**Shipped in v0.8.0, ahead of its quarter ([#78](https://github.com/khalaharvi/chalk/pull/78)).**
+
 [#33](https://github.com/khalaharvi/chalk/issues/33)
 
 Write `docs/decider-protocol.md`:
@@ -458,10 +472,12 @@ The local service and every adapter speak this protocol.
 
 #### Decider endpoint
 
+**Shipped in v0.8.0, ahead of its quarter ([#80](https://github.com/khalaharvi/chalk/pull/80)); `lib/decider.sh` is on main.**
+
 [#34](https://github.com/khalaharvi/chalk/issues/34)
 
 - New keys: `CHALK_DECIDER=off|shadow|on`, `CHALK_DECIDER_URL` and
-  `CHALK_DECIDER_TOKEN`, in a new `lib/decider.sh`.
+  `CHALK_DECIDER_TOKEN`, in `lib/decider.sh`.
 - `chalk decider up` installs and runs the reference service on 127.0.0.1
   through `uv`. It serves the decider model plus a small embedding model on
   Apple's MLX, CUDA, Apple's MPS or the CPU. It never runs in the sandbox,
@@ -487,6 +503,8 @@ API style.
 
 #### Calibration gate
 
+**Shipped in v0.8.0, ahead of its quarter ([#84](https://github.com/khalaharvi/chalk/pull/84)).**
+
 [#36](https://github.com/khalaharvi/chalk/issues/36)
 
 "Act only at ≥ 0.9 confidence" is safe only if the model's confidence is
@@ -500,6 +518,8 @@ calibrated, meaning a 0.9 answer is right about 90% of the time.
   the current numbers.
 
 #### Hosted disclosure
+
+**Shipped in v0.8.0, ahead of its quarter ([#83](https://github.com/khalaharvi/chalk/pull/83)).**
 
 [#37](https://github.com/khalaharvi/chalk/issues/37)
 

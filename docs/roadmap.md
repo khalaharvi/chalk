@@ -27,27 +27,39 @@ Principles that hold for every item:
 (`CHALK_FP_RULES`), JUnit XML test reports (`CHALK_TEST_REPORT`), and
 Postgres 17 with pgvector and `chalk db upgrade`.
 
+**Shipped since:** v0.7.0 brought the docs site, `go test -json` and
+`jest --json` reports, the auto mode check and a next-step line for every
+detention, and lesson recall by fingerprint. v0.8.0 brought `PRIVACY.md`
+and `chalk share`, and, ahead of Q2, the decider: `CHALK_DECIDER`, the local
+reference service, the calibration gate and the hosted-decider disclosure.
+Items below marked *(shipped)* are done.
+
 ## Q4 2026: Make it trustworthy (v0.7)
 
 - **[Real runs](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#real-runs).** Use Chalk on
   itself and on Node, Python and Go repositories, on both GitHub and
   GitLab. Fix what breaks.
-- **[Docs site](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#docs-site)** with a glossary of
+- **[Hardening](https://github.com/khalaharvi/chalk/blob/main/docs/designs/harness2-hardening.md).** Never lose a run's work
+  to a crash, a signal or a database restart, show the agent's own error,
+  keep the evidence a detention points to, and work behind TLS-intercepting
+  proxies. The same design plans fleet scheduling and a harness that tunes
+  itself to each repository.
+- *(shipped)* **[Docs site](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#docs-site)** with a glossary of
   the school terms (rubric, detention, office hours, report card) and a
   recorded demo.
-- **[More test report formats](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#test-reports):**
+- *(shipped)* **[More test report formats](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#test-reports):**
   `go test -json` and `jest --json`.
-- **[chalk doctor and clearer detentions](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#doctor).**
+- *(shipped)* **[chalk doctor and clearer detentions](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#doctor).**
   Detention is where a run stops when it cannot make progress; each reason
   will say what to do next.
-- **[PRIVACY.md and chalk share](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#data).** See
+- *(shipped)* **[PRIVACY.md and chalk share](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#data).** See
   "Data" below.
 
 ## Q1 2027: Cheaper loops, open models (v0.8)
 
-- **[Lesson recall](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#recall)** by the fingerprint
+- *(shipped)* **[Lesson recall](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#recall)** by the fingerprint
   of a failure, replacing the optional Hindsight memory server. Done in
-  [#55](https://github.com/khalaharvi/chalk/pull/55), in the next release.
+  [#55](https://github.com/khalaharvi/chalk/pull/55), released in v0.7.0.
 - **[Verdicts on](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#verdicts-on):** let the
   stuck-loop verdicts stop runs early, where the shadow numbers show it
   saves money.
@@ -68,11 +80,12 @@ Postgres 17 with pgvector and `chalk db upgrade`.
   as ticket sources for `chalk fleet`.
 - **[Bring your own decider](https://github.com/khalaharvi/chalk/blob/main/docs/designs/roadmap-2026-27.md#bring-your-own-decider).** A
   decider is a small, fast model that answers bounded questions such as
-  "is this loop stuck?" so Chalk does not have to ask Claude. You will be
-  able to run the local reference service or point Chalk at a hosted one.
-  Every decider starts in shadow mode and has to show its confidence is
-  trustworthy before it may act. Hosted deciders are never the default,
-  and Chalk says exactly what they receive.
+  "is this loop stuck?" so Chalk does not have to ask Claude. *Mostly
+  shipped early, in v0.8.0:* you can run the local reference service or
+  point Chalk at a hosted one. Every decider starts in shadow mode and has
+  to show its confidence is trustworthy before it may act. Hosted deciders
+  are never the default, and Chalk says exactly what they receive. Still to
+  come: the adapter for providers that offer only a chat API.
 
 ## Q3 2027: Beyond Claude Code, then 1.0 (v1.0)
 
