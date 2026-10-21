@@ -62,7 +62,8 @@ db_create() {
   REPLY=1
   if ! out="$(db_run "$CHALK_DB_CONTAINER" "$volume" "$image" 2>&1)"; then
     # Created elsewhere, e.g. by a chalk from before the lock existed.
-    [[ $out == *"already in use"* ]] || die "could not create $CHALK_DB_CONTAINER: $out"
+    [[ $out == *"already in use"* ]] ||
+      die "could not create $CHALK_DB_CONTAINER: $out${| system_docker_hint "$out"; }"
     REPLY=""
   fi
 }

@@ -1016,6 +1016,30 @@ kill -TERM "$pid"
 for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
 cd "$tmp/demo"
 
+# 3e'. Behind a proxy that re-signs HTTPS, CHALK_EXTRA_CA_CERTS is trusted
+# by the image build and by every sandbox. Failures say what to do.
+if FAKE_BUILD_FAIL=tls chalk sandbox build > "$tmp/build-tls.log" 2>&1; then fail "a build that fails on TLS must fail"; fi
+check "a build that fails on TLS says to set CHALK_EXTRA_CA_CERTS, with no stack trace" \
+  sh -c "grep -q 'this network intercepts TLS .*set CHALK_EXTRA_CA_CERTS' '$tmp/build-tls.log' && ! grep -q 'unexpected failure' '$tmp/build-tls.log'"
+if FAKE_BUILD_FAIL=rate chalk sandbox build > "$tmp/build-rate.log" 2>&1; then fail "a rate-limited build must fail"; fi
+check "a rate-limited build says to wait or sign in" grep -q 'wait a few minutes and try again, or sign in with docker login' "$tmp/build-rate.log"
+printf -- '-----BEGIN CERTIFICATE-----\nproxy\n-----END CERTIFICATE-----\n' > "$tmp/proxy-ca.pem"
+CHALK_EXTRA_CA_CERTS="$tmp/proxy-ca.pem" chalk sandbox build > /dev/null 2>&1 || fail "a build with CHALK_EXTRA_CA_CERTS"
+check "the image build gets CHALK_EXTRA_CA_CERTS as a build secret" \
+  grep -qF "build --secret id=extra_ca,src=$tmp/proxy-ca.pem" "$FAKE_STATE/docker.log"
+chalk new PROJ-74 Behind a proxy >/dev/null
+cd "$tmp/demo.worktrees/PROJ-74"
+git add -A && git commit -q -m "spec"
+if CHALK_EXTRA_CA_CERTS=proxy-ca.pem chalk run > "$tmp/run74a.log" 2>&1; then fail "a relative CHALK_EXTRA_CA_CERTS must be refused"; fi
+check "a relative CHALK_EXTRA_CA_CERTS is refused before any sandbox starts" \
+  grep -q 'CHALK_EXTRA_CA_CERTS must be an absolute path' "$tmp/run74a.log"
+CHALK_EXTRA_CA_CERTS="$tmp/proxy-ca.pem" chalk run > "$tmp/run74.log" 2>&1 || { cat "$tmp/run74.log"; fail "a run with CHALK_EXTRA_CA_CERTS"; }
+check "a sandbox mounts CHALK_EXTRA_CA_CERTS read-only and points the agent and tools at it" \
+  sh -c "grep -F -- '-v $tmp/proxy-ca.pem:/chalk-ca.pem:ro' '$FAKE_STATE/docker.log' |
+    grep -F 'NODE_EXTRA_CA_CERTS=/chalk-ca.pem' | grep -qF 'SSL_CERT_FILE=/home/chalk/.ca-bundle.pem'"
+check "a run with CHALK_EXTRA_CA_CERTS still opens its merge request" grep -q "mr create.*chalk/PROJ-74" "$FAKE_STATE/glab.log"
+cd "$tmp/demo"
+
 # 3e. A sandbox image whose bash is too old is refused before any agent runs.
 chalk new PROJ-13 Old image >/dev/null
 cd "$tmp/demo.worktrees/PROJ-13"

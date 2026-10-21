@@ -33,8 +33,18 @@ sandbox_auth_args() {
   done
 }
 
+# The Dockerfile reads the extra CA certificates as a build secret, so they
+# are trusted while it installs packages but are not kept in the image.
 sandbox_build() {
-  docker build -t "$CHALK_DEFAULT_IMAGE" "$CHALK_HOME/share/sandbox"
+  local log="${XDG_STATE_HOME:-$HOME/.local/state}/chalk/sandbox-build.log" output
+  local -a args=()
+  if [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]]; then args=(--secret "id=extra_ca,src=$CHALK_EXTRA_CA_CERTS"); fi
+  mkdir -p "${log%/*}"
+  if docker build "${args[@]}" -t "$CHALK_DEFAULT_IMAGE" "$CHALK_HOME/share/sandbox" 2>&1 | tee "$log"; then
+    return 0
+  fi
+  output="$(<"$log")"
+  die "could not build the sandbox image (the whole output is in $log)${| system_docker_hint "$output"; }"
 }
 
 sandbox_ensure_image() {
@@ -84,12 +94,33 @@ sandbox_otel_args() {
   if [ -n "${OTEL_EXPORTER_OTLP_HEADERS:-}" ]; then __args+=(-e OTEL_EXPORTER_OTLP_HEADERS); fi
 }
 
+# Where a sandbox finds the extra CA certificates, and the bundle of them
+# and the image's own CAs that ca.sh writes in its home.
+CHALK_SANDBOX_CA=/chalk-ca.pem
+CHALK_SANDBOX_CA_BUNDLE=/home/chalk/.ca-bundle.pem
+
+# sandbox_ca_args VAR: fills the array VAR with the docker flags that mount
+# CHALK_EXTRA_CA_CERTS and point Node (the agent), OpenSSL, Python, curl
+# and git at it. Node adds the file to its own CAs; the others read the
+# bundle, which replaces theirs.
+sandbox_ca_args() {
+  local -n __ca=$1
+  local var
+  __ca=()
+  [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]] || return 0
+  __ca=(-v "$CHALK_EXTRA_CA_CERTS:$CHALK_SANDBOX_CA:ro" -e "NODE_EXTRA_CA_CERTS=$CHALK_SANDBOX_CA")
+  for var in SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE GIT_SSL_CAINFO PIP_CERT; do
+    __ca+=(-e "$var=$CHALK_SANDBOX_CA_BUNDLE")
+  done
+}
+
 # sandbox_start NAME TICKET IO_DIR
 sandbox_start() {
   local name="$1" ticket="$2" io_dir="$3"
-  local -a env_args auth_args otel_args
+  local -a env_args auth_args otel_args ca_args
   sandbox_auth_args auth_args
-  env_args=(-e HOME=/home/chalk "${auth_args[@]}")
+  sandbox_ca_args ca_args
+  env_args=(-e HOME=/home/chalk "${auth_args[@]}" "${ca_args[@]}")
 
   sandbox_otel_args otel_args "$ticket"
 
@@ -105,6 +136,10 @@ sandbox_start() {
     "${env_args[@]}" "${otel_args[@]}" \
     "$CHALK_IMAGE" sleep infinity >/dev/null
   sandbox_check_bash "$name"
+  if [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]]; then
+    sandbox_script "$name" ca >/dev/null ||
+      die "could not add CHALK_EXTRA_CA_CERTS to the CAs in sandbox image '$CHALK_IMAGE'"
+  fi
 }
 
 # sandbox_bash_version NAME -> REPLY: "MAJOR MINOR" of the container's bash,

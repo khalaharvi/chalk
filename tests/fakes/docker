@@ -22,7 +22,15 @@ modelled() {
 no_such() { echo "Error response from daemon: No such container: $1" >&2; exit 1; }
 
 case "$cmd" in
-  info|build) exit 0 ;;
+  info) exit 0 ;;
+  # FAKE_BUILD_FAIL=tls or =rate makes the build fail as it does behind a
+  # proxy that re-signs HTTPS, or when the registry limits pulls.
+  build)
+    printf 'build %s\n' "$*" >> "$FAKE_STATE/docker.log"
+    case "${FAKE_BUILD_FAIL:-}" in
+      tls)  echo "npm error code SELF_SIGNED_CERT_IN_CHAIN"; exit 1 ;;
+      rate) echo "failed to resolve source metadata: 429 Too Many Requests"; exit 1 ;;
+    esac ;;
   start|stop)
     name="${*: -1}"
     modelled "$name" || exit 0
