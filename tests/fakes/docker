@@ -77,6 +77,12 @@ case "$cmd" in
     printf '%s\n' "$*" >> "$FAKE_STATE/docker.log"
     # A one-off command (--entrypoint) runs on the host with the arguments
     # after the image, and with stdin passed through.
+    # chalk doctor's TLS probe: FAKE_TLS is what it prints, "ok" by default,
+    # so that no test reaches the network.
+    if [[ " $* " == *" node -e "* ]]; then
+      echo "${FAKE_TLS:-ok}"
+      exit 0
+    fi
     if [[ " $* " == *" --entrypoint "* ]]; then
       entrypoint=""
       while [ $# -gt 0 ]; do

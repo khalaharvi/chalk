@@ -65,6 +65,26 @@ and the `claude` CLI. The first `chalk run` also builds it, but only when
 Any other base works if it has bash 5.2 or newer, git, coreutils and
 `claude` on `PATH`.
 
+Behind a proxy that re-signs HTTPS, with `CHALK_EXTRA_CA_CERTS` set (see
+[Troubleshooting](../operating/troubleshooting.md#behind-a-proxy-that-intercepts-tls)),
+your own image's installs need the CA too. Read it as the same build
+secret, so it is not kept in the image, and pass it to `docker build`:
+
+```dockerfile
+RUN --mount=type=secret,id=extra_ca \
+    cp /run/secrets/extra_ca /usr/local/share/ca-certificates/extra.crt 2>/dev/null; \
+    update-ca-certificates >/dev/null 2>&1; \
+    pip install -r requirements.txt
+```
+
+```sh
+docker build --secret id=extra_ca,src="$CHALK_EXTRA_CA_CERTS" -t my-repo-sandbox .
+```
+
+As written, this adds the CA to your image's trust store, which suits an
+image used only on that network. Sandboxes get the CA at run time either
+way.
+
 ## Python
 
 Keep the Dockerfile in the repository, for example at

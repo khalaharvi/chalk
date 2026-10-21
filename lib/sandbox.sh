@@ -114,6 +114,29 @@ sandbox_ca_args() {
   done
 }
 
+# One HTTPS request from Node, as the agent makes them: prints "ok" on any
+# answer, or "tls: CODE" or "network: CODE" when there is none.
+CHALK_TLS_PROBE='fetch(process.argv[1], {method: "HEAD"}).then(() => console.log("ok"), (e) => {
+  const code = String((e.cause && (e.cause.code || e.cause.message)) || e.code || e.message);
+  console.log((/CERT|SSL|TLS|SIGNED|ISSUER/i.test(code) ? "tls: " : "network: ") + code);
+})'
+
+# sandbox_tls_probe -> REPLY: whether a sandbox on CHALK_IMAGE, with
+# CHALK_EXTRA_CA_CERTS as a run mounts it, reaches the API the agent calls
+# (ANTHROPIC_BASE_URL, or api.anthropic.com) over TLS: "ok", "tls: CODE" or
+# "network: CODE". Empty when it could not be asked: no Docker, no image,
+# no node in it, or a base URL that is not HTTPS. Sends no credentials.
+sandbox_tls_probe() {
+  local url="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}" out
+  local -a ca_args
+  REPLY=""
+  [[ $url == https://* ]] || return 0
+  sandbox_ca_args ca_args
+  out="$(docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp "${ca_args[@]}" \
+    --entrypoint timeout "$CHALK_IMAGE" 20 node -e "$CHALK_TLS_PROBE" "$url" 2>/dev/null)" || out=""
+  if [[ $out == @(ok|tls: *|network: *) ]]; then REPLY="$out"; fi
+}
+
 # sandbox_start NAME TICKET IO_DIR
 sandbox_start() {
   local name="$1" ticket="$2" io_dir="$3"
