@@ -164,6 +164,11 @@ cmd_doctor() {
   doctor_check required "openssl"           "install openssl"                     command -v openssl
   doctor_check required "docker CLI"        "install Docker Desktop, OrbStack or Colima" command -v docker
   doctor_check required "docker daemon"     "start your Docker runtime"           docker info
+  if [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]]; then
+    doctor_check required "extra CA certificates ($CHALK_EXTRA_CA_CERTS)" \
+      "the file must hold PEM certificates; check it with: openssl x509 -noout -in ${CHALK_EXTRA_CA_CERTS@Q}" \
+      openssl x509 -noout -in "$CHALK_EXTRA_CA_CERTS"
+  fi
   local forge cli
   forge="${| forge_kind; }"
   cli="${CHALK_FORGE_CLI[$forge]}"

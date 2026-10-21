@@ -179,3 +179,21 @@ touch -t 202001010000 "$lock.clear"
 check "clear: an abandoned clearing lock does not block forever" chalk_lock t 10
 check "clear: ... the clearing lock is gone" test ! -e "$lock.clear"
 chalk_unlock t
+
+# system_docker_hint: advice for docker output that shows a network problem.
+hint() { system_docker_hint "$1"; printf '%s' "$REPLY"; }
+npm_tls='npm error code SELF_SIGNED_CERT_IN_CHAIN
+npm error request to https://registry.npmjs.org/x failed, reason: self-signed certificate in certificate chain'
+unset CHALK_EXTRA_CA_CERTS
+check "hint: a proxy that re-signs HTTPS asks for CHALK_EXTRA_CA_CERTS" \
+  sh -c "printf '%s' \"\$1\" | grep -q '^; this network intercepts TLS .*set CHALK_EXTRA_CA_CERTS'" _ "$(hint "$npm_tls")"
+check "hint: curl's wording is recognised too" \
+  test -n "$(hint 'curl: (60) SSL certificate problem: unable to get local issuer certificate')"
+CHALK_EXTRA_CA_CERTS=/etc/proxy.pem
+check "hint: with CHALK_EXTRA_CA_CERTS set, it says the file lacks the proxy's CA" \
+  sh -c "printf '%s' \"\$1\" | grep -q 'certificates in CHALK_EXTRA_CA_CERTS (/etc/proxy.pem) do not include its CA'" _ "$(hint "$npm_tls")"
+unset CHALK_EXTRA_CA_CERTS
+check "hint: a registry rate limit says to wait or sign in" \
+  sh -c "printf '%s' \"\$1\" | grep -q 'wait a few minutes and try again, or sign in with docker login'" _ \
+    "$(hint 'unexpected status from HEAD request to https://registry-1.docker.io/v2/x: 429 Too Many Requests')"
+check "hint: other failures get none" test -z "$(hint 'no space left on device')"

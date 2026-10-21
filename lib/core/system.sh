@@ -1,5 +1,6 @@
 # What this machine and its Docker runtime can take, a lock that works
-# with or without flock, and the waits derived from them.
+# with or without flock, the waits derived from them, and what to do when
+# Docker cannot reach the network.
 
 # The host profile, filled once per process by system_profile:
 #   os             darwin | linux | ...
@@ -182,4 +183,27 @@ chalk_unlock() {
   path="${| chalk_lock_path "$name"; }"
   { read -r pid < "$path/pid"; } 2>/dev/null || return 0
   [[ $pid != "$BASHPID" ]] || rm -rf "$path"
+}
+
+# What docker prints when a proxy re-signs HTTPS, and when a registry
+# limits pulls; matched against its output in lower case.
+SYSTEM_TLS_ERRORS='*@(self_signed_cert_in_chain|self?signed certificate|certificate verify failed|unable_to_get_issuer_cert|unable to get local issuer certificate)*'
+SYSTEM_RATE_ERRORS='*@(429 too many requests|toomanyrequests)*'
+
+# system_docker_hint TEXT -> REPLY: what to do about a docker build, pull or
+# run that failed with output TEXT, as "; ..." to append to the error, or
+# empty when TEXT shows no known network problem.
+# shellcheck disable=SC2053 # the SYSTEM_*_ERRORS patterns are meant as patterns
+system_docker_hint() {
+  local text="${1@L}"
+  REPLY=""
+  if [[ $text == $SYSTEM_TLS_ERRORS ]]; then
+    if [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]]; then
+      REPLY="; this network intercepts TLS, and the certificates in CHALK_EXTRA_CA_CERTS ($CHALK_EXTRA_CA_CERTS) do not include its CA"
+    else
+      REPLY="; this network intercepts TLS (a proxy re-signs HTTPS): set CHALK_EXTRA_CA_CERTS to the absolute path of a PEM file of its CA certificates, then try again"
+    fi
+  elif [[ $text == $SYSTEM_RATE_ERRORS ]]; then
+    REPLY="; the registry is limiting how often this machine may pull: wait a few minutes and try again, or sign in with docker login for a higher limit"
+  fi
 }
