@@ -86,6 +86,9 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 | E25 | Low | `share/sandbox/scripts/export.sh:8` | `git bundle create … >/dev/null 2>&1` hides git's error. |
 | E26 | Low | `run.sh:83-86, 132` | Two `chalk run` of the same ticket can both pass `run_claim`; the second deletes the first's io directory. |
 | E27 | Low | `decider.sh:266, 1351-1362` | `installed` and `trusted` are rewritten in place while runs read them. |
+| E28 | Med | `db.sh:58-63`, `sandbox.sh:36-48` | Found in a real run: a Docker Hub `429 Too Many Requests` on `pgvector/pgvector:pg17` is passed through raw, with no advice (retry later, `docker login`, or a mirror through `CHALK_DB_IMAGE`). |
+| E29 | Med | `share/sandbox/Dockerfile:11`, `sandbox.sh:87-107` | Found in a real run: behind a TLS-intercepting proxy (corporate networks), the image build's `npm install` and every agent call fail with `SELF_SIGNED_CERT_IN_CHAIN`. There is no way to give the build or the sandbox an extra CA (`CHALK_EXTRA_CA_CERTS`, passed as `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`), and the failure is a stack trace. |
+| E30 | Low | repository | Found in a real run: Chalk has no `.chalk/config` in its own repository, so "Real runs: use Chalk on itself" cannot start; `chalk doctor` says `run 'chalk init'`. |
 
 ### Themes
 
@@ -103,7 +106,7 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 - `run_sync` failures park instead of crashing.
 - `db_try` wraps `db_record_call`, `db_event` and `db_open_lesson` during a run: on failure it warns once per run and appends the SQL to `$RUN_DIR/pending.sql`; `chalk db up` and the next run replay it.
 - `chalk db down` refuses while `state_live_runs` is non-empty, unless `--force`.
-- `docker run --memory "${CHALK_SANDBOX_MEM_MB}m"`, and exit 137 is reported as out of memory.
+- *Moved to F-PR3:* the sandbox memory limit. `CHALK_SANDBOX_MEM_MB` defaults to 2048 while the `/work` tmpfs is 4g, and tmpfs pages are charged to the container's memory, so `--memory "${CHALK_SANDBOX_MEM_MB}m"` would kill real runs on large repos. The limit needs its own default that counts the tmpfs.
 - **Done when:** e2e (fake docker, fake claude) cases for a DB that dies mid-loop, a sync conflict, a container that dies before detention, and a SIGTERM mid-loop each end with a named branch holding the agent's last commit and a `next:` line, and no stack trace.
 
 **E-PR2: The agent's own failure is shown and recorded (`fix(agent)`)**, covering E2, E3, E7 and E9.

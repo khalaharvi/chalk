@@ -648,15 +648,27 @@ db_upgrade_cleanup() {
   rm -rf "${| db_upgrade_dir; }"
 }
 
+# db_down_check [--force]: stops `chalk db down` while runs on this machine
+# are alive, since every run writes to the database as it goes.
+db_down_check() {
+  local live
+  [[ $1 != --force ]] || return 0
+  live="${| state_live_runs; }"
+  (( live == 0 )) ||
+    die "$live run(s) on this machine are using the database; wait for them to end (chalk status), or stop it anyway with: chalk db down --force"
+}
+
 cmd_db() {
   need docker
   case "${1:-}:${2:-}" in
     up:)   db_up; info "telemetry database is up ($CHALK_DB_CONTAINER)" ;;
-    down:) docker stop "$CHALK_DB_CONTAINER" >/dev/null
+    down:|down:--force)
+           db_down_check "${2:-}"
+           docker stop "$CHALK_DB_CONTAINER" >/dev/null
            info "telemetry database stopped (data kept in volume ${| db_volumes; })" ;;
     psql:) exec docker exec -it "$CHALK_DB_CONTAINER" psql -U chalk -d chalk ;;
     upgrade:) db_upgrade ;;
     upgrade:--cleanup) db_upgrade_cleanup ;;
-    *)     die "usage: chalk db up|down|psql|upgrade [--cleanup]" ;;
+    *)     die "usage: chalk db up|down [--force]|psql|upgrade [--cleanup]" ;;
   esac
 }

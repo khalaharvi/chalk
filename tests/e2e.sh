@@ -369,6 +369,57 @@ check "next step at the loop limit: split the checkpoints or raise the limit" \
     "split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now 1)"
 cd "$tmp/demo"
 
+# 2b''. No way a run can end loses the sandbox's work or shows a stack trace.
+# no_trace LOG: the run said how it ended, without an unexpected failure.
+no_trace() { ! grep -q 'unexpected failure' "$1"; }
+
+# A database that goes away mid-run is reported once; the run still graduates.
+chalk new PROJ-70 Database gone >/dev/null
+cd "$tmp/demo.worktrees/PROJ-70"
+git add -A && git commit -q -m "spec"
+FAKE_DB_FAIL_ON="INSERT INTO" chalk run > "$tmp/run70.log" 2>&1 || { cat "$tmp/run70.log"; fail "a run whose database goes away"; }
+check "a run whose database goes away still opens its merge request" grep -q "mr create.*chalk/PROJ-70" "$FAKE_STATE/glab.log"
+check "a database that goes away is reported once, and not as a crash" \
+  sh -c "test \"\$(grep -c 'telemetry database could not be written' '$tmp/run70.log')\" -eq 1 && ! grep -q 'unexpected failure' '$tmp/run70.log'"
+cd "$tmp/demo"
+
+# A database that goes away before a detention: the work is still parked.
+chalk new PROJ-71 Database gone, detained >/dev/null
+cd "$tmp/demo.worktrees/PROJ-71"
+git add -A && git commit -q -m "spec"
+if FAKE_DB_FAIL_ON="INSERT INTO" FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=0 chalk run > "$tmp/run71.log" 2>&1; then
+  fail "a failing run without a database should exit non-zero"
+fi
+detention="$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-71-*')"
+check "without a database, a detention still parks the work" git cat-file -e "$detention:BROKEN"
+check "without a database, a detention still says what to do next" \
+  sh -c "grep -q 'next: ' '$tmp/run71.log' && grep -q 'work parked on local branch' '$tmp/run71.log'"
+check "without a database, a detention is not reported as a crash" no_trace "$tmp/run71.log"
+cd "$tmp/demo"
+
+# The branch moves on the host during a run: the loop's commit is parked
+# on a detention branch, with a next step, instead of a crash.
+chalk new PROJ-72 Branch moved >/dev/null
+cd "$tmp/demo.worktrees/PROJ-72"
+git add -A && git commit -q -m "spec"
+if FAKE_HOST_COMMIT="$PWD" chalk run > "$tmp/run72.log" 2>&1; then fail "a run whose branch moved should exit non-zero"; fi
+detention="$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-72-*')"
+check "a branch that moved during the run parks the loop's commit" \
+  sh -c "test -n '$detention' && git log --format=%s '$detention' | grep -q 'chalk(PROJ-72): continue, loop 1'"
+check "a branch that moved during the run says what to do next" \
+  next_step "$tmp/run72.log" "chalk/PROJ-72 changed in .* during the run"
+check "a branch that moved during the run is not reported as a crash" no_trace "$tmp/run72.log"
+cd "$tmp/demo"
+
+# The sandbox disappears mid-run: the run says the work is lost, plainly.
+chalk new PROJ-73 Sandbox gone >/dev/null
+cd "$tmp/demo.worktrees/PROJ-73"
+git add -A && git commit -q -m "spec"
+if FAKE_CLAUDE_MODE=vanish CHALK_MAX_RETRIES=0 chalk run > "$tmp/run73.log" 2>&1; then fail "a run whose sandbox vanished should exit non-zero"; fi
+check "a vanished sandbox is reported as gone, with what the branch still holds" \
+  grep -q "the sandbox is gone, so work since the last checkpoint is lost; chalk/PROJ-73 holds every checkpoint" "$tmp/run73.log"
+cd "$tmp/demo"
+
 # 2c. With CHALK_FP_FEEDBACK=true, a retry is told the failing tests and the
 # first error, normalized, and only the last 20 lines of output. The rubric
 # prints 40 lines before its error, so a 20-line tail starts at line-22.
@@ -941,6 +992,9 @@ status=0
 wait "$pid" || status=$?
 check "a run stopped by SIGTERM exits 143" test "$status" -eq 143
 check "a stopped run removes its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-8"
+detention="$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-8-*')"
+check "a stopped run parks the loop's unfinished work on a detention branch" \
+  sh -c "test -n '$detention' && git cat-file -e '$detention:slow.txt' && grep -q 'run stopped by a signal (exit 143)' '$tmp/run9.log'"
 cd "$tmp/demo"
 
 # 3d'. A detached run shows as running as soon as the command returns.
@@ -954,6 +1008,9 @@ check "a detached run is listed as running straight away" \
 for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
 check "the detached run gets past its own recorded pid to the agent" \
   sh -c "test -e '$FAKE_STATE/slow-started' && ! grep -q 'already active' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-30/run.log'"
+if chalk db down > "$tmp/db-down.log" 2>&1; then fail "chalk db down must refuse while a run is alive"; fi
+check "chalk db down refuses while a run is alive, and says how to force it" \
+  grep -q "1 run(s) on this machine are using the database.*chalk db down --force" "$tmp/db-down.log"
 read -r pid < "$XDG_STATE_HOME/chalk/demo/runs/PROJ-30/pid"
 kill -TERM "$pid"
 for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
@@ -995,7 +1052,7 @@ cd "$tmp/demo"
 # was left in: submitted (PROJ-1, and PROJ-2 and PROJ-4 after office
 # hours), detained (PROJ-6 by its review), spec-blocked (PROJ-24),
 # done when the work passed review but was not submitted (PROJ-23, whose
-# push was refused), stopped when the run ended with no outcome (PROJ-8,
+# push was refused), detained when a stopped run parked its work (PROJ-8,
 # stopped by SIGTERM) and new when no call was made (PROJ-14, whose
 # database did not start).
 chalk new PROJ-24 Spec not ready >/dev/null
@@ -1007,7 +1064,7 @@ chalk status > "$tmp/status.log"
 state_of() { awk -v t="$1" '$1 == t { print $2 }' "$tmp/status.log"; }
 check "status: states of tickets that are not running" \
   test "$(for t in PROJ-1 PROJ-2 PROJ-6 PROJ-4 PROJ-24 PROJ-23 PROJ-8 PROJ-14; do printf '%s=%s ' "$t" "$(state_of "$t")"; done)" \
-    = "PROJ-1=submitted PROJ-2=submitted PROJ-6=detained PROJ-4=submitted PROJ-24=spec-blocked PROJ-23=done PROJ-8=stopped PROJ-14=new "
+    = "PROJ-1=submitted PROJ-2=submitted PROJ-6=detained PROJ-4=submitted PROJ-24=spec-blocked PROJ-23=done PROJ-8=detained PROJ-14=new "
 check "status: no ticket is idle" sh -c "! grep -q ' idle ' '$tmp/status.log'"
 
 # 3g. Database versions and `chalk db upgrade`. With FAKE_DB_MODEL set, the

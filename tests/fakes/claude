@@ -4,10 +4,12 @@
 #   FAKE_CLAUDE_MODE=break     loop leaves the tree in a state the rubric rejects
 #   FAKE_CLAUDE_MODE=churn     like break, but changes another file each loop
 #   FAKE_CLAUDE_MODE=blocked   loop reports a blocker
-#   FAKE_CLAUDE_MODE=slow      loop takes a few seconds, so a test can stop the run
+#   FAKE_CLAUDE_MODE=slow      loop writes slow.txt, then takes a few seconds, so a test can stop the run
+#   FAKE_CLAUDE_MODE=vanish    loop writes a file, then its sandbox disappears
 #   FAKE_CLAUDE_MODE=idle      loop changes nothing and ticks nothing
 #   FAKE_CLAUDE_MODE=refused   like idle, with four actions refused by permission checks
 #   FAKE_CLAUDE_MODE=error     loop stops early on its turn limit
+#   FAKE_HOST_COMMIT=DIR       a loop also commits to the worktree DIR on the host
 #   FAKE_SUMMARY=TEXT          a loop that ticks a checkpoint summarizes it as TEXT
 #   FAKE_SPEC=fail             spec check fails
 #   FAKE_DISTILL=repo          distillation gives a lesson for this repository only
@@ -52,13 +54,17 @@ case "$prompt" in
     echo "fixed review findings" >> work.txt
     answer '{"status":"done","summary":"fixed the stub"}' ;;
   *"<rubric_command>"*)
+    if [ -n "${FAKE_HOST_COMMIT:-}" ]; then
+      git -C "$FAKE_HOST_COMMIT" commit -q --allow-empty -m "edited on the host during the run"
+    fi
     spec="$(printf '%s\n' "$prompt" | sed -n 's:.*<spec_file>\(.*\)</spec_file>.*:\1:p' | head -n 1)"
     case "${FAKE_CLAUDE_MODE:-}" in
       break)   touch BROKEN; answer '{"status":"done","summary":"did the thing"}' ;;
       churn)   touch BROKEN; echo "attempt $(wc -l < churn.txt 2>/dev/null || echo 0)" >> churn.txt
                answer '{"status":"done","summary":"tried another way"}' ;;
       blocked) answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}' ;;
-      slow)    touch "$FAKE_STATE/slow-started"; sleep 3; answer '{"status":"done","summary":"slow"}' ;;
+      slow)    echo slow >> slow.txt; touch "$FAKE_STATE/slow-started"; sleep 3; answer '{"status":"done","summary":"slow"}' ;;
+      vanish)  echo lost >> lost.txt; rm -rf "${PWD%/work/repo}"; answer '{"status":"done","summary":"gone"}' ;;
       idle)    answer '{"status":"done","summary":"nothing to do"}' ;;
       refused)
         denials='[{"tool_name":"Edit"},{"tool_name":"Write"},{"tool_name":"Bash"},{"tool_name":"Edit"}]'
