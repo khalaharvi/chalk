@@ -86,10 +86,13 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 | E25 | Low | `share/sandbox/scripts/export.sh:8` | `git bundle create … >/dev/null 2>&1` hides git's error. |
 | E26 | Low | `run.sh:83-86, 132` | Two `chalk run` of the same ticket can both pass `run_claim`; the second deletes the first's io directory. |
 | E27 | Low | `decider.sh:266, 1351-1362` | `installed` and `trusted` are rewritten in place while runs read them. |
+| E28 | Med | `db.sh:58-63`, `sandbox.sh:36-48` | Found in a real run: a Docker Hub `429 Too Many Requests` on `pgvector/pgvector:pg17` is passed through raw, with no advice (retry later, `docker login`, or a mirror through `CHALK_DB_IMAGE`). |
+| E29 | Med | `share/sandbox/Dockerfile:11`, `sandbox.sh:87-107` | Found in a real run: behind a TLS-intercepting proxy (corporate networks), the image build's `npm install` and every agent call fail with `SELF_SIGNED_CERT_IN_CHAIN`. There is no way to give the build or the sandbox an extra CA (`CHALK_EXTRA_CA_CERTS`, passed as `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE`), and the failure is a stack trace. |
+| E30 | Low | repository | Found in a real run: Chalk has no `.chalk/config` in its own repository, so "Real runs: use Chalk on itself" cannot start; `chalk doctor` says `run 'chalk init'`. |
 
 ### Themes
 
-1. **Best-effort host services.** Telemetry, events, decider bookkeeping and recall must never end a run (E1, E12, E21).
+1. **Best-effort host services.** Telemetry, events, decider bookkeeping and recall must never end a run (E1, E12, E21). Done for the run loop's writes in E-PR1.
 2. **Park on every exit.** One function decides what happens to the sandbox's work on any non-success exit, crash included (E1, E4, E5).
 3. **Keep evidence, and quote it.** Per-run, per-loop files, and a short excerpt in the detention reason (E2, E6, E25).
 4. **Name the reason.** Map raw exit codes to named outcomes: timeout, OOM, infrastructure, auth, rate limit, no verdict (E3, E9, E14, E18).
@@ -97,14 +100,19 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 
 ### Approach
 
-**E-PR1: Never lose the sandbox's work (`fix(run)`)**, covering E1, E4, E5 and E20.
-- `run_park REASON` replaces the ad-hoc failure paths. It is idempotent and ordered so the cheapest, surest step comes first: (1) commit and export from the sandbox, if it is alive; (2) fetch into `detention/$TICKET-$RUN_ID`, falling back to `recovered/$TICKET-$RUN_ID` when the export already exists in `out.bundle`; (3) print the branch and a `next:` line; (4) write DB rows last, best effort.
-- `run_teardown` calls `run_park crash` when the exit is not a graduation or a detention, and keeps the container (renamed `…-failed`) when the export itself failed, printing the `docker cp` command.
-- `run_sync` failures park instead of crashing.
-- `db_try` wraps `db_record_call`, `db_event` and `db_open_lesson` during a run: on failure it warns once per run and appends the SQL to `$RUN_DIR/pending.sql`; `chalk db up` and the next run replay it.
-- `chalk db down` refuses while `state_live_runs` is non-empty, unless `--force`.
-- `docker run --memory "${CHALK_SANDBOX_MEM_MB}m"`, and exit 137 is reported as out of memory.
-- **Done when:** e2e (fake docker, fake claude) cases for a DB that dies mid-loop, a sync conflict, a container that dies before detention, and a SIGTERM mid-loop each end with a named branch holding the agent's last commit and a `next:` line, and no stack trace.
+**E-PR1: Never lose the sandbox's work (`fix(run)`, #94)**, covering E1, E4 and E5. As built:
+- `run_park_work MESSAGE -> REPLY` commits what is in the sandbox, exports every commit since `RUN_BASE` and fetches them onto a new `detention/$TICKET-<ts>` branch. Every failure path uses `detention/`, so office hours, `chalk status` and `chalk cleanup` handle a parked crash like any detention; there is no separate `recovered/` branch.
+- `run_detain` parks and prints the `next:` line first, and writes the lesson and the event last.
+- `run_teardown` (the EXIT trap) calls `run_park_crash` once a loop has started, when the run neither detained nor graduated: a signal (`run stopped by a signal (exit 143)`) or a crash (`Chalk stopped unexpectedly (exit N)`). With nothing beyond the branch, it says so.
+- When parking fails, `run_park_failed` keeps a container that still exists as `…-kept-<ts>` and prints the `docker cp` command, or says the sandbox is gone and what the branch still holds.
+- `run_sync` returns a reason instead of crashing, and the run detains with kind `sync`.
+- `run_db` wraps every database write during a run: the first failure warns, the errors go to `io/db.err`, and the run goes on. Writes that failed are not replayed; that moves to E-PR3.
+- `chalk db down` refuses while `state_live_runs` is non-zero, unless `--force`.
+- *Moved to F-PR3:* the sandbox memory limit (E20). `CHALK_SANDBOX_MEM_MB` defaults to 2048 while the `/work` tmpfs is 4g, and tmpfs pages are charged to the container's memory, so `--memory "${CHALK_SANDBOX_MEM_MB}m"` would kill real runs on large repos. The limit needs its own default that counts the tmpfs.
+- **Done when:** e2e (fake docker, fake claude) cases end with no stack trace:
+  - a DB that dies mid-run, in a run that graduates and in one that detains;
+  - a sync conflict and a SIGTERM mid-loop, each ending on a detention branch with the loop's work;
+  - a sandbox that vanishes, which says plainly that the work since the last checkpoint is lost.
 
 **E-PR2: The agent's own failure is shown and recorded (`fix(agent)`)**, covering E2, E3, E7 and E9.
 - `agent_call` records its exit code in `$io/$name.exit` and wraps the call in `timeout "$CHALK_AGENT_TIMEOUT"` (new key, default 1800 s), as `agent_start_mode` already does.
@@ -118,6 +126,7 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 - Every run, foreground included, tees to `runs/T/$RUN_ID/run.log`.
 - `export.sh` writes git's stderr to `/chalk/export.err`.
 - `run_claim` takes `chalk_lock "run-$TICKET" 0`.
+- Database writes that failed during a run (`run_db`, E-PR1) are queued in the run's directory and replayed by `chalk db up` and the next run, so the report card does not miss them.
 
 **E-PR4: Exit codes, the ERR trap and value functions (`fix(core)`)**, covering E12, E13, E18, E19 and E23.
 - Exit codes (Decision 1), documented in `docs/reference/exit-codes.md`, with the CI gate templates updated in the same PR, and frozen at 1.0: `0` success, `1` Chalk internal error, `2` usage, `3` detention (a human is needed), `4` environment not ready (doctor or pre-flight), `5` a fleet where some tickets did not launch, `128+n` signals.
@@ -128,6 +137,12 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 **E-PR5: Repository identity and the remaining Mediums (`fix(repo)`)**, covering E8, E10, E11, E14, E15, E16, E17, E21, E22, E24 and E27.
 - `repo_id` is a short hash of the realpath of the common git directory. It keys the state directory, sandbox names, labels and DB rows; `repo_name` stays for display. A migration in `chalk db upgrade` backfills `repo_id` for existing rows; rows from two same-named repos are already mixed and are left as they are, with a note in the release notes.
 - E10 is fixed by fleet markers (F-PR1); the rest are local fixes as the audit suggests.
+
+**E-PR6: Proxies and registries (`fix(sandbox)`)**, covering E28 and E29, found in a real run.
+- `CHALK_EXTRA_CA_CERTS` (a PEM file on the host, default empty) is mounted read-only into the sandbox and named by `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `GIT_SSL_CAINFO` (as a bundle with the system CAs), and passed to `chalk sandbox build` as a build secret, so `npm install` and the agent's own API calls work behind a TLS-intercepting proxy.
+- A build or pull that fails with `SELF_SIGNED_CERT_IN_CHAIN` or `certificate verify failed` says to set `CHALK_EXTRA_CA_CERTS`; a `429 Too Many Requests` from a registry says to retry later, `docker login`, or point `CHALK_DB_IMAGE` / `CHALK_IMAGE` at a mirror. Neither is a stack trace.
+- `chalk doctor` checks that the file exists and parses, and reports whether the sandbox image trusts it.
+- E30 (Chalk's own repository has no `.chalk/config`) is fixed under Real runs: `chalk init` in this repository, with `make check` as the rubric.
 
 ---
 
@@ -164,7 +179,8 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 - Budgets: `CHALK_RUN_BUDGET_USD` (per run) and `CHALK_DAILY_BUDGET_USD` (machine-wide, summed from `runs` for today). Reaching either parks the run with detention kind `budget`, whose `next:` line names the key. #49's warning comes for free at 80%.
 - Shadow first: for one release, F-PR2 records what it would have done (`runs.backoff_shadow`) and the report card shows how many detentions it would have avoided.
 
-**F-PR3: Do shared work once (`perf(sandbox)`)**, covering F4, F5 and F6.
+**F-PR3: Do shared work once (`perf(sandbox)`)**, covering F4, F5, F6 and E20.
+- A sandbox memory limit (E20, moved from E-PR1): a new `CHALK_SANDBOX_MEM_LIMIT`, by default `CHALK_SANDBOX_MEM_MB` plus the two tmpfs sizes, passed as `--memory`. Exit 137 from the agent or the rubric is then reported as out of memory, naming the key. Fleet sizing uses the same figure.
 - The image build and the schema apply run under `chalk_lock`; the schema carries a version row and is skipped when current.
 - Opt-in `CHALK_CACHE_DIRS` (for example `~/.npm ~/.cache/pip ~/go/pkg/mod`), default off. The rules (Decision 4):
   - **Keyed by the base commit's dependency files.** The key is a hash of the lockfiles and manifests (`package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `requirements*.txt`, `go.sum`, `Cargo.lock`, …) *at the run's base commit*, plus the image digest. A merge to main that changes dependencies changes the key, so the next run never sees stale libraries.
@@ -259,7 +275,7 @@ Harness² optimises without ground truth and spends most of its machinery making
 
 | Quarter | From this design | Fits with |
 |---|---|---|
-| Q4 2026 (v0.7, "Make it trustworthy") | E-PR1, E-PR2, E-PR3, E-PR4 | Real runs, Doctor and clearer detentions |
+| Q4 2026 (v0.7, "Make it trustworthy") | E-PR1 (#94), E-PR2, E-PR6, E-PR3, E-PR4 | Real runs, Doctor and clearer detentions |
 | Q1 2027 (v0.8) | E-PR5, F-PR1, F-PR2 (shadow), T-PR1 | Resume (#23) reuses `run_park` and the fleet state file; Verdicts on |
 | Q2 2027 (v0.9) | F-PR2 on, F-PR3, Part 3 interface additions, ticket pattern, T-PR2, T-PR3 | Ticket sources, Bring your own decider, blocker ladder PR 1 to 2 |
 | Q3 2027 (v1.0) | T-PR4; T-PR5 as *stretch* | Harness adapters (#39 to #41); Stability freezes the exit codes and the pack layout |

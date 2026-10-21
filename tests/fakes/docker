@@ -52,6 +52,7 @@ case "$cmd" in
     esac ;;
   rename)
     printf 'rename %s\n' "$*" >> "$FAKE_STATE/docker.log"
+    if ! modelled "$1" && [ -d "$FAKE_STATE/$1" ]; then mv "$FAKE_STATE/$1" "$FAKE_STATE/$2"; exit 0; fi
     [ -d "$dbs/$1" ] || no_such "$1"
     [ ! -e "$dbs/$2" ] || { echo "Error response from daemon: name \"$2\" is already in use" >&2; exit 1; }
     mv "$dbs/$1" "$dbs/$2" ;;
@@ -146,6 +147,12 @@ case "$cmd" in
       # FAKE_DB_BROKEN=1 makes every query fail.
       [ -z "${FAKE_DB_BROKEN:-}" ] || exit 1
       sql="$(cat)"
+      # FAKE_DB_FAIL_ON=TEXT makes every query containing TEXT fail, as
+      # when the database goes away in the middle of a run.
+      if [ -n "${FAKE_DB_FAIL_ON:-}" ] && [[ $sql == *"$FAKE_DB_FAIL_ON"* ]]; then
+        echo "psql: error: server closed the connection unexpectedly" >&2
+        exit 2
+      fi
       printf '%s\n---\n%s\n' "$*" "$sql" >> "$FAKE_STATE/db.log"
       # FAKE_DB_RESTORE_FAIL=1 makes restoring a dump fail.
       case "$sql" in
