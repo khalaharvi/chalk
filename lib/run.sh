@@ -32,6 +32,14 @@ run_context() {
   # Set by cmd_run when the loop starts; calls outside a run record none.
   RUN_ID=""
   RUN_FP_BASE=()
+  # Set once the run has said how it ended (run_detain), so that
+  # run_teardown parks the sandbox's work only after an unexpected exit.
+  RUN_PARKED=""
+  # Why run_sync or run_park_work failed, and whether a database write has
+  # already failed in this run (run_db warns once).
+  RUN_SYNC_ERROR=""
+  RUN_PARK_ERROR=""
+  RUN_DB_WARNED=""
   load_config "$RUN_WT"
   RUN_PROMPTS="$(run_prompts_version)"
 
@@ -69,8 +77,88 @@ run_call() {
 }
 
 run_teardown() {
-  if [ -n "${RUN_SANDBOX:-}" ]; then sandbox_stop "$RUN_SANDBOX"; fi
+  local status=$?
+  if [[ -n ${RUN_SANDBOX:-} ]]; then
+    # A run that ended any other way than detention or graduation, such as
+    # a crash or a signal, still parks what the agent did since the last
+    # checkpoint. Before the first loop there is no agent work to park.
+    if [[ -z $RUN_PARKED ]] && (( RUN_LOOP > 0 )); then run_park_crash "$status"; fi
+    if [[ $RUN_PARKED != kept ]]; then sandbox_stop "$RUN_SANDBOX"; fi
+  fi
   rm -f "$RUN_DIR/pid"
+}
+
+# run_db FUNCTION ARGS...: a telemetry write during a run. The database is
+# optional to a run in progress, so a failed write never ends it: the first
+# failure is reported, its error kept in $RUN_IO/db.err, and the run goes on.
+run_db() {
+  local status=0
+  "$@" 2>> "$RUN_IO/db.err" || status=$?
+  if (( status != 0 )) && [[ -z $RUN_DB_WARNED ]]; then
+    RUN_DB_WARNED=1
+    warn "the telemetry database could not be written ($1, exit $status; see $RUN_IO/db.err). The run goes on; the report card will miss what was not recorded"
+  fi
+  return 0
+}
+
+# run_park_work MESSAGE [--allow-empty] -> REPLY: commits what is in the
+# sandbox with MESSAGE, and fetches every commit since RUN_BASE onto a new
+# detention branch, whose name it returns. Empty when there was nothing to
+# park, or when parking failed; then RUN_PARK_ERROR says why.
+run_park_work() {
+  local branch out
+  REPLY="" RUN_PARK_ERROR=""
+  branch="${| run_detention_branch; }"
+  if ! out="$(sandbox_commit "$RUN_SANDBOX" "$1" "${2:-}" 2>&1)"; then
+    RUN_PARK_ERROR="the sandbox could not commit: ${out:-no output}"
+  elif ! out="$(sandbox_export "$RUN_SANDBOX" "$RUN_BASE" 2>&1)"; then
+    RUN_PARK_ERROR="the sandbox could not export its commits: ${out:-no output}"
+  elif [[ ! -f $RUN_IO/out.bundle ]]; then
+    :
+  elif ! out="$(git -C "$RUN_WT" fetch -q "$RUN_IO/out.bundle" "HEAD:refs/heads/$branch" 2>&1)"; then
+    RUN_PARK_ERROR="git could not fetch the sandbox's commits: ${out:-no output}"
+  else
+    REPLY="$branch"
+  fi
+}
+
+# run_park_failed: says what became of the sandbox's work when
+# run_park_work failed. A container that still exists is kept under a new
+# name, so that the next run of the ticket does not remove it.
+run_park_failed() {
+  local kept="$RUN_SANDBOX-kept-$EPOCHSECONDS"
+  run_log "the agent's work could not be parked on a branch: $RUN_PARK_ERROR"
+  if docker rename "$RUN_SANDBOX" "$kept" >/dev/null 2>&1; then
+    RUN_PARKED=kept
+    run_log "the sandbox is kept as $kept; copy the work out with:"
+    run_log "  docker cp $kept:/work/repo ${RUN_WT@Q}.recovered && docker rm -f $kept"
+  else
+    run_log "the sandbox is gone, so work since the last checkpoint is lost; $RUN_BRANCH holds every checkpoint up to there"
+  fi
+}
+
+# run_park_crash STATUS: parks the sandbox's work after the run exited
+# with STATUS without saying how it ended: a signal (above 128) or an
+# unexpected failure. Runs from the EXIT trap, so nothing here may fail.
+run_park_crash() {
+  local status="$1" reason branch
+  RUN_PARKED=1
+  if (( status > 128 )); then reason="run stopped by a signal (exit $status)"
+  else reason="Chalk stopped unexpectedly (exit $status)"
+  fi
+  branch="${| run_park_work "detention($RUN_TICKET): $reason"; }"
+  if [[ -n $branch ]]; then
+    run_db db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$reason" "$RUN_ID"
+    run_db db_event "$RUN_TICKET" detention
+    run_log "$reason; the agent's work since the last checkpoint is parked on local branch $branch. To go on:"
+    run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
+    run_log "  fix what stopped the run, then: chalk office-hours -m \"what stopped it\""
+  elif [[ -n $RUN_PARK_ERROR ]]; then
+    run_log "$reason"
+    run_park_failed
+  else
+    run_log "$reason; the sandbox had no work beyond $RUN_BRANCH, which holds every checkpoint so far"
+  fi
 }
 
 # Checks the preconditions shared by every command that starts a sandbox,
@@ -308,12 +396,23 @@ run_stuck_facts() {
 "
 }
 
-# Brings commits made in the sandbox onto the host branch (fast-forward only).
+# Brings commits made in the sandbox onto the host branch (fast-forward
+# only). Returns non-zero when they cannot be brought over, as when the
+# branch moved on the host during the run, with RUN_SYNC_ERROR saying why;
+# the commits are still in the sandbox then, for run_detain to park.
 run_sync() {
-  sandbox_export "$RUN_SANDBOX" "$RUN_BASE"
+  local out
+  RUN_SYNC_ERROR=""
+  if ! out="$(sandbox_export "$RUN_SANDBOX" "$RUN_BASE" 2>&1)"; then
+    RUN_SYNC_ERROR="the sandbox could not export its commits: ${out:-no output}"
+    return 1
+  fi
   [ -f "$RUN_IO/out.bundle" ] || return 0
-  git -C "$RUN_WT" fetch -q "$RUN_IO/out.bundle" HEAD
-  git -C "$RUN_WT" merge -q --ff-only FETCH_HEAD
+  if ! out="$(git -C "$RUN_WT" fetch -q "$RUN_IO/out.bundle" HEAD 2>&1)" ||
+     ! out="$(git -C "$RUN_WT" -c advice.diverging=false merge -q --ff-only FETCH_HEAD 2>&1)"; then
+    RUN_SYNC_ERROR="${out:-git gave no reason}"
+    return 1
+  fi
   RUN_BASE="$(git -C "$RUN_WT" rev-parse HEAD)"
 }
 
@@ -338,13 +437,13 @@ run_spec_check() {
   sandbox_reset "$RUN_SANDBOX"
 
   verdict="$(agent_field "$result" '.verdict')"
-  db_record_call spec-check "${verdict:-none}" 0 false "$CHALK_CHEAP_MODEL" "$RUN_CALL_SECONDS" 0 "$result"
+  run_db db_record_call spec-check "${verdict:-none}" 0 false "$CHALK_CHEAP_MODEL" "$RUN_CALL_SECONDS" 0 "$result"
   case "$verdict" in
     pass)
       printf '%s\n' "$hash" > "$stamp"
       run_log "spec check passed (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s)" ;;
     fail)
-      db_event "$RUN_TICKET" spec_blocked
+      run_db db_event "$RUN_TICKET" spec_blocked
       run_log "spec check found checkpoints that are not ready:"
       run_log "$(agent_field "$result" '.problems[] | "  - \(.checkpoint)\n    problem: \(.problem)"
         + (if .suggestion then "\n    suggestion: \(.suggestion)" else "" end)')"
@@ -370,7 +469,7 @@ run_review() {
   sandbox_reset "$RUN_SANDBOX"
 
   verdict="$(agent_field "$result" '.verdict')"
-  db_record_call review "${verdict:-none}" 0 false "${CHALK_REVIEW_MODEL:-$CHALK_MODEL}" "$RUN_CALL_SECONDS" 0 "$result"
+  run_db db_record_call review "${verdict:-none}" 0 false "${CHALK_REVIEW_MODEL:-$CHALK_MODEL}" "$RUN_CALL_SECONDS" 0 "$result"
   RUN_REVIEW_SUMMARY="$(agent_field "$result" '.summary')"
   run_log "final review: ${verdict:-no verdict}. $RUN_REVIEW_SUMMARY"
 
@@ -399,6 +498,7 @@ run_next_step() {
     review)      REPLY="fix the review findings above, or raise CHALK_REVIEW_ROUNDS (now $CHALK_REVIEW_ROUNDS)" ;;
     failed)      REPLY="the rubric still fails after $CHALK_MAX_RETRIES retries; fix the failure in $RUN_IO/rubric.log, or make the checkpoint smaller" ;;
     agent_error) REPLY="see why the agent stopped in $RUN_IO/loop.json; if it ran out of budget, raise CHALK_BUDGET_USD (now $CHALK_BUDGET_USD)" ;;
+    sync)        REPLY="$RUN_BRANCH changed in $RUN_WT during the run, so the loop's commits could not be fast-forwarded onto it; merge the detention branch into $RUN_BRANCH yourself, and commit nothing to a branch while Chalk runs on it" ;;
     passed)      REPLY="the rubric passes but no checkpoint was ticked; tick it if it is done, or make it testable" ;;
     deja_vu)     REPLY="this fails like the open detention of ${RUN_OPEN_TICKET:-another ticket}; fix that one first" ;;
     repeat)      REPLY="the agent made the same failing change twice; fix the failure yourself, a retry would repeat it" ;;
@@ -425,16 +525,27 @@ run_detention_branch() {
 # lesson, says what to do next, and halts this run. KIND is blocked,
 # loop_limit or review; how the last loop ended when the retries ran out
 # (failed, agent_error or passed); or the verdict that stopped the run
-# (deja_vu, repeat or no_change), or stuck when the decider stopped it.
+# (deja_vu, repeat or no_change), or stuck when the decider stopped it;
+# or sync when the loop's commits could not be brought onto the branch.
 # FINGERPRINT and FIRST_ERROR are given only
 # when the loop that detained the run failed its rubric.
+# The work is parked and the next step said before anything is written to
+# the database, and a failed write does not stop either (run_db).
 run_detain() {
   local kind="$1" reason="$2" detail="${3:-}" fingerprint="${4:-}" first_error="${5:-}" branch signature
-  branch="${| run_detention_branch; }"
+  RUN_PARKED=1
+  branch="${| run_park_work "detention($RUN_TICKET): $reason" --allow-empty; }"
 
-  sandbox_commit "$RUN_SANDBOX" "detention($RUN_TICKET): $reason" --allow-empty
-  sandbox_export "$RUN_SANDBOX" "$RUN_BASE"
-  git -C "$RUN_WT" fetch -q "$RUN_IO/out.bundle" "HEAD:refs/heads/$branch"
+  run_log "DETENTION: $reason"
+  if [ -n "$detail" ]; then run_log "$detail"; fi
+  run_log "next: ${| run_next_step "$kind"; }"
+  if [[ -n $branch ]]; then
+    run_log "work parked on local branch $branch. To unblock:"
+    run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
+    run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
+  else
+    run_park_failed
+  fi
 
   signature="$reason"
   if [ -n "$detail" ]; then
@@ -444,15 +555,8 @@ $detail"
     signature="$signature
 $(tail -n 40 "$RUN_IO/rubric.log")"
   fi
-  db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$signature" "$RUN_ID" "$fingerprint" "$first_error"
-  db_event "$RUN_TICKET" detention
-
-  run_log "DETENTION: $reason"
-  if [ -n "$detail" ]; then run_log "$detail"; fi
-  run_log "next: ${| run_next_step "$kind"; }"
-  run_log "work parked on local branch $branch. To unblock:"
-  run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
-  run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
+  run_db db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$signature" "$RUN_ID" "$fingerprint" "$first_error"
+  run_db db_event "$RUN_TICKET" detention
 }
 
 # Pushes the finished branch and opens the pull or merge request. chalk
@@ -571,7 +675,7 @@ cmd_run() {
     if [ "$(agent_field "$result" '.status')" = "blocked" ]; then
       fp=()
       run_verdict fp blocked
-      db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
+      run_db db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
       decider_flush
       run_detain blocked "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
       return 1
@@ -592,7 +696,13 @@ cmd_run() {
       ended="failed"
     else
       sandbox_commit "$RUN_SANDBOX" "chalk($RUN_TICKET): $mode, loop $RUN_LOOP"
-      run_sync
+      if ! run_sync; then
+        run_db db_record_call "$mode" "$agent_status" "$rubric_exit" false "$CHALK_MODEL" \
+          "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
+        decider_flush
+        run_detain sync "the loop's commits could not be brought onto $RUN_BRANCH" "$RUN_SYNC_ERROR"
+        return 1
+      fi
       remaining="$(spec_open_count "$RUN_SPEC")"
       if [ "$mode" = "fix-review" ] || [ "$remaining" -lt "$open" ]; then
         progressed="true"
@@ -625,7 +735,7 @@ cmd_run() {
       stuck="${| decider_stuck "${| run_stuck_state base fp; }"; }"
     fi
 
-    db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
+    run_db db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
       "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
     decider_flush
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"

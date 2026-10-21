@@ -22,12 +22,33 @@ do about it.
 | `deja_vu: …` | Only with `CHALK_FP_RULES=on`: the loop fails like an open detention of another ticket. | Fix that ticket, which it names, first |
 | `repeat: …` | Only with `CHALK_FP_RULES=on`: the same failing change as the loop before. | Fix the failure yourself; a retry would repeat it |
 | `no_change: …` | Only with `CHALK_FP_RULES=on`: the agent changed nothing. | Make the checkpoint clearer, or do the step yourself |
+| `the loop's commits could not be brought onto chalk/<TICKET>` | The branch changed in its worktree during the run (a commit or an edit there), so the loop's commits could not be fast-forwarded onto it. Git's reason is printed. | Merge the detention branch into `chalk/<TICKET>` yourself, and commit nothing to a branch while Chalk runs on it |
 
 The verdicts are explained in [Verdicts](../operating/dashboard.md#verdicts).
 Whatever the reason, when the last loop had three or more actions refused
 by permission checks, `next:` says so and points to `chalk doctor` instead:
 that is what a loop looks like when auto mode is unavailable for the model
 (see [Permissions](../configuring/permissions.md#auto-mode-requirements)).
+
+### When a run stops without a detention
+
+A run can also end because it was stopped (Ctrl-C, `kill`, a closed
+terminal) or because Chalk itself failed. Either way, once a loop has
+started, the agent's work since the last checkpoint is still committed and
+parked on a detention branch, and the log says
+`run stopped by a signal (exit 143)` or `Chalk stopped unexpectedly (exit N)`
+with the same three lines to continue. When the sandbox had nothing beyond
+your branch, the log says so instead.
+
+If the work cannot be parked, for example because the container died, the
+log says why. A container that still exists is kept as
+`chalk-sandbox-…-kept-<timestamp>`, with the `docker cp` command that copies
+the work out; a container that is gone is reported as gone.
+
+The telemetry database is not needed to finish a run. If it goes away
+mid-run (`chalk db down` refuses while runs are alive, unless you add
+`--force`), Chalk warns once, keeps the error in `io/db.err`, and the run
+goes on; the report card then misses what was not recorded.
 
 ## What detention does
 
