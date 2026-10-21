@@ -114,12 +114,13 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
   - a sync conflict and a SIGTERM mid-loop, each ending on a detention branch with the loop's work;
   - a sandbox that vanishes, which says plainly that the work since the last checkpoint is lost.
 
-**E-PR2: The agent's own failure is shown and recorded (`fix(agent)`)**, covering E2, E3, E7 and E9.
-- `agent_call` records its exit code in `$io/$name.exit` and wraps the call in `timeout "$CHALK_AGENT_TIMEOUT"` (new key, default 1800 s), as `agent_start_mode` already does.
-- `agent_failure -> REPLY` classifies a failed call from the exit code, `.subtype` and the last lines of `.err` into one of `timeout`, `auth`, `rate_limit`, `usage_limit`, `overloaded`, `budget`, `cli_missing`, `crash`. Patterns live in one table with tests against recorded CLI outputs. It is a value function and never fails.
-- The detention reason and the `runs` row (new nullable `failure` column) carry the class and the first useful `.err` line; the lesson signature for `agent_error` uses that, not `rubric.log`.
-- Review and spec check: "no verdict" becomes its own outcome. `CHALK_REVIEW_REQUIRED` (new key, default `true`, Decision 2) detains with kind `review_error` and exit 3, so no pull request opens without a review; when `false`, the PR body says "the final review did not run: <class>".
-- Rubric exit codes 124, 137 and 125-127 map to `rubric_timeout` (names `CHALK_RUBRIC_TIMEOUT`), `rubric_oom` and `rubric_broken`; `rubric_broken` detains at once instead of asking the agent to fix it.
+**E-PR2: The agent's own failure is shown and recorded (`fix(agent)`)**, covering E2, E3, E7 and E9. As built, after two real runs with Claude Code 2.1.306:
+- **What the real CLI does.** On an API error, the CLI exits 1, prints nothing on stderr, and answers with `is_error: true`, `subtype: "success"`, `terminal_reason: "api_error"`, the HTTP status in `api_error_status` and the cause in `result`, for example `Invalid API key · Fix external API key` (401), or an untrusted-certificate message behind a TLS-intercepting proxy. Chalk read only `.subtype`, so it logged "agent success", retried a refused key three times, and let the spec check fail open with no word. The cause is in the JSON, not on stderr, so `.err` is read only when there is no JSON answer.
+- `agent_call` wraps the call in `timeout "$CHALK_AGENT_TIMEOUT"` (new key, default 1800 s) and writes its exit status to `NAME.exit`.
+- `agent_failure IO NAME -> REPLY` gives `CLASS: the CLI's message (HTTP n)`. The classes are `timeout`, `cli_missing`, `tls`, `network`, `auth`, `rate_limit`, `usage_limit`, `overloaded`, `server`, `budget`, `max_turns`, `error` and `crash`. `run_call` stores it in `RUN_CALL_FAILURE`, `agent_status` holds the class, and the `runs.failure` column holds the whole line. Unit tests use the two recorded real answers.
+- `tls`, `auth`, `cli_missing` and `usage_limit` fail the same way every time: a loop detains at once, and a spec check that hits one stops the run before any loop. Each class has its own `next:` line; `tls` names `CHALK_EXTRA_CA_CERTS`. Rate limits and overload are still retried as before; F-PR2 adds backoff.
+- A final review that does not run detains with kind `review_error` when `CHALK_REVIEW_REQUIRED=true` (Decision 2). With `false`, the request body says `did not run (CLASS: …)`. Exit code 3 for detentions comes with E-PR4.
+- Rubric exits get named reasons: 124 `rubric timed out after Ns (CHALK_RUBRIC_TIMEOUT)`, 137 killed (usually out of memory), and 126/127 a command not found. All are still retried, because a test-first checkpoint may create the missing command, unlike the design's first plan to detain on 125-127. For `docker exec`, 125 is not a code the rubric can return.
 
 **E-PR3: Evidence that survives (`fix(run)`)**, covering E6, E25 and E26.
 - `RUN_IO` becomes `runs/T/$RUN_ID/io/`, with per-loop files `loop-03.json`, `loop-03.err`, `rubric-03.log`. The newest 5 run directories per ticket are kept (`CHALK_KEEP_RUNS`).
@@ -275,7 +276,7 @@ Harness² optimises without ground truth and spends most of its machinery making
 
 | Quarter | From this design | Fits with |
 |---|---|---|
-| Q4 2026 (v0.7, "Make it trustworthy") | E-PR1 (#94), E-PR2, E-PR6, E-PR3, E-PR4 | Real runs, Doctor and clearer detentions |
+| Q4 2026 (v0.7, "Make it trustworthy") | E-PR1 (#94), E-PR6 (#96), E-PR2, E-PR3, E-PR4 | Real runs, Doctor and clearer detentions |
 | Q1 2027 (v0.8) | E-PR5, F-PR1, F-PR2 (shadow), T-PR1 | Resume (#23) reuses `run_park` and the fleet state file; Verdicts on |
 | Q2 2027 (v0.9) | F-PR2 on, F-PR3, Part 3 interface additions, ticket pattern, T-PR2, T-PR3 | Ticket sources, Bring your own decider, blocker ladder PR 1 to 2 |
 | Q3 2027 (v1.0) | T-PR4; T-PR5 as *stretch* | Harness adapters (#39 to #41); Stability freezes the exit codes and the pack layout |

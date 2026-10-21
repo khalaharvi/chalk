@@ -371,8 +371,21 @@ detain no_change FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on
 check "next step on no_change: make the checkpoint clearer or do it yourself" \
   detained no_change "no_change: " "the agent changed nothing"
 detain agent_error FAKE_CLAUDE_MODE=error CHALK_MAX_RETRIES=0
-check "next step when the agent stopped early: see why, or raise the budget" \
-  detained agent_error "agent stopped early (error_max_turns)" "see why the agent stopped in .*/loop.json"
+check "next step when the agent ran out of turns: make the checkpoint smaller" \
+  detained agent_error "agent stopped early (max_turns: error_max_turns)" "the agent ran out of turns: make the checkpoint smaller"
+# Refused credentials fail the same way every time: no retries.
+detain auth FAKE_API_ERROR=401 CHALK_SPEC_CHECK=false
+check "a refused key detains after one loop, naming the CLI's message" \
+  sh -c "grep -qF 'DETENTION: agent stopped early (auth: Invalid API key · Fix external API key (HTTP 401))' '$tmp/detain-auth.log' &&
+    test \"\$(grep -c 'loop [0-9]* (.*) started' '$tmp/detain-auth.log')\" -eq 1"
+check "next step for a refused key: check the credentials" \
+  next_step "$tmp/detain-auth.log" "the agent's credentials were refused: check ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN"
+detain agent_timeout FAKE_AGENT_TIMEOUT=1 CHALK_SPEC_CHECK=false CHALK_MAX_RETRIES=0
+check "an agent call that takes too long is stopped, naming CHALK_AGENT_TIMEOUT" \
+  detained agent_timeout "agent stopped early (timeout: no answer within 1800s" "the agent gave no answer within CHALK_AGENT_TIMEOUT"
+detain rubric_timeout CHALK_TEST_CMD="exit 124" CHALK_MAX_RETRIES=0
+check "a rubric that timed out says so, naming CHALK_RUBRIC_TIMEOUT" \
+  grep -q "DETENTION: rubric timed out after 900s (CHALK_RUBRIC_TIMEOUT)" "$tmp/detain-rubric_timeout.log"
 detain passed FAKE_CLAUDE_MODE=idle CHALK_MAX_RETRIES=0
 check "next step when nothing was ticked: tick it or make it testable" \
   detained passed "rubric passed but no checkpoint was ticked" "the rubric passes but no checkpoint was ticked"
@@ -385,6 +398,37 @@ detain loop_limit CHALK_MAX_LOOPS=1
 check "next step at the loop limit: split the checkpoints or raise the limit" \
   detained loop_limit "loop limit of 1 reached" \
     "split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now 1)"
+cd "$tmp/demo"
+
+# 2b'''. An agent call that cannot run is reported with the CLI's own words.
+# A refused key stops the run at the spec check, before any loop.
+chalk new PROJ-75 Refused key >/dev/null
+cd "$tmp/demo.worktrees/PROJ-75"
+git add -A && git commit -q -m "spec"
+if FAKE_API_ERROR=401 chalk run > "$tmp/run75.log" 2>&1; then fail "a run with a refused key must fail"; fi
+check "a refused key stops the run at the spec check, with what to do" \
+  sh -c "grep -qF 'the spec check could not run (auth: Invalid API key · Fix external API key (HTTP 401)); the agent' '$tmp/run75.log' &&
+    grep -q 'then run chalk run again$' '$tmp/run75.log' &&
+    ! grep -q 'loop 1' '$tmp/run75.log' && ! grep -q 'unexpected failure' '$tmp/run75.log'"
+check "the failure is recorded with the call" grep -q -e "-v failure=auth: Invalid API key" "$FAKE_STATE/db.log"
+cd "$tmp/demo"
+
+# A final review that cannot run detains, unless CHALK_REVIEW_REQUIRED=false.
+chalk new PROJ-76 Review did not run >/dev/null
+cd "$tmp/demo.worktrees/PROJ-76"
+git add -A && git commit -q -m "spec"
+if FAKE_REVIEW=error chalk run > "$tmp/run76.log" 2>&1; then fail "a review that cannot run must detain"; fi
+check "a review that cannot run detains instead of opening the request" \
+  sh -c "grep -qF 'DETENTION: the final review did not run (budget: error_max_budget_usd)' '$tmp/run76.log' && ! grep -q 'chalk/PROJ-76' '$FAKE_STATE/glab.log'"
+check "next step for a review that cannot run names CHALK_REVIEW_REQUIRED" \
+  next_step "$tmp/run76.log" "the final review could not run: the call reached its spend cap.*CHALK_REVIEW_REQUIRED=false"
+cd "$tmp/demo"
+chalk new PROJ-78 Review not required >/dev/null
+cd "$tmp/demo.worktrees/PROJ-78"
+git add -A && git commit -q -m "spec"
+FAKE_REVIEW=error CHALK_REVIEW_REQUIRED=false chalk run > "$tmp/run78.log" 2>&1 || { cat "$tmp/run78.log"; fail "a run whose review is not required"; }
+check "with CHALK_REVIEW_REQUIRED=false, the request says the review did not run" \
+  grep -qF "Agent review before submission: did not run (budget: error_max_budget_usd)" "$FAKE_STATE/glab.log"
 cd "$tmp/demo"
 
 # 2b''. No way a run can end loses the sandbox's work or shows a stack trace.

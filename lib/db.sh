@@ -149,17 +149,19 @@ db_record_call() {
     -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
     -v lessons="$lessons" -v fp_rules="${CHALK_FP_RULES:-}" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
     -v failing_tests="$tests" -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
-    -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
+    -v failure="${RUN_CALL_FAILURE:-}" -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
                   model, prompts, cost_usd, budget_usd, duration_s, input_tokens,
                   output_tokens, cache_read_tokens, cache_write_tokens, turns, denials, lessons,
-                  fp_rules, run_id, tests_hash, failing_tests, failing, first_error, tree_id, verdict)
+                  fp_rules, run_id, tests_hash, failing_tests, failing, first_error, tree_id, verdict,
+                  failure)
 VALUES (:'repo', :'ticket', :'branch', :'loop', :'kind', :'status', :'rubric_exit', :'progressed',
         :'model', :'prompts', :'cost', :'budget', :'seconds', :'input',
         :'output', :'cache_read', :'cache_write', :'turns', :'denials', :'lessons',
         nullif(:'fp_rules', ''), nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing_tests', ''),
         nullif(:'failing', '')::int,
-        nullif(:'first_error', ''), nullif(:'tree_id', ''), nullif(:'verdict', ''));
+        nullif(:'first_error', ''), nullif(:'tree_id', ''), nullif(:'verdict', ''),
+        nullif(:'failure', ''));
 SQL
 }
 

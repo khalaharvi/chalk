@@ -11,6 +11,8 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_SETUP_CMD]=""
   [CHALK_TEST_CMD]=""
   [CHALK_RUBRIC_TIMEOUT]=900
+  # Seconds an agent call may take before it is stopped.
+  [CHALK_AGENT_TIMEOUT]=1800
   [CHALK_BUDGET_USD]=1.00
   [CHALK_MAX_LOOPS]=20
   [CHALK_MAX_RETRIES]=2
@@ -25,6 +27,9 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_SPEC_CHECK]=true
   [CHALK_REVIEW]=true
   [CHALK_REVIEW_ROUNDS]=1
+  # When the final review cannot run, detain (true) instead of opening the
+  # request without it (false).
+  [CHALK_REVIEW_REQUIRED]=true
   [CHALK_REVIEW_MODEL]=""
   [CHALK_CHEAP_MODEL]=haiku
   [CHALK_DISTILL]=true
@@ -153,6 +158,12 @@ load_config() {
     die "CHALK_MAX_PARALLEL must be 'auto' or a positive whole number (got '$CHALK_MAX_PARALLEL')"
   [[ $CHALK_SANDBOX_MEM_MB =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
+  [[ $CHALK_AGENT_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
+    die "CHALK_AGENT_TIMEOUT must be a positive number of seconds (got '$CHALK_AGENT_TIMEOUT')"
+  case "$CHALK_REVIEW_REQUIRED" in
+    true|false) ;;
+    *) die "CHALK_REVIEW_REQUIRED must be 'true' or 'false' (got '$CHALK_REVIEW_REQUIRED')" ;;
+  esac
   config_check_ca
   [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"

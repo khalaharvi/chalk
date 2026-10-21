@@ -18,6 +18,9 @@ CHALK_TEST_CMD=
 CHALK_SETUP_CMD=
 # Seconds before a hung rubric is killed.
 CHALK_RUBRIC_TIMEOUT=900
+# Seconds an agent call may take before it is stopped and counted as a
+# timeout, which is retried like other failures.
+CHALK_AGENT_TIMEOUT=1800
 # Optional test report the rubric writes, as a path inside the repo: JUnit
 # XML, go test -json output or a jest --json report, told apart by content.
 # Names the failing tests more reliably than the rubric's output. The
@@ -93,6 +96,10 @@ CHALK_SPEC_CHECK=true
 CHALK_REVIEW=true
 # Fix-and-review-again rounds allowed before the work goes to detention.
 CHALK_REVIEW_ROUNDS=1
+# When the review cannot run (its call fails, or it gives no verdict), the
+# work goes to detention (true), or the request opens and says the review
+# did not run (false).
+CHALK_REVIEW_REQUIRED=true
 # Model for the review (empty: same as the loop).
 CHALK_REVIEW_MODEL=
 # Model for the spec check and lesson distillation.

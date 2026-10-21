@@ -16,6 +16,8 @@
 #   FAKE_DISTILL=none          distillation finds no lesson in the evidence
 #   FAKE_REVIEW=fail-once      first review fails, later ones pass
 #   FAKE_REVIEW=fail           every review fails
+#   FAKE_REVIEW=error          every review stops at its spend cap, with no verdict
+#   FAKE_API_ERROR=401         every call fails as the real CLI does for a refused key
 #   FAKE_AUTO_MODE=off         auto mode is unavailable: sessions start in manual mode
 #   FAKE_AUTO_MODE=unknown     the CLI does not answer the SDK's initialize request
 set -euo pipefail
@@ -24,6 +26,13 @@ printf '%s\n=====\n' "$*" >> "$FAKE_STATE/claude.log"
 
 is_error=false subtype=success denials='[]'
 answer() { printf '{"is_error":%s,"subtype":"%s","total_cost_usd":0.25,"num_turns":6,"usage":{"input_tokens":1200,"output_tokens":900,"cache_read_input_tokens":42000,"cache_creation_input_tokens":3000},"modelUsage":{"claude-fake-1":{"costUSD":0.25}},"permission_denials":%s,"structured_output":%s}\n' "$is_error" "$subtype" "$denials" "$1"; }
+
+# As Claude Code 2.1.306 answered a call with an invalid ANTHROPIC_API_KEY:
+# is_error true, but subtype "success", and nothing on stderr.
+if [ -n "${FAKE_API_ERROR:-}" ] && [[ $prompt != *'"subtype":"initialize"'* ]]; then
+  printf '{"type":"result","subtype":"success","is_error":true,"api_error_status":%s,"duration_ms":412,"num_turns":1,"result":"Invalid API key · Fix external API key","stop_reason":"stop_sequence","terminal_reason":"api_error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"modelUsage":{},"permission_denials":[]}\n' "$FAKE_API_ERROR"
+  exit 1
+fi
 
 case "$prompt" in
   *'"subtype":"initialize"'*)
@@ -45,7 +54,9 @@ case "$prompt" in
     if [ "$mode" = "fail-once" ]; then
       if [ -e "$FAKE_STATE/reviewed" ]; then mode="pass"; else touch "$FAKE_STATE/reviewed"; mode="fail"; fi
     fi
-    if [ "$mode" = "fail" ]; then
+    if [ "$mode" = "error" ]; then
+      is_error=true subtype=error_max_budget_usd; answer 'null'
+    elif [ "$mode" = "fail" ]; then
       answer '{"verdict":"fail","summary":"Stub found.","findings":[{"severity":"blocker","file":"work.txt","issue":"feature is a stub"}]}'
     else
       answer '{"verdict":"pass","summary":"Looks complete.","findings":[]}'
