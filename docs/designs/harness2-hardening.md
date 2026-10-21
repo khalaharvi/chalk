@@ -142,7 +142,7 @@ From a read-only audit of `lib/`, `bin/chalk` and `share/sandbox/scripts/`. Find
 **E-PR6: Proxies and registries (`fix(sandbox)`)**, covering E28 and E29, found in a real run.
 - `CHALK_EXTRA_CA_CERTS` (a PEM file on the host, default empty) is mounted read-only into the sandbox and named by `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `GIT_SSL_CAINFO` (as a bundle with the system CAs), and passed to `chalk sandbox build` as a build secret, so `npm install` and the agent's own API calls work behind a TLS-intercepting proxy.
 - A build or pull that fails with `SELF_SIGNED_CERT_IN_CHAIN` or `certificate verify failed` says to set `CHALK_EXTRA_CA_CERTS`; a `429 Too Many Requests` from a registry says to retry later, `docker login`, or point `CHALK_DB_IMAGE` / `CHALK_IMAGE` at a mirror. Neither is a stack trace.
-- `chalk doctor` checks that the file exists and parses, and reports whether the sandbox image trusts it.
+- `chalk doctor` checks that the file exists and parses (#96). A follow-up adds a TLS probe: one HTTPS request from `node` in the sandbox image, with the CA mounted as a run mounts it, which fails with the same advice as a run; and a hint when the shell sets `NODE_EXTRA_CA_CERTS` or `SSL_CERT_FILE` but `CHALK_EXTRA_CA_CERTS` is not set. It is only a hint: in the real run behind this kind of proxy, containers were re-signed by a different CA than the host, so copying the host's CA automatically would have been wrong.
 - E30 (Chalk's own repository has no `.chalk/config`) is fixed under Real runs: `chalk init` in this repository, with `make check` as the rubric.
 
 ---

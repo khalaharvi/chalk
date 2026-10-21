@@ -64,6 +64,44 @@ doctor_auto_mode() {
   esac
 }
 
+# Whether a sandbox reaches the API over TLS (sandbox_tls_probe), so that a
+# proxy that re-signs HTTPS is found here rather than by the first run.
+doctor_tls() {
+  local url="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}" result hint
+  local host="${url#https://}"
+  host="${host%%/*}"
+  result="${| sandbox_tls_probe; }"
+  case "$result" in
+    ok)
+      doctor_check required "sandbox reaches $host over TLS" "" true ;;
+    tls:*)
+      hint="${| system_docker_hint "certificate verify failed"; }"
+      doctor_check required "sandbox reaches $host over TLS" "${result#tls: }${hint}" false ;;
+    network:*)
+      doctor_check required "sandbox reaches $host" \
+        "${result#network: }; check the network, any proxy, and ANTHROPIC_BASE_URL" false ;;
+    *)
+      doctor_check optional "sandbox reaches $host over TLS" \
+        "could not check; needs Docker running and the image built, with node in it" false ;;
+  esac
+}
+
+# doctor_ca_hint: when CHALK_EXTRA_CA_CERTS is not set but the shell points
+# a tool at its own CA file, as on networks that re-sign HTTPS, says so.
+# Sandboxes do not see the shell's CAs. Only a hint: the CA a network uses
+# for containers can differ from the host's.
+doctor_ca_hint() {
+  local var
+  [[ -z ${CHALK_EXTRA_CA_CERTS:-} ]] || return 0
+  for var in NODE_EXTRA_CA_CERTS SSL_CERT_FILE REQUESTS_CA_BUNDLE CURL_CA_BUNDLE; do
+    if [[ -n ${!var:-} && -f ${!var} ]]; then
+      doctor_check optional "extra CA certificates" \
+        "not set, but your shell sets $var=${!var}; if this network re-signs HTTPS, export CHALK_EXTRA_CA_CERTS=${!var@Q} (sandboxes do not see your shell's CAs)" false
+      return 0
+    fi
+  done
+}
+
 # Whether the decider is calibrated (decider_calibration): the numbers it
 # is judged by, and what CHALK_DECIDER=on does until it is.
 doctor_decider_calibration() {
@@ -169,6 +207,7 @@ cmd_doctor() {
       "the file must hold PEM certificates; check it with: openssl x509 -noout -in ${CHALK_EXTRA_CA_CERTS@Q}" \
       openssl x509 -noout -in "$CHALK_EXTRA_CA_CERTS"
   fi
+  doctor_ca_hint
   local forge cli
   forge="${| forge_kind; }"
   cli="${CHALK_FORGE_CLI[$forge]}"
@@ -185,6 +224,7 @@ cmd_doctor() {
   doctor_check optional "sandbox image"     "built on first run, or: chalk sandbox build" docker image inspect "$CHALK_IMAGE"
   doctor_check optional "sandbox bash ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]}+" \
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
+  doctor_tls
   doctor_auto_mode
   doctor_decider
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured
