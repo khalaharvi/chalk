@@ -275,10 +275,12 @@ Settled in review on 2026-10-21:
 3. **The harness pack lives in `.chalk/harness/`.** `.chalk/prompts/` keeps working as a legacy location; when both define the same prompt, `.chalk/harness/` wins and `chalk doctor` warns. "Syllabus" stays an internal metaphor for now and is not added to the glossary.
 4. **Dependency caches never carry one run's dependency changes into another.** Each run starts from a fresh branch off the latest base, and something may have merged in between, so a cache must reflect the run's own base commit, never another run's edits. See F-PR3's cache rules.
 
+5. **`chalk share` includes tuning counts.** Proposals made, accepted and rejected, `KEEP_BASE` answers, and `chalk tune` outcomes (`effect`, `no observed effect`, `ungraded`), as counts only. Never pack contents, proposal text, file names or evidence. T-PR4 updates `PRIVACY.md` and the payload test in the same PR.
+6. **The improver is an agent call, never a decider.** A proposal is open-ended writing over a whole run's evidence, which is the opposite of the bounded questions a decider answers and is calibrated on. A new key, `CHALK_TUNE_MODEL`, defaults to `CHALK_REVIEW_MODEL` (the strongest read-only model already configured), so it goes through the harness interface and is costed and capped like every other call.
+
 ## Open Questions
 
-1. **Sharing tune results.** Should `chalk share` include "packs accepted" and "tune: effect / no effect" counts? Proposed: counts only, never pack contents; needs a `PRIVACY.md` update.
-2. **Improver model.** Proposals use `CHALK_REVIEW_MODEL` by default. Should a decider ever propose edits, or stay limited to bounded questions?
+None at present.
 
 ## Not doing
 
