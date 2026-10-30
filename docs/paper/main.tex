@@ -31,6 +31,11 @@
 \newtheorem{remark}{Remark}
 
 \newcommand{\tbd}[1]{\textcolor{red!70!black}{[#1]}}
+% Experiment results: experiments/analyze.sh writes results.tex, a list of
+% \Exp... macros; copy it here and every \expval{Name} shows its value.
+% Without it, each shows as a red placeholder.
+\IfFileExists{results.tex}{\input{results.tex}}{}
+\newcommand{\expval}[1]{\ifcsname Exp#1\endcsname\csname Exp#1\endcsname\else\tbd{#1}\fi}
 \newcommand{\Tset}{\mathsf{T}}
 \newcommand{\Eerr}{\mathsf{E}}
 \newcommand{\Dtree}{\mathsf{D}}
@@ -420,7 +425,15 @@ All policies below are stop-only with respect to $\pi_0$ and computable from log
 The unit of analysis is the run. Precision uses exact Clopper--Pearson bounds. Savings use Hoeffding bounds on the known range, with a bootstrap reported alongside. Multiplicity across verdict types is Bonferroni-corrected. Every hypothesis is reported, including nulls. All code, the fault catalogue and the anonymised ledgers are released.
 
 \subsection{Results}
-\tbd{To be completed. No experiment in this section has been run.}
+\emph{No experiment in this section has been run yet.} The harness that produces these numbers is in \texttt{experiments/}. \texttt{faults.sh} writes the seeded faults (C3), \texttt{run.sh} runs a corpus within a declared spend ceiling, and \texttt{analyze.sh} writes the macros used below. Every bracketed value is filled when its \texttt{results.tex} is present.
+
+\paragraph{Spend and runs.} \expval{Runs} runs, of which \expval{Detained} were detained, cost \$\expval{Spend} in all.
+
+\paragraph{Stop-only control (H1, H2).} The union of the stopping verdicts fired on \expval{AnyJudged} judged runs, \expval{AnyWrong} of them wrongful. That gives a 95\% lower bound of \expval{AnyLower} on being right, \$\expval{AnySaved} saved per firing (95\% lower bound), and a net of \$\expval{AnyNet} per firing at \$5 per wrongful stop. \expval{Certified} verdict--model strata were certified.
+
+\paragraph{Evidence-carrying lessons (H3--H5).} Of \expval{Blockers} detentions in the experiment's repositories, the probe failed at detention in \expval{ProbeFailed}, passed in \expval{ProbePassed}, and was inconclusive in \expval{ProbeInconclusive}. The oracle's fix was proved in \expval{OracleProved} of \expval{OracleFixes} cases. Pre-flight caught \expval{PreflightCaught} of \expval{PreflightChecked} regressions, after \expval{PreflightLoops} loops in all.
+
+\paragraph{Evidence records (H6).} \expval{RecordsVerified} of \expval{Records} evidence records verified.
 
 % ===================================================================
 \section{Related work}
@@ -514,6 +527,7 @@ Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chal
 Probes, needs, pre-flight, evidence-based expiry (\texttt{chalk needs}) & implemented (this work) \\
 Per-repository tuning (\texttt{chalk tune}, exploration, prompt A/B) & implemented (this work) \\
 Evidence record and CI verification (\texttt{chalk attest}) & implemented (this work) \\
+Experiment harness (\texttt{experiments/}: faults, runs under a ceiling, analysis) & implemented (this work) \\
 \bottomrule
 \end{tabularx}
 \caption{What is shipped, designed and proposed.}
