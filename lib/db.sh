@@ -130,11 +130,15 @@ db_sql() {
 # an associative array filled like fp_compute's, plus its verdict; a key it
 # does not set is stored as NULL. Of its failing tests, the first 100 are
 # stored, which also keeps them well inside one command-line argument.
-# CHALK_FP_RULES is stored with every call, so the dashboard can tell what
-# a verdict did (on) from what it would have done (shadow).
+# The verdicts' mode is stored with every call, so the dashboard and the
+# gate can tell what a verdict did (on) from what it would have done
+# (shadow): RUN_FP_MODE when the run loop set it for this call, else
+# CHALK_FP_RULES, with on recorded as shadow. So a call records on only
+# when its verdict detained the run (run_fp_mode).
 db_record_call() {
   local kind="$1" status="$2" rubric_exit="$3" progressed="$4" model="$5"
-  local seconds="$6" lessons="$7" result="$8" ran tests=""
+  local seconds="$6" lessons="$7" result="$8" ran tests="" fp_rules="${RUN_FP_MODE:-${CHALK_FP_RULES:-}}"
+  if [[ -z ${RUN_FP_MODE:-} && $fp_rules == on ]]; then fp_rules=shadow; fi
   local -A usage __no_fp=()
   local -n __fp="${9:-__no_fp}"
   if [[ ${__fp[tests]:-UNKNOWN} != UNKNOWN ]]; then tests="$(head -n 100 <<<"${__fp[tests]}")"; fi
@@ -147,7 +151,7 @@ db_record_call() {
     -v cost="$(agent_cost "$result")" -v budget="$CHALK_BUDGET_USD" -v seconds="$seconds" \
     -v input="${usage[input]}" -v output="${usage[output]}" -v cache_read="${usage[cache_read]}" \
     -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
-    -v lessons="$lessons" -v fp_rules="${CHALK_FP_RULES:-}" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
+    -v lessons="$lessons" -v fp_rules="$fp_rules" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
     -v failing_tests="$tests" -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
     -v failure="${RUN_CALL_FAILURE:-}" -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
@@ -416,15 +420,20 @@ SQL
 #   waiting  neither yet: no progress since, and no detention
 # The numbers at any threshold are those of the lowest level at or above it.
 # Answers taken under on are left out: one that acted stopped its run, so
-# nothing after it could show whether it was right.
+# nothing after it could show whether it was right. Judged runs are also
+# taken in blocks of CERTIFY_BLOCK, in the order they were judged (by their
+# first progressing loop after the answer, or their detention): blocks is
+# how many are complete, block_wrong the false stops in the latest one, and
+# open_wrong those in the block still filling, which the gate (certify.sh)
+# judges by.
 db_decider_calibration() {
-  db_sql <<'SQL'
+  db_sql -v block="$CERTIFY_BLOCK" <<'SQL'
 WITH a AS (
   SELECT coalesce(d.url, '') AS url, coalesce(d.model, '') AS model, d.run_id, c.loop, d.confidence,
-         EXISTS (SELECT 1 FROM runs l
-                  WHERE l.run_id = d.run_id AND l.loop > c.loop AND l.progressed
-                    AND l.kind IN ('continue', 'retry', 'fix-review')) AS progressed_after,
-         EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = d.run_id) AS detained
+         (SELECT min(l.created_at) FROM runs l
+           WHERE l.run_id = d.run_id AND l.loop > c.loop AND l.progressed
+             AND l.kind IN ('continue', 'retry', 'fix-review')) AS progressed_at,
+         (SELECT min(ls.created_at) FROM lessons ls WHERE ls.run_id = d.run_id) AS detained_at
     FROM decisions d JOIN runs c ON c.id = d.call_id
    WHERE d.kind = 'stuck' AND d.answer = 'yes' AND d.mode = 'shadow'
      AND d.run_id IS NOT NULL AND d.confidence IS NOT NULL
@@ -434,25 +443,102 @@ WITH a AS (
 ), levels AS (
   SELECT DISTINCT url, model, confidence AS t FROM a
 ), firsts AS (
-  SELECT DISTINCT ON (v.url, v.model, v.t, a.run_id) v.url, v.model, v.t, a.progressed_after, a.detained
+  SELECT DISTINCT ON (v.url, v.model, v.t, a.run_id) v.url, v.model, v.t, a.run_id,
+         a.progressed_at IS NOT NULL AS progressed_after, a.detained_at IS NOT NULL AS detained,
+         coalesce(a.progressed_at, a.detained_at) AS judged_at
     FROM levels v JOIN a ON a.url = v.url AND a.model = v.model AND a.confidence >= v.t
    ORDER BY v.url, v.model, v.t, a.run_id, a.loop
+), numbered AS (
+  SELECT f.*, row_number() OVER (PARTITION BY url, model, t ORDER BY judged_at, run_id) AS rn
+    FROM firsts f WHERE judged_at IS NOT NULL
 ), stats AS (
   SELECT url, model, t,
          count(*) FILTER (WHERE progressed_after OR detained) AS judged,
          count(*) FILTER (WHERE detained AND NOT progressed_after) AS correct,
          count(*) FILTER (WHERE NOT progressed_after AND NOT detained) AS waiting
     FROM firsts GROUP BY url, model, t
+), blocked AS (
+  SELECT s.*, s.judged / :'block'::int AS blocks,
+         (SELECT count(*) FROM numbered b
+           WHERE b.url = s.url AND b.model = s.model AND b.t = s.t AND b.progressed_after
+             AND (b.rn - 1) / :'block'::int = s.judged / :'block'::int - 1) AS block_wrong,
+         (SELECT count(*) FROM numbered b
+           WHERE b.url = s.url AND b.model = s.model AND b.t = s.t AND b.progressed_after
+             AND (b.rn - 1) / :'block'::int = s.judged / :'block'::int) AS open_wrong
+    FROM stats s
 )
 SELECT coalesce(json_agg(json_build_object(
          'url', p.url, 'model', p.model,
          'last', to_char(p.last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
          'levels', (SELECT coalesce(json_agg(json_build_object(
-                             't', s.t::float8, 'judged', s.judged, 'correct', s.correct, 'waiting', s.waiting)
+                             't', s.t::float8, 'judged', s.judged, 'correct', s.correct, 'waiting', s.waiting,
+                             'blocks', s.blocks, 'block_wrong', s.block_wrong, 'open_wrong', s.open_wrong)
                            ORDER BY s.t), '[]')
-                      FROM stats s WHERE s.url = p.url AND s.model = p.model))
+                      FROM blocked s WHERE s.url = p.url AND s.model = p.model))
          ORDER BY p.last DESC, p.url, p.model), '[]')
   FROM providers p;
+SQL
+}
+
+# db_certify_verdicts: prints, as one JSON array, what the gate
+# (certify.sh) judges the stopping verdicts by: one object per verdict and
+# agent model, plus verdict "any" for the first stopping verdict of any
+# kind. A verdict fires on the first loop of a run that got it in shadow
+# mode (a call records fp_rules on only when its verdict detained the run:
+# nothing after that loop could show whether it was right). A firing is
+# judged once the run shows which it was: wrong when a later loop
+# progressed, correct when it made no progress after it and was detained;
+# waiting until then. Judged firings are taken in blocks of CERTIFY_BLOCK,
+# in the order they were judged; blocks is how many are complete,
+# block_wrong the wrong ones in the latest, open_wrong those in the block
+# still filling. saved is the spend after the correct firings, saved_max
+# the largest of those.
+db_certify_verdicts() {
+  db_sql -v block="$CERTIFY_BLOCK" <<'SQL'
+-- chalk certify: verdicts
+WITH l AS (
+  SELECT * FROM runs WHERE run_id IS NOT NULL AND kind IN ('continue', 'retry', 'fix-review')
+), f AS (
+  SELECT DISTINCT ON (x.verdict, l.run_id) x.verdict, l.run_id, l.loop, l.model, l.created_at
+    FROM l CROSS JOIN LATERAL (VALUES (l.verdict), ('any')) AS x(verdict)
+   WHERE l.verdict IN ('deja_vu', 'repeat', 'no_change') AND l.fp_rules IS DISTINCT FROM 'on'
+   ORDER BY x.verdict, l.run_id, l.loop
+), j AS (
+  SELECT f.*,
+         (SELECT min(a.created_at) FROM l a WHERE a.run_id = f.run_id AND a.loop > f.loop AND a.progressed)
+           AS progressed_at,
+         (SELECT min(ls.created_at) FROM lessons ls WHERE ls.run_id = f.run_id) AS detained_at,
+         (SELECT coalesce(sum(a.cost_usd), 0) FROM l a WHERE a.run_id = f.run_id AND a.loop > f.loop) AS after_cost
+    FROM f
+), k AS (
+  SELECT j.*, coalesce(progressed_at, detained_at) AS judged_at, progressed_at IS NOT NULL AS wrong FROM j
+), n AS (
+  SELECT k.*, row_number() OVER (PARTITION BY verdict, model ORDER BY judged_at, run_id) AS rn
+    FROM k WHERE judged_at IS NOT NULL
+), s AS (
+  SELECT verdict, model,
+         count(*) FILTER (WHERE judged_at IS NOT NULL) AS judged,
+         count(*) FILTER (WHERE judged_at IS NOT NULL AND NOT wrong) AS correct,
+         count(*) FILTER (WHERE wrong) AS wrong,
+         count(*) FILTER (WHERE judged_at IS NULL) AS waiting,
+         coalesce(sum(after_cost) FILTER (WHERE judged_at IS NOT NULL AND NOT wrong), 0) AS saved,
+         coalesce(max(after_cost) FILTER (WHERE judged_at IS NOT NULL AND NOT wrong), 0) AS saved_max,
+         max(created_at) AS last
+    FROM k GROUP BY verdict, model
+)
+SELECT coalesce(json_agg(json_build_object(
+         'verdict', s.verdict, 'model', s.model, 'judged', s.judged, 'correct', s.correct,
+         'wrong', s.wrong, 'waiting', s.waiting, 'blocks', s.judged / :'block'::int,
+         'block_wrong', (SELECT count(*) FROM n
+                          WHERE n.verdict = s.verdict AND n.model = s.model AND n.wrong
+                            AND (n.rn - 1) / :'block'::int = s.judged / :'block'::int - 1),
+         'open_wrong', (SELECT count(*) FROM n
+                         WHERE n.verdict = s.verdict AND n.model = s.model AND n.wrong
+                           AND (n.rn - 1) / :'block'::int = s.judged / :'block'::int),
+         'saved', s.saved::float8, 'saved_max', s.saved_max::float8,
+         'last', to_char(s.last AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+         ORDER BY s.verdict, s.last DESC), '[]')
+  FROM s;
 SQL
 }
 

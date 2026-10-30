@@ -65,6 +65,28 @@ SELECT c.id, c.run_id, 'stuck', 'q', 'yes', :'confidence'::numeric, 0.9, :'mode'
 SQL
 }
 
+# certified VERDICT...: the stopping verdicts named are certified for the
+# fake agent's model (certify.sh): in the fake database's answer, and, with
+# a real one (make test-db), by a block of shadow runs each judged right
+# (detained with no progress after the verdict), in a repository of their own.
+certified() {
+  FAKE_CERTIFY="$(jq -cn --argjson block 46 '[$ARGS.positional[] | {verdict: ., model: "claude-fake-1",
+    judged: $block, correct: $block, wrong: 0, waiting: 0, blocks: 1, block_wrong: 0, saved: 0, saved_max: 0}]' --args "$@")"
+  export FAKE_CERTIFY
+  [ -n "${FAKE_PG_URL:-}" ] || return 0
+  psql "$FAKE_PG_URL" -X -q -v ON_ERROR_STOP=1 -v verdicts="$*" <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict, fp_rules)
+SELECT 'cert', 'CERT-' || i, 'chalk/CERT-' || i, 1, 'continue', 'ok', 1, false, 'claude-fake-1', 'p', 0.25, 1,
+       1, 0, 0, 0, 0, 0, 0, 0, 'cert-' || v || '-' || i, v, 'shadow'
+  FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i;
+INSERT INTO lessons (repo, ticket, signature, run_id)
+SELECT 'cert', 'CERT-' || i, 'seeded', 'cert-' || v || '-' || i
+  FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i;
+SQL
+}
+
 # A repository with a remote and a rubric that rejects a file named BROKEN.
 git init -q --bare "$tmp/origin.git"
 # Like GitHub, the remote answers a push with a hint to open a pull request,
@@ -297,15 +319,41 @@ check "distillation gets the engineer's note and the diff of the fix commit" \
 check "distillation sandbox removed" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-2-distill"
 check "tutoring merge request opened" grep -q "mr create.*tutoring/PROJ-2" "$FAKE_STATE/glab.log"
 
-# 2b. With CHALK_FP_RULES=on, a loop that repeats the last one's failure on
-# the same tree is detained at once. The rubric writes a JUnit report.
+# 2a'. CHALK_FP_RULES=on acts only once shadow runs certify a verdict
+# (certify.sh). With no evidence yet, a repeating run goes as in shadow
+# mode, and says why once per verdict.
+cd "$tmp/demo"
+junit='<testsuite><testcase classname="demo" name="no_marker"><failure message="BROKEN"/></testcase></testsuite>'
+# A test of its own, so that its open detention matches no later run (deja_vu).
+held='<testsuite><testcase classname="demo" name="held"><failure message="BROKEN"/></testcase></testsuite>'
+chalk new PROJ-91 Held feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-91"
+git add -A && git commit -q -m "spec"
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+if FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_TEST_REPORT=out/report.xml \
+   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$held' > out/report.xml; echo 'AssertionError: BROKEN exists'; exit 1; fi" \
+   chalk run > "$tmp/run91.log" 2>&1; then
+  fail "a repeating run should still end in detention"
+fi
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db91.log"
+check "rules on, not certified: the same three loops, then the usual detention" \
+  sh -c "grep -q 'loop 3 (retry)' '$tmp/run91.log' && grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/run91.log'"
+check "rules on, not certified: the run says why, once" \
+  test "$(grep -c '^warning: CHALK_FP_RULES=on records repeat in shadow mode only: repeat for claude-fake-1' "$tmp/run91.log")" -eq 1
+check "rules on, not certified: every call records shadow" \
+  test "$(grep -c 'INSERT INTO runs' "$tmp/db91.log")" = "$(grep -c -e '-v fp_rules=shadow ' "$tmp/db91.log")"
+cd "$tmp/demo"
+certified repeat deja_vu no_change
+
+# 2b. With CHALK_FP_RULES=on, once certified, a loop that repeats the last
+# one's failure on the same tree is detained at once. The rubric writes a
+# JUnit report.
 cd "$tmp/demo"
 chalk new PROJ-9 Repeating feature >/dev/null
 cd "$tmp/demo.worktrees/PROJ-9"
 git add -A && git commit -q -m "spec"
-junit='<testsuite><testcase classname="demo" name="no_marker"><failure message="BROKEN"/></testcase></testsuite>'
 db_lines="$(wc -l < "$FAKE_STATE/db.log")"
-if FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_TEST_REPORT=out/report.xml \
+if FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_HOLDOUT=0 CHALK_TEST_REPORT=out/report.xml \
    CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$junit' > out/report.xml; echo 'AssertionError: BROKEN exists'; exit 1; fi" \
    chalk run > "$tmp/run12.log" 2>&1; then
   fail "a repeating run with rules on should exit non-zero"
@@ -317,8 +365,42 @@ check "next step on repeat: fix the failure, since a retry would repeat it" \
   next_step "$tmp/run12.log" "the agent made the same failing change twice"
 check "rules on: the loops record first, then repeat, with the failing test count" \
   sh -c "grep -q -e '-v failing=1 .*-v verdict=first$' '$tmp/db12.log' && grep -q -e '-v failing=1 .*-v verdict=repeat$' '$tmp/db12.log'"
-check "rules on: every call records CHALK_FP_RULES=on" \
-  test "$(grep -c 'INSERT INTO runs' "$tmp/db12.log")" = "$(grep -c -e '-v fp_rules=on ' "$tmp/db12.log")"
+check "rules on: only the call whose verdict detained the run records on" \
+  sh -c "test \"\$(grep -c -e '-v fp_rules=on ' '$tmp/db12.log')\" -eq 1 &&
+    grep -e '-v fp_rules=on ' '$tmp/db12.log' | grep -q -e '-v verdict=repeat$' &&
+    test \"\$(grep -c 'INSERT INTO runs' '$tmp/db12.log')\" -eq \"\$((\$(grep -c -e '-v fp_rules=shadow ' '$tmp/db12.log') + 1))\""
+check "rules on: no warning for a certified verdict" sh -c "! grep -q 'records repeat in shadow mode only' '$tmp/run12.log'"
+cd "$tmp/demo"
+
+# 2b''. A holdout run (CHALK_HOLDOUT) keeps certified verdicts in shadow
+# mode, so that they go on being judged after they act.
+chalk new PROJ-92 Holdout feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-92"
+git add -A && git commit -q -m "spec"
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+if FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_HOLDOUT=1 CHALK_TEST_REPORT=out/report.xml \
+   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '${held/held/holdout}' > out/report.xml; echo 'AssertionError: BROKEN exists'; exit 1; fi" \
+   chalk run > "$tmp/run92.log" 2>&1; then
+  fail "a holdout run should still end in detention"
+fi
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db92.log"
+check "holdout: a certified verdict is recorded, not acted on, and the run says so once" \
+  sh -c "grep -q 'loop 3 (retry)' '$tmp/run92.log' && grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/run92.log' &&
+    test \"\$(grep -c 'this run is a holdout (CHALK_HOLDOUT=1)' '$tmp/run92.log')\" -eq 1"
+check "holdout: every call records shadow" \
+  test "$(grep -c 'INSERT INTO runs' "$tmp/db92.log")" = "$(grep -c -e '-v fp_rules=shadow ' "$tmp/db92.log")"
+# chalk certify and doctor show the evidence, against the bar.
+chalk certify > "$tmp/certify.log" 2>&1 || { cat "$tmp/certify.log"; fail "chalk certify"; }
+check "chalk certify: each verdict, per agent model, against the bar" \
+  sh -c "grep -q '^An early stop may act once its latest block of 46 judged shadow runs had at most 1 wrongful stop' '$tmp/certify.log' &&
+    grep -Eq '^  repeat +claude-fake-1 +certified +[0-9]+ +0 ' '$tmp/certify.log'"
+check "chalk certify --json: the rules it judged by" \
+  test "$(chalk certify --json | jq -c .rules)" = '{"block":46,"max_wrong":1,"percent":90,"false_stop_usd":5,"decider_threshold":0.9}'
+check "chalk certify: a price for a wrongful stop must be a number" \
+  sh -c "! chalk certify --false-stop-usd lots > '$tmp/certify-usd.log' 2>&1 && grep -q 'takes a number of dollars' '$tmp/certify-usd.log'"
+CHALK_FP_RULES=on chalk doctor > "$tmp/doctor-certify.log" 2>&1 || true
+check "doctor under CHALK_FP_RULES=on: each certified verdict, by model" \
+  grep -q '^  ok    verdict repeat for claude-fake-1 is certified' "$tmp/doctor-certify.log"
 check "rules on: the lesson carries the failing loop's fingerprint and first error" \
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
 check "rules on: the failing loops record their failing test IDs" \
@@ -363,13 +445,14 @@ detained() { grep -q "DETENTION: $2" "$tmp/detain-$1.log" && next_step "$tmp/det
 
 # The failure of PROJ-9, whose detention is still open. The fake database
 # is told so; a real one (make test-db) holds PROJ-9's open lesson.
-detain deja_vu FAKE_OPEN_MATCH=PROJ-9 FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_TEST_REPORT=out/report.xml \
+detain deja_vu FAKE_OPEN_MATCH=PROJ-9 FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_HOLDOUT=0 CHALK_TEST_REPORT=out/report.xml \
   CHALK_TEST_CMD="if [ -e BROKEN ]; then mkdir -p out; echo '$junit' > out/report.xml; echo 'AssertionError: BROKEN exists'; exit 1; fi"
 check "next step on deja_vu: fix the matching open detention first" \
   detained deja_vu "deja_vu: " "this fails like the open detention of PROJ-9; fix that one first"
-detain no_change FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on
+detain no_change FAKE_CLAUDE_MODE=break CHALK_FP_RULES=on CHALK_HOLDOUT=0
 check "next step on no_change: make the checkpoint clearer or do it yourself" \
   detained no_change "no_change: " "the agent changed nothing"
+unset FAKE_CERTIFY
 detain agent_error FAKE_CLAUDE_MODE=error CHALK_MAX_RETRIES=0
 check "next step when the agent ran out of turns: make the checkpoint smaller" \
   detained agent_error "agent stopped early (max_turns: error_max_turns)" "the agent ran out of turns: make the checkpoint smaller"
@@ -827,25 +910,25 @@ SQL
 
   # The calibration gate, per provider (URL and model revision), as the
   # report card shows it and runs judge it (CHALK_DECIDER_THRESHOLD=0.9):
-  #   a.test m@1111111  20 runs right at 0.95, each also "stuck" at loop 2,
+  #   a.test m@1111111  46 runs right at 0.95, each also "stuck" at loop 2,
   #                     which a run under on never reaches: calibrated
-  #   a.test m@2222222  a new revision: 2 right in shadow, 30 under on that
+  #   a.test m@2222222  a new revision: 2 right in shadow, 50 under on that
   #                     prove nothing: not yet
-  #   b.test m@1111111  the same model elsewhere: 17 right of 20: not yet
+  #   b.test m@1111111  the same model elsewhere: 43 right of 46: not yet
   #   c.test c-model    right at 0.75, wrong at 0.6: nothing at 0.9, and
   #                     0.75 suggested
   #   d.test d-model    3 runs not settled: no progress, no detention yet
   # plus D-1 and D-2 above (fake-decider@0123456, recorded before url was:
   # the schema names the local service), one right and one wrong.
   export PGOPTIONS='-c search_path=chalk_e2e,public -c client_min_messages=warning'
-  calibrate http://a.test m@1111111 0.95 20 0
+  calibrate http://a.test m@1111111 0.95 46 0
   pg -c "INSERT INTO decisions (call_id, run_id, kind, question, answer, confidence, threshold, mode, model, url)
          SELECT c.id, c.run_id, 'stuck', 'q', 'yes', 0.99, 0.9, 'shadow', d.model, d.url
            FROM decisions d JOIN runs c ON c.run_id = d.run_id AND c.loop = 2 WHERE d.url = 'http://a.test'"
   calibrate http://a.test m@2222222 0.95 2 0
-  calibrate http://a.test m@2222222 0.95 30 0 on
-  calibrate http://b.test m@1111111 0.95 17 3
-  calibrate http://c.test c-model 0.75 20 0
+  calibrate http://a.test m@2222222 0.95 50 0 on
+  calibrate http://b.test m@1111111 0.95 43 3
+  calibrate http://c.test c-model 0.75 46 0
   calibrate http://c.test c-model 0.6 0 5
   calibrate http://d.test d-model 0.95 3 0
   pg -c "DELETE FROM lessons WHERE run_id IN (SELECT run_id FROM decisions WHERE url = 'http://d.test')"
@@ -858,13 +941,13 @@ SQL
     test "$(jq -r '[.decider.gate[] | "\(.url) \(.model) \(.judged)/\(.correct)/\(.waiting) \(.calibrated) \(.suggested)"]
                    | sort | join(", ")' "$tmp/gate.json")" = "$(printf '%s, ' \
       "http://127.0.0.1:8471 fake-decider@0123456 2/1/0 false null" \
-      "http://a.test m@1111111 20/20/0 true 0.95" \
+      "http://a.test m@1111111 46/46/0 true 0.95" \
       "http://a.test m@2222222 2/2/0 false null" \
-      "http://b.test m@1111111 20/17/0 false null" \
+      "http://b.test m@1111111 46/43/0 false null" \
       "http://c.test c-model 0/0/0 false 0.75" \
       "http://d.test d-model 0/0/3 false null" | sed 's/, $//')"
   check "calibration gate: the report card says what it was judged by" \
-    test "$(jq -c .decider.gate_rules "$tmp/gate.json")" = '{"threshold":0.9,"runs":20,"percent":90}'
+    test "$(jq -c .decider.gate_rules "$tmp/gate.json")" = '{"threshold":0.9,"block":46,"max_wrong":1,"percent":90}'
   pg -c 'DROP SCHEMA chalk_e2e CASCADE'
 fi
 
@@ -1413,10 +1496,10 @@ check "a refused token: the run goes as with the decider off, with one warning" 
   sh -c "grep -q 'DETENTION: rubric failed (exit 1)$' '$tmp/PROJ-58.log' &&
     test \"\$(grep -c '^warning: the decider at http://decider.test refused the request' '$tmp/PROJ-58.log')\" -eq 1"
 
-# Once 20 shadow runs show its confident "stuck" right nine times in ten,
-# the same decider acts. Only with a database to show it (make test-db).
+# Once a block of 46 shadow runs shows its confident "stuck" right with at
+# most one false stop, the same decider acts. Only with a database to show it (make test-db).
 if [ -n "${FAKE_PG_URL:-}" ]; then
-  calibrate http://decider.test fake-decider 0.95 19 1
+  calibrate http://decider.test fake-decider 0.95 46 0
   decider_run PROJ-63 CHALK_DECIDER=on FAKE_DECIDER_ANSWERS="stuck=0.97"
   check "decider on, calibrated: a confident stuck detains the run at loop 2, quietly" \
     sh -c "grep -q 'DETENTION: stuck: rubric failed (exit 1)' '$tmp/PROJ-63.log' && ! grep -q 'loop 3' '$tmp/PROJ-63.log' &&
@@ -1431,11 +1514,11 @@ if [ -n "${FAKE_PG_URL:-}" ]; then
     { cat "$tmp/decider-status-cal.log"; fail "chalk decider status"; }
   check "chalk decider status: on acts, and the numbers it was judged by" \
     sh -c "grep -q '(acting as on)' '$tmp/decider-status-cal.log' &&
-      grep -q '^calibration: fake-decider at http://decider.test is calibrated: 2[0-9] shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.9' '$tmp/decider-status-cal.log'"
+      grep -q '^calibration: fake-decider at http://decider.test is calibrated: [0-9]* shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.9' '$tmp/decider-status-cal.log'"
   CHALK_DECIDER=on CHALK_DECIDER_URL=http://decider.test CHALK_DECIDER_THRESHOLD=0.99 chalk doctor > "$tmp/doctor-cal.log" 2>&1 || true
   # Its answers at 0.6 (PROJ-53) were right too, so 0.6 would pass.
   check "doctor: at a threshold it said nothing at, it is not calibrated, and the lowest that would pass is named" \
-    grep -q '^  --    decider calibration: fake-decider at http://decider.test is not calibrated yet: 0 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.99; it needs 90% right over at least 20; it would be at CHALK_DECIDER_THRESHOLD=0.6; until it is, CHALK_DECIDER=on records in shadow mode only' \
+    grep -q '^  --    decider calibration: fake-decider at http://decider.test is not calibrated yet: 0 shadow run(s) judged at CHALK_DECIDER_THRESHOLD=0.99; it needs a block of 46 judged runs with at most 1 wrongful stop(s), which shows it right at least 90% of the time, 95% sure; it would be at CHALK_DECIDER_THRESHOLD=0.6; until it is, CHALK_DECIDER=on records in shadow mode only' \
       "$tmp/doctor-cal.log"
   check "doctor: how many questions the decider was asked lately" \
     grep -Eq '^  ok    decider asked [1-9][0-9]* question\(s\) in the last 30 days$' "$tmp/doctor-cal.log"
@@ -1725,7 +1808,7 @@ $error" TEXT-FIX
   decider_env=(CHALK_DECIDER_MIN_LESSONS=3 CHALK_DECIDER_URL=http://decider.test CHALK_EMBED_URL=http://embed.test
                FAKE_DECIDER_ANSWERS="lesson_$sem=0.97 lesson_$lex=0.93 lesson_*=0.2")
   # The fake decider is calibrated here, so that on may act (decider_calibration).
-  calibrate http://decider.test fake-decider 0.95 20 0
+  calibrate http://decider.test fake-decider 0.95 46 0
   rm -f "$FAKE_STATE/curl.log"
   : > "$FAKE_STATE/decider.log"
   recall_run PROJ-60 CHALK_DECIDER=on "${decider_env[@]}"

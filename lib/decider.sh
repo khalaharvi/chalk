@@ -301,10 +301,12 @@ decider_slow() {
 }
 
 # decider_hold -> REPLY: why CHALK_DECIDER=on may not act yet, and so is
-# held to shadow; empty when it may act. Two reasons, in this order: the
+# held to shadow; empty when it may act. Three reasons, in this order: the
 # local service measured slower than DECIDER_SLOW_MS on this machine
-# (maintainer's decision on #34), or the decider is not calibrated
-# (decider_calibration, #36).
+# (maintainer's decision on #34), the decider is not calibrated
+# (decider_calibration, #36), or this run is a holdout (RUN_HOLDOUT, see
+# certify_holdout), which keeps certified stops in shadow mode so that
+# they go on being judged.
 decider_hold() {
   local slow
   local -A cal
@@ -315,8 +317,11 @@ decider_hold() {
     return 0
   fi
   decider_calibration cal
-  [[ ${cal[status]} != calibrated ]] || return 0
-  REPLY="CHALK_DECIDER=on records in shadow mode only: ${| decider_calibration_note cal; } (see: chalk doctor)"
+  if [[ ${cal[status]} != calibrated ]]; then
+    REPLY="CHALK_DECIDER=on records in shadow mode only: ${| decider_calibration_note cal; } (see: chalk doctor)"
+  elif [[ ${RUN_HOLDOUT:-0} == 1 ]]; then
+    REPLY="this run is a holdout (CHALK_HOLDOUT=$CHALK_HOLDOUT): the decider's confident answers are recorded, not acted on, so that they go on being judged"
+  fi
 }
 
 # decider_mode -> REPLY: the mode decisions are taken in: CHALK_DECIDER,
@@ -591,24 +596,15 @@ decider_flush() {
 # provider is judged by what that answer would have done in each shadow run
 # (db_decider_calibration): right when the run went on to be detained with
 # no progress after it, a false stop when a later loop progressed. It may
-# act once, at the current CHALK_DECIDER_THRESHOLD, at least
-# DECIDER_CALIBRATION_RUNS runs are judged and at least
-# DECIDER_CALIBRATION_PERCENT of them were right.
-#
-# 90%: what a 0.9 threshold promises, and the bar the report card set from
-# the start ("right about nine times in ten"). 20 runs: the sample the
-# verdict ledger asks before CHALK_FP_RULES=on (docs/designs/
-# system-1-decider.md), so both ways of stopping a run early clear the same
-# evidence; at 20 it allows two false stops, and a false stop costs a
-# detention an engineer resolves, never a wrong change. Counting runs, not
-# answers, keeps one run that is asked loop after loop from filling the
-# sample alone. These are constants, not settings: a repository's config
-# cannot lower the bar for acting on the decider.
+# act, at the current CHALK_DECIDER_THRESHOLD, once it clears the bar every
+# early stop clears (certify.sh, docs/designs/certified-stops.md): a block
+# of CERTIFY_BLOCK judged runs with at most CERTIFY_MAX_WRONG false stops.
+# Counting runs, not answers, keeps one run that is asked loop after loop
+# from filling a block alone. A false stop costs a detention an engineer
+# resolves, never a wrong change.
 #
 # The gate holds `on` as a whole, the lesson rerank too: the stuck question
 # is the one whose answers the runs later prove right or wrong.
-DECIDER_CALIBRATION_RUNS=20
-DECIDER_CALIBRATION_PERCENT=90
 
 # What db_decider_calibration gave, read once per process: the gate is
 # judged once per run. DECIDER_CALIBRATION_READ is 1 once it was asked;
@@ -641,14 +637,14 @@ decider_calibration_data() {
 # would be calibrated, or null. The one place the gate is decided, for
 # runs, doctor, status and the report card alike.
 decider_calibration_judge() {
-  REPLY="$(jq -c --arg t "$CHALK_DECIDER_THRESHOLD" --argjson runs "$DECIDER_CALIBRATION_RUNS" \
-             --argjson pct "$DECIDER_CALIBRATION_PERCENT" '
-    def passes: .judged >= $runs and .correct * 100 >= $pct * .judged;
+  REPLY="$(certify_jq -c --arg t "$CHALK_DECIDER_THRESHOLD" '
     ($t | tonumber) as $t
-    | [.[] | ((.levels | map(select(.t >= $t)) | first) // {judged: 0, correct: 0, waiting: 0}) as $at
+    | [.[] | ((.levels | map(select(.t >= $t)) | first)
+              // {judged: 0, correct: 0, waiting: 0, blocks: 0, block_wrong: 0}) as $at
        | {url, model, last, judged: $at.judged, correct: $at.correct, waiting: $at.waiting,
-          calibrated: ($at | passes),
-          suggested: ([.levels[] | select(passes) | .t] | min)}]' <<<"${1:-[]}" 2>/dev/null || echo '[]')"
+          blocks: ($at.blocks // 0), block_wrong: ($at.block_wrong // 0), open_wrong: ($at.open_wrong // 0),
+          calibrated: ($at | certified($max_wrong)),
+          suggested: ([.levels[] | select(certified($max_wrong)) | .t] | min)}]' <<<"${1:-[]}" 2>/dev/null || echo '[]')"
 }
 
 # decider_provider_model DATA -> REPLY: the model the gate judges the
@@ -678,22 +674,27 @@ decider_provider_model() {
 # decider_calibration VAR: fills the associative array VAR with the gate's
 # judgement of the decider at CHALK_DECIDER_URL: status (calibrated,
 # uncalibrated, or unknown when the database did not answer), url, model,
-# judged, correct, waiting and suggested (empty when there is none).
+# judged, correct, waiting, blocks, block_wrong (false stops in the latest
+# complete block), open_wrong (in the block still filling) and suggested
+# (empty when there is none).
 decider_calibration() {
   local -n __cal=$1
   local data judged line
   __cal=(["status"]=unknown ["url"]="${| decider_url; }" ["model"]="$DECIDER_ANSWERED_BY"
-         ["judged"]=0 ["correct"]=0 ["waiting"]=0 ["suggested"]="")
+         ["judged"]=0 ["correct"]=0 ["waiting"]=0 ["blocks"]=0 ["block_wrong"]=0 ["open_wrong"]=0
+         ["suggested"]="")
   data="${| decider_calibration_data; }"
   [[ -n $data ]] || return 0
   __cal["model"]="${| decider_provider_model "$data"; }"
   judged="${| decider_calibration_judge "$data"; }"
   line="$(jq -r --arg url "${__cal[url]}" --arg model "${__cal[model]}" '
-    (.[] | select(.url == $url and .model == $model)) // {judged: 0, correct: 0, waiting: 0, calibrated: false}
+    (.[] | select(.url == $url and .model == $model))
+      // {judged: 0, correct: 0, waiting: 0, blocks: 0, block_wrong: 0, calibrated: false}
     | [(if .calibrated then "calibrated" else "uncalibrated" end), .judged, .correct, .waiting,
-       (.suggested // "")] | @tsv' <<<"$judged" 2>/dev/null || true)"
-  [[ -n $line ]] || line=$'uncalibrated\t0\t0\t0\t'
-  IFS=$'\t' read -r '__cal[status]' '__cal[judged]' '__cal[correct]' '__cal[waiting]' '__cal[suggested]' <<<"$line" || true
+       .blocks, .block_wrong, .open_wrong, (.suggested // "")] | @tsv' <<<"$judged" 2>/dev/null || true)"
+  [[ -n $line ]] || line=$'uncalibrated\t0\t0\t0\t0\t0\t0\t'
+  IFS=$'\t' read -r '__cal[status]' '__cal[judged]' '__cal[correct]' '__cal[waiting]' \
+    '__cal[blocks]' '__cal[block_wrong]' '__cal[open_wrong]' '__cal[suggested]' <<<"$line" || true
 }
 
 # decider_calibration_note VAR -> REPLY: the judgement in VAR (as
@@ -710,11 +711,17 @@ decider_calibration_note() {
   counts="$judged shadow run(s) judged at CHALK_DECIDER_THRESHOLD=$CHALK_DECIDER_THRESHOLD"
   if (( judged > 0 )); then counts+=", $correct right ($((correct * 100 / judged))%)"; fi
   if (( waiting > 0 )); then counts+=", $waiting not settled yet"; fi
+  if (( ${__note[blocks]:-0} > 0 )); then
+    counts+="; the latest block of $CERTIFY_BLOCK had ${__note[block_wrong]:-0} false stop(s)"
+  fi
+  if (( ${__note[open_wrong]:-0} > CERTIFY_MAX_WRONG )); then
+    counts+="; the block still filling already has ${__note[open_wrong]}"
+  fi
   if [[ ${__note[status]} == calibrated ]]; then
     REPLY="$who is calibrated: $counts"
     return 0
   fi
-  REPLY="$who is not calibrated yet: $counts; it needs ${DECIDER_CALIBRATION_PERCENT}% right over at least ${DECIDER_CALIBRATION_RUNS}"
+  REPLY="$who is not calibrated yet: $counts; ${| certify_rule; }"
   if [[ -n ${__note[suggested]} ]]; then
     REPLY+="; it would be at CHALK_DECIDER_THRESHOLD=${__note[suggested]}"
   fi

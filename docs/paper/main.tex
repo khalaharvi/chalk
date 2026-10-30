@@ -47,7 +47,7 @@
 \maketitle
 
 \begin{abstract}
-Autonomous coding agents now run for hours, so their main failure has shifted from a wrong answer to spend that buys no progress. Production harnesses stop agents with syntactic repetition rules or loop counters. The strongest certified early-abort method needs the model's hidden activations. We study a different design point: a harness in which the test rubric, the identity of the working tree and the cost of each loop are computed \emph{by the harness, outside the agent's reach}, and recorded per loop in a ground-truth ledger as a fingerprint (failing-test set, normalized first error, git tree ID). We restrict controllers to \emph{stop-only} verdicts, which may end a run earlier than the incumbent policy but never extend it. We show that, over runs logged under the incumbent, every stop-only verdict's counterfactual outcome is contained in the log, so off-policy evaluation is exact and needs no importance weights. Admitting a verdict then reduces to a finite-sample binomial bound on wrongful stops plus a bounded-range bound on dollars saved, certified per verdict type and per model revision. The same ledger supports three further mechanisms that we specify and pre-register: lessons that carry an executable fail-before/pass-after probe and expire on evidence; per-repository harness tuning admitted only on a safe-improvement bound; and pull requests that carry a signed evidence bundle which CI re-verifies against the exact tree. We implement the ledger and shadow-mode verdicts in Chalk, an open-source, local-first harness for Claude Code. We give an evaluation protocol on \tbd{N} replayed benchmark tasks, unsolvable-task controls and seeded environment faults, with spend bounded in advance. \emph{No results are reported in this draft}; bracketed values are placeholders.
+Autonomous coding agents now run for hours, so their main failure has shifted from a wrong answer to spend that buys no progress. Production harnesses stop agents with syntactic repetition rules or loop counters. The strongest certified early-abort method needs the model's hidden activations. We study a different design point: a harness in which the test rubric, the identity of the working tree and the cost of each loop are computed \emph{by the harness, outside the agent's reach}, and recorded per loop in a ground-truth ledger as a fingerprint (failing-test set, normalized first error, git tree ID). We restrict controllers to \emph{stop-only} verdicts, which may end a run earlier than the incumbent policy but never extend it. We show that, over runs logged under the incumbent, every stop-only verdict's counterfactual outcome is contained in the log, so off-policy evaluation is exact and needs no importance weights. Admitting a verdict then reduces to a finite-sample binomial bound on wrongful stops plus a bounded-range bound on dollars saved, certified per verdict type and per model revision. The same ledger supports three further mechanisms that we specify and pre-register: lessons that carry an executable fail-before/pass-after probe and expire on evidence; per-repository harness tuning admitted only on a safe-improvement bound; and pull requests that carry a signed evidence bundle which CI re-verifies against the exact tree. We implement the ledger, shadow-mode verdicts and the block admission rule in Chalk, an open-source, local-first harness for Claude Code. We give an evaluation protocol on \tbd{N} replayed benchmark tasks, unsolvable-task controls and seeded environment faults, with spend bounded in advance. \emph{No results are reported in this draft}; bracketed values are placeholders.
 \end{abstract}
 
 % ===================================================================
@@ -222,17 +222,22 @@ Each loop is capped at $B$ dollars. Spend is estimated client-side and can sligh
 
 The unit of evidence is the run, not the loop. Loops within a run are dependent, but a stop-only policy fires at most once per run, so each run contributes one Bernoulli $W$ and one bounded $S$. We assume runs are exchangeable within a stratum (repository, verdict type, model revision).
 
-\begin{definition}[Admission rule]
+\begin{definition}[Block admission rule]
 \label{def:admit}
-Fix $n_{\min}$, a precision target $p^\star$ and a confidence level $1-\alpha$ \emph{before} looking at the data. Over $n\ge n_{\min}$ shadow runs on which $v$ fired under model revision $m$, with $w$ wrongful stops, admit $v$ for $m$ iff
+Fix a block size $b$, an error allowance $w^\star$, a precision target $p^\star$ and a level $1-\alpha$ \emph{before} looking at the data, such that $\LB_{1-\alpha}(b-w^\star,b)\ge p^\star$ and $b$ is the smallest such. Order the judged firing runs of a stratum by the time each was judged: its first progressing loop after the firing, or its detention. Split them into consecutive blocks of $b$. Admit $v$ for the stratum while
 \begin{enumerate}[leftmargin=*,label=(\roman*)]
-\item $\LB_{1-\alpha}(n-w,n)\ge p^\star$, where $\LB$ is the exact one-sided Clopper--Pearson lower bound \citep{clopper1934}; and
-\item the one-sided lower confidence bound on $\mathbb{E}[S_v-\lambda W_v]$ is positive, using Hoeffding's inequality on $[-\lambda, M]$, or a percentile bootstrap reported alongside it.
+\item its latest \emph{complete} block had at most $w^\star$ wrongful stops; and
+\item the block still filling has not already had more than $w^\star$.
 \end{enumerate}
 \end{definition}
 
-\paragraph{Chalk's current gate as a bound.}
-Chalk lets its decider act once at least 20 runs are judged and at least 90\% are right. That is a point estimate. Eighteen right out of twenty gives $\LB_{0.95}=0.717$, and even 20/20 gives only $0.861$. Table~\ref{tab:cp} gives the sample sizes for a 95\% lower bound of 0.90 or 0.95. They are computed exactly by \texttt{cp\_bounds.py}. We propose replacing the gate with ``$\LB_{0.95}\ge 0.90$'', which requires 29 clean judgments, or 46 with one wrongful stop.
+Each block is evaluated once, as a fixed-$n$ exact binomial test, so admission is not a bound re-checked after every new judgment. Condition (ii) only settles a block's test early: a block that has already exceeded $w^\star$ can no longer pass, so failing it at once does not change its error rate. A later failing block demotes $v$, which gives monitoring without a separate rule. Chalk uses $b=46$, $w^\star=1$, $p^\star=0.90$ and $\alpha=0.05$: $\LB_{0.95}(45/46)=0.9010$, while $\LB_{0.95}(44/46)=0.8694$ and $\LB_{0.95}(44/45)=0.8989$ fall short. The unit test of \texttt{lib/\allowbreak certify.sh} checks that these constants are minimal.
+
+\paragraph{Savings are reported, not gated on.}
+For each stratum Chalk also reports a Hoeffding lower bound, at $\alpha/2$, on the mean spend saved per firing, counting only correct firings and bounding the range by $M=\max(K B, \max_r S_v(r))$. It also reports the Clopper--Pearson upper bound, at $\alpha/2$, on the wrongful rate, and their combination $\mathrm{net}=\LB(\bar S)-\lambda\,\UB(W)$, which holds with probability at least $1-\alpha$. Whether a wrongful stop is worth $\lambda$ dollars is the operator's judgement, so $\mathrm{net}$ informs the decision to set \texttt{on} but does not gate it.
+
+\paragraph{The gate this replaces.}
+Before this design, Chalk let its decider act once at least 20 runs were judged and at least 90\% were right, and let its stuck-loop verdicts act whenever \texttt{CHALK\_FP\_RULES} was \texttt{on}. The first is a point estimate: eighteen right out of twenty gives $\LB_{0.95}=0.717$, and even 20/20 gives only $0.861$. Table~\ref{tab:cp} gives the sample sizes for a 95\% lower bound of 0.90 or 0.95, computed exactly by \texttt{cp\_bounds.py}.
 
 \begin{table}[t]
 \centering\small
@@ -249,14 +254,14 @@ Wrongful stops allowed & min.\ $n$ for $\LB\ge 0.90$ & bound at that $n$ & min.\
 \label{tab:cp}
 \end{table}
 
-\paragraph{Strata and multiplicity.}
-Certifying in aggregate lets rare, costly cases be averaged away \citep{rahman2026rolestratified}. We therefore certify each verdict type separately, with a Bonferroni-adjusted $\alpha/k$ over $k$ types, and also certify the deployed union directly (Proposition~\ref{prop:union}). A new model revision is a new stratum and starts in shadow mode. This follows Dubey's transfer collapse \citep{dubey2026realtime} and the fixed-ceiling account of earned authority, in which authority may contract freely but expand only on specified evidence \citep{zhang2026authorized}. Six verdict types at 29 clean runs each means at least 174 firing runs per provider. This multiplication, not the arithmetic of any one bound, is the binding cost.
+\paragraph{Strata.}
+Certifying in aggregate lets rare, costly cases be averaged away \citep{rahman2026rolestratified}. Chalk therefore certifies each stopping verdict per agent model, and each decider per endpoint, model revision and threshold. A new model revision is a new stratum and starts in shadow mode. This follows Dubey's transfer collapse \citep{dubey2026realtime} and the fixed-ceiling account of earned authority, in which authority may contract freely but expand only on specified evidence \citep{zhang2026authorized}. Each stratum is tested at level $\alpha$. The deployed union is also reported directly as a pseudo-verdict (Proposition~\ref{prop:union}), and a Bonferroni-corrected variant at $\alpha/k$ is a configuration choice we leave to evaluation. Three verdicts at a block of 46 each need at least 138 firing runs per model. This multiplication, not the arithmetic of any one bound, is the binding cost.
 
-\paragraph{Optional stopping.}
-Re-evaluating the bound after every new judgment and admitting the first time it clears inflates the error rate. Either fix $n$ in advance, or use a sequential procedure with an error-spending rule.
+\paragraph{Incremental evaluation under partial admission.}
+When some verdicts act and others are still held, a held verdict fires only on runs that the acting ones did not stop. Its shadow evidence therefore measures its effect \emph{on top of} the policy actually deployed, which is exactly the change admitting it would make. Proposition~\ref{prop:exact} applies with the deployed policy as the incumbent. A loop call records the verdict mode \texttt{on} only when its verdict detained the run, and those firings are excluded as censored.
 
 \paragraph{After admission: keep a holdout.}
-Once $v$ is on, runs it stops no longer show what would have happened next, so the logs are censored and Proposition~\ref{prop:exact} no longer applies to them. To keep monitoring an admitted verdict, a fraction $\epsilon$ of runs, chosen at random, keeps $v$ in shadow mode. Estimates on that holdout stay exact, at an expected cost of $\epsilon\,\mathbb{E}[S_v]$ per run. When the holdout's bound falls below $p^\star$, $v$ is demoted automatically.
+Once $v$ acts, runs it stops no longer show what would have happened next, so the logs are censored and Proposition~\ref{prop:exact} no longer applies to them. A random fraction $\epsilon$ of runs (\texttt{CHALK\_HOLDOUT}, default 0.10, machine-level) keeps every certified stop in shadow mode. Estimates on that holdout stay exact, at an expected cost of $\epsilon\,\mathbb{E}[S_v]$ per run, and the blocks keep filling, so a degrading verdict is demoted by the rule above.
 
 \subsection{The decision ladder as stop-only verdicts}
 
@@ -471,7 +476,7 @@ Restricting a harness's controllers to stop-only decisions, computed from eviden
 \paragraph{Implementation status.}
 Table~\ref{tab:status} separates what Chalk ships from what this paper proposes.
 
-\begin{table}[h]
+\begin{table}[ht]
 \centering\small
 \begin{tabularx}{\linewidth}{@{}Xl@{}}
 \toprule
@@ -479,8 +484,8 @@ Mechanism & Status (Chalk, October 2026) \\
 \midrule
 Ledger, fingerprints $(\Tset,\Eerr,\Dtree)$, verdicts in shadow mode & shipped (v0.6--v0.8) \\
 Fingerprint, lexical and embedding recall; decider rerank & shipped (v0.7--v0.8) \\
-Local decider with calibration gate (20 runs, 90\%) & shipped (v0.8) \\
-Gate restated as $\LB_{0.95}\ge 0.90$; per-verdict strata; holdout & proposed here \\
+Local decider (its 20-run, 90\% gate replaced by the block gate) & shipped (v0.8) \\
+Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chalk certify} & implemented (this work) \\
 Probes, needs, pre-flight, evidence-based expiry & designed, not shipped \\
 Per-repository tuning (\texttt{chalk tune}) & designed, not shipped \\
 Evidence bundle and CI re-verification & proposed here \\

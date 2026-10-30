@@ -56,6 +56,17 @@ check "fingerprint verdicts are recorded in shadow by default, with no test repo
   test "$CHALK_FP_RULES:$CHALK_TEST_REPORT" = "shadow:"
 check "an invalid CHALK_FP_RULES stops Chalk" \
   sh -c '! (CHALK_FP_RULES=maybe; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>/dev/null' "$CHALK_HOME"
+check "a tenth of runs are holdouts by default" test "$CHALK_HOLDOUT" = 0.10
+for value in 0 0.05 1 1.0; do
+  check "CHALK_HOLDOUT=$value is a share" \
+    "$BASH" -c '(CHALK_HOLDOUT=$1; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere)' "$CHALK_HOME" "$value"
+done
+for value in 2 -0.1 0.105 1.5 ten; do
+  check "CHALK_HOLDOUT=$value stops Chalk with a message" \
+    "$BASH" -c '(CHALK_HOLDOUT=$1; . "$0/lib/core/log.sh"; . "$0/lib/config.sh"; load_config /nowhere) 2>&1 |
+      grep -q "CHALK_HOLDOUT must be a share from 0 to 1"' "$CHALK_HOME" "$value"
+done
+check "a repository cannot set CHALK_HOLDOUT" test ! -v 'CHALK_CONFIG_DEFAULTS[CHALK_HOLDOUT]'
 
 # Hindsight was removed: its settings still load, are ignored, and are
 # named in a single warning that gives the replacement.

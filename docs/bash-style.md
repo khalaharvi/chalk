@@ -31,8 +31,8 @@ run under any bash. Then it loads three layers, in this order:
 
 1. **Shell runtime** (`lib/core/`): log, runtime (options, traps), jobs,
    system (host profile, locks).
-2. **Chalk domain** (`lib/`): repo, forge, state, config, db, memory,
-   sandbox, fingerprint, agent.
+2. **Chalk domain** (`lib/`): repo, forge, state, config, db, certify,
+   decider, memory, sandbox, fingerprint, agent.
 3. **Commands** (`lib/`, the `cmd_*` functions): run, fleet, lifecycle,
    dashboard, setup, share.
 

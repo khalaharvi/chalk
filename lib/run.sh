@@ -36,6 +36,12 @@ run_context() {
   RUN_STUCK_CONFIDENCE=""
   # Set by cmd_run when the loop starts; calls outside a run record none.
   RUN_ID=""
+  # 1 for a run that keeps certified early stops in shadow mode
+  # (certify_holdout), drawn when the loop starts.
+  RUN_HOLDOUT=0
+  # The verdicts' mode for the call being recorded (run_fp_mode); empty
+  # records CHALK_FP_RULES.
+  RUN_FP_MODE=""
   RUN_FP_BASE=()
   # Set once the run has said how it ended (run_detain), so that
   # run_teardown parks the sandbox's work only after an unexpected exit.
@@ -343,6 +349,40 @@ run_verdict() {
   local key
   RUN_FP_BASE=()
   for key in "${!__verdict_fp[@]}"; do RUN_FP_BASE[$key]="${__verdict_fp[$key]}"; done
+}
+
+# run_call_model RESULT -> REPLY: the model an agent call ran on, as
+# db_record_call records it: the one RESULT reports, else CHALK_MODEL, else
+# "default". Verdicts are certified per model (certify_verdict).
+run_call_model() {
+  REPLY="$(agent_model "$1" 2>/dev/null || true)"
+  REPLY="${REPLY:-${CHALK_MODEL:-default}}"
+}
+
+# run_fp_mode VERDICT MODEL -> REPLY: the mode a loop's verdict is taken in.
+# off and shadow are CHALK_FP_RULES. Under on, it is on only for a stopping
+# verdict (fp_stops) that is certified for MODEL (certify_verdict), in a
+# run that is not a holdout (RUN_HOLDOUT); otherwise the loop records it in
+# shadow mode, saying why once per run.
+run_fp_mode() {
+  local -A cert
+  REPLY="$CHALK_FP_RULES"
+  [[ $REPLY == on ]] || return 0
+  REPLY=shadow
+  fp_stops "$1" || return 0
+  certify_verdict "$1" "$2" cert
+  if [[ ${cert[status]} != certified ]]; then
+    certify_warn_once "held:$1" "CHALK_FP_RULES=on records $1 in shadow mode only: ${| certify_note cert; } (see: chalk certify)"
+    return 0
+  fi
+  if (( RUN_HOLDOUT )); then
+    if [[ ! -v CERTIFY_WARNED[holdout] ]]; then
+      CERTIFY_WARNED["holdout"]=1
+      run_log "this run is a holdout (CHALK_HOLDOUT=$CHALK_HOLDOUT): certified verdicts are recorded, not acted on, so that they go on being judged"
+    fi
+    return 0
+  fi
+  REPLY=on
 }
 
 # run_fp_feedback REASON FP -> REPLY: the retry feedback for a failed rubric
@@ -672,6 +712,7 @@ cmd_run() {
   fi
 
   RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
+  RUN_HOLDOUT="${| certify_holdout; }"
   run_open_sandbox
   if [ -n "$CHALK_SETUP_CMD" ]; then
     run_log "running the setup command: $CHALK_SETUP_CMD"
@@ -684,7 +725,7 @@ cmd_run() {
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke="" reviewed
-  local open remaining result agent_status rubric_exit progressed output stuck key
+  local open remaining result agent_status rubric_exit progressed output stuck key fp_mode
   local -a lesson
   local -A usage fp base recall=()
   result="$RUN_IO/loop.json"
@@ -796,8 +837,13 @@ cmd_run() {
       stuck="${| decider_stuck "${| run_stuck_state base fp; }"; }"
     fi
 
+    # Whether this loop's verdict may stop the run, decided before the call
+    # is recorded, since the call records the mode it was taken in.
+    fp_mode="${| run_fp_mode "${fp[verdict]-}" "${| run_call_model "$result"; }"; }"
+    RUN_FP_MODE="$fp_mode"
     run_db db_record_call "$mode" "$agent_status" "$rubric_exit" "$progressed" "$CHALK_MODEL" \
       "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
+    RUN_FP_MODE=""
     decider_flush
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
     if (( usage[denials] > 0 )); then
@@ -822,8 +868,9 @@ cmd_run() {
     lesson=("" "")
     if [ "$ended" = "failed" ]; then lesson=("${fp[fingerprint]-}" "${fp[first_error]-}"); fi
     # With CHALK_FP_RULES=on, a loop that repeats itself, changes nothing, or
-    # fails like an open detention on another ticket is detained at once.
-    if [ "$CHALK_FP_RULES" = "on" ] && fp_stops "${fp[verdict]-}"; then
+    # fails like an open detention on another ticket is detained at once,
+    # once that verdict is certified (run_fp_mode).
+    if [[ $fp_mode == on ]]; then
       run_detain "${fp[verdict]}" "${fp[verdict]}: $reason" "" "${lesson[@]}"
       return 1
     fi
