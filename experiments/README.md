@@ -19,7 +19,7 @@ default.
 chalk db up && chalk sandbox build
 experiments/faults.sh /tmp/exp --build
 EXP_BUDGET_USD=20 experiments/run.sh /tmp/exp/corpus /tmp/exp/out --oracle \
-  CHALK_FP_RULES=shadow CHALK_MAX_RETRIES=1
+  CHALK_FP_RULES=shadow CHALK_MAX_RETRIES=1 CHALK_MAX_LOOPS=3
 experiments/analyze.sh /tmp/exp/out
 ```
 
@@ -50,7 +50,7 @@ An instance is one JSON file:
 | `kind` | `replay`, `impossible`, `fault` or `synthetic`; used to group results |
 | `repo` | A git URL, an absolute path, or a path relative to the instance file |
 | `base_commit` | The commit to start from (default: the repository's `HEAD`). Only this commit is fetched, so later history cannot leak into the run |
-| `workspace` | Instances with the same workspace share one repository, so `chalk tune` sees their runs together (default: the repository's name) |
+| `workspace` | The repository name of its runs in the database: attempts at instances with the same workspace are counted together by `chalk tune` (default: the repository's name). Each attempt still runs in a repository of its own, since a sandbox sees every branch of its repository |
 | `title`, `problem` | The spec's title and context |
 | `fail_to_pass` | Test IDs; each becomes a checkpoint "Make `ID` pass" |
 | `checkpoints` | Or the checkpoints themselves |
@@ -67,14 +67,21 @@ you: these scripts download nothing.
 
 ## Spend
 
-Before every run, `run.sh` checks the spend so far in every `exp-*`
-repository of the telemetry database, plus the most one run can cost: each
-loop up to `CHALK_MAX_LOOPS`, the explored loops, the spec check, the
-review rounds and a review fix, each at `CHALK_BUDGET_USD`. If that would
-pass `EXP_BUDGET_USD`, it stops before the run. Lower `CHALK_MAX_LOOPS` and
-`CHALK_BUDGET_USD` to fit more runs in a budget. Workspaces are named
-`exp-*`, so the experiment's runs stay apart from your own in `chalk
-dashboard`, and `chalk cleanup --all` in a workspace removes its branches.
+Each experiment gets a tag, kept in `OUT_DIR/tag`, and its workspaces are
+named `exp-TAG-*`, so its runs stay apart from your own and from other
+experiments' in the database. An `OUT_DIR` holds one experiment: give the
+next one another.
+
+Before every run, `run.sh` checks the spend so far in this experiment's
+repositories, plus the most one run can cost: each loop up to
+`CHALK_MAX_LOOPS`, the explored loops, the spec check, the review rounds
+and a review fix, each at `CHALK_BUDGET_USD`. If that would pass
+`EXP_BUDGET_USD`, it stops before the run. Office hours (one more call, to
+distill the lesson, then the resumed run) and the pre-flight run are
+checked the same way, and skipped, with a line in `results.jsonl`, when
+they do not fit. Lower `CHALK_MAX_LOOPS` and `CHALK_BUDGET_USD` to fit more
+runs in a budget. `chalk cleanup --all` in a workspace removes its
+branches.
 
 ## Filling the paper
 

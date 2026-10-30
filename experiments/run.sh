@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Runs a corpus of task instances through Chalk, for the paper's evaluation
-# (experiments/README.md). Each instance becomes a ticket in a workspace
-# repository made from its base commit alone, so no later history is there
-# to read. Spend is capped: EXP_BUDGET_USD must be set, and no run starts
-# unless what was spent so far, plus the most one run can cost, is within it.
+# (experiments/README.md). Each attempt at an instance becomes a ticket in a
+# workspace repository of its own, made from the instance's base commit
+# alone, so neither later history nor another attempt's work is there to
+# read: a sandbox clones every branch of its repository. Spend is capped:
+# EXP_BUDGET_USD must be set, and no run, office hours or pre-flight run
+# starts unless what was spent so far, plus the most it can cost, is
+# within it.
 #
 #   EXP_BUDGET_USD=50 experiments/run.sh CORPUS_DIR OUT_DIR [--attempts N] [--oracle] [KEY=VALUE...]
 #
@@ -40,15 +43,23 @@ exp_need git jq chalk
 mkdir -p "$out/ws"
 out="$(cd "$out" && pwd)"
 results="$out/results.jsonl"
-prefix="exp-"
+[[ ! -s $results ]] || exp_die "$out already holds an experiment's results; give each experiment an OUT_DIR of its own"
+# This experiment's tag: its workspaces' names start with exp-TAG-, so its
+# runs stay apart from another experiment's in the database (exp_spent,
+# analyze.sh).
+[[ -s $out/tag ]] || printf '%04x%04x\n' "$RANDOM" "$RANDOM" > "$out/tag"
+prefix="exp-$(cat "$out/tag")-"
 
-# workspace INSTANCE -> REPLY: the workspace repository for an instance,
-# made on first use. Instances of one upstream repository share it, so
-# chalk tune sees their runs together.
+# workspace INSTANCE ATTEMPT -> REPLY: the workspace repository for one
+# attempt at an instance, made on first use. Attempts at instances of one
+# upstream repository have workspaces of the same name in directories of
+# their own, so the database, and chalk tune, see their runs together while
+# no sandbox sees another's branches.
 workspace() {
-  local name
+  local name id
   name="$(jq -r '.workspace // (.repo | sub("/+$"; "") | split("/")[-1] | sub("\\.git$"; ""))' "$1")"
-  REPLY="$out/ws/$prefix${name//[^a-zA-Z0-9_.-]/-}"
+  id="$(jq -r .id "$1")"
+  REPLY="$out/ws/$id-$2/$prefix${name//[^a-zA-Z0-9_.-]/-}"
   if [[ ! -d $REPLY/.git ]]; then
     git init -q -b main "$REPLY"
     git -C "$REPLY" commit -q --allow-empty -m "experiment workspace"
@@ -88,23 +99,36 @@ instance_env() {
 # record FIELDS_JSON: appends one result line.
 record() { jq -c . <<<"$1" >> "$results"; }
 
+# fits WHAT CALLS KEY=VALUE...: true when what was spent so far, plus the
+# most WHAT can cost at those settings (exp_worst_case, and CALLS more agent
+# calls), is within EXP_BUDGET_USD; says so when it is not.
+fits() {
+  local what="$1" calls="$2" spent worst
+  shift 2
+  exp_spent "$prefix"; spent="$REPLY"
+  worst="$(env "$@" bash -c ". '$here/lib.sh'; exp_worst_case; printf '%s' \"\$REPLY\"")"
+  worst="$(awk -v w="$worst" -v n="$calls" -v b="${CHALK_BUDGET_USD:-1.00}" 'BEGIN { printf "%.2f", w + n * b }')"
+  if exp_over "$(awk -v a="$spent" -v b="$worst" 'BEGIN { print a + b }')" "$EXP_BUDGET_USD"; then
+    exp_warn "not starting $what: \$$spent spent, and it may cost up to \$$worst, over EXP_BUDGET_USD=\$$EXP_BUDGET_USD"
+    return 1
+  fi
+}
+
 n=0
 for file in "$corpus"/*.json; do
   id="$(jq -r .id "$file")"
   [[ $id =~ ^[a-zA-Z0-9_.-]+$ ]] || exp_die "$file: id must be letters, digits, dot, dash or underscore"
-  workspace "$file"; ws="$REPLY"
-  base "$file" "$ws"
   declare -a env=()
   instance_env "$file" env
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    n=$((n + 1))
-    ticket="EXP-$n"
-    exp_spent "$prefix"; spent="$REPLY"
-    worst="$(env "${env[@]}" bash -c ". '$here/lib.sh'; exp_worst_case; printf '%s' \"\$REPLY\"")"
-    if exp_over "$(awk -v a="$spent" -v b="$worst" 'BEGIN { print a + b }')" "$EXP_BUDGET_USD"; then
-      exp_warn "stopping before $id (attempt $attempt): \$$spent spent, and a run may cost up to \$$worst, over EXP_BUDGET_USD=\$$EXP_BUDGET_USD"
+    if ! fits "$id (attempt $attempt)" 0 "${env[@]}"; then
+      exp_warn "stopping the experiment"
       break 2
     fi
+    workspace "$file" "$attempt"; ws="$REPLY"
+    base "$file" "$ws"
+    n=$((n + 1))
+    ticket="EXP-$n"
     (
       cd "$ws"
       env "${env[@]}" CHALK_BASE_BRANCH="base/$id" chalk new "$ticket" "$id" >/dev/null
@@ -127,6 +151,11 @@ for file in "$corpus"/*.json; do
     else exp_info "$id attempt $attempt ($ticket): exit $status"; fi
 
     if (( ! oracle )) || [[ $detained != true ]] || ! jq -e '.oracle' "$file" >/dev/null; then continue; fi
+    # Office hours distills a lesson, then resumes the run in full.
+    if ! fits "the oracle for $id ($ticket)" 1 "${env[@]}"; then
+      record "$(jq -n --arg id "$id" --arg ticket "$ticket" '{id: $id, ticket: $ticket, phase: "oracle", skipped: "budget"}')"
+      continue
+    fi
     # The oracle: the recorded fix, as an engineer would make it, then
     # office hours, which checks it with the blocker's probe.
     (
@@ -150,6 +179,10 @@ for file in "$corpus"/*.json; do
                 --arg log "logs/$ticket.oracle.log" '{id: $id, ticket: $ticket, phase: "oracle", proved: $proved, log: $log}')"
     if [[ $proved != true ]]; then exp_info "  oracle fix: not proved"; continue; fi
     exp_info "  oracle fix: proved"
+    if ! fits "the pre-flight run for $id" 0 "${env[@]}"; then
+      record "$(jq -n --arg id "$id" '{id: $id, phase: "preflight", skipped: "budget"}')"
+      continue
+    fi
     # Pre-flight: a later ticket, branched from the fixed work, run on the
     # faulty environment again, must be detained before any loop.
     tutoring="$(git -C "$ws.worktrees/$ticket" rev-parse --abbrev-ref HEAD)"

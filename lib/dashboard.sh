@@ -111,7 +111,9 @@ cmd_certify() {
     case "$1" in
       --json) json=1 ;;
       --false-stop-usd) usd="${2:-}"; shift ;;
-      *) die "usage: chalk certify [--json] [--false-stop-usd N]" ;;
+      # Only for reading: the gate always judges every repository's runs.
+      --repos) CERTIFY_REPOS="${2:-}"; shift ;;
+      *) die "usage: chalk certify [--json] [--false-stop-usd N] [--repos PREFIX]" ;;
     esac
     shift
   done
