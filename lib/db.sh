@@ -614,12 +614,14 @@ SQL
 # in the order they were judged; blocks is how many are complete,
 # block_wrong the wrong ones in the latest, open_wrong those in the block
 # still filling. saved is the spend after the correct firings, saved_max
-# the largest of those.
+# the largest of those. With CERTIFY_REPOS set (chalk certify --repos), only
+# runs in repositories whose name starts with it count.
 db_certify_verdicts() {
-  db_sql -v block="$CERTIFY_BLOCK" <<'SQL'
+  db_sql -v block="$CERTIFY_BLOCK" -v repos="${CERTIFY_REPOS:-}%" <<'SQL'
 -- chalk certify: verdicts
 WITH l AS (
   SELECT * FROM runs WHERE run_id IS NOT NULL AND kind IN ('continue', 'retry', 'fix-review')
+                       AND repo LIKE :'repos'
 ), f AS (
   SELECT DISTINCT ON (x.verdict, l.run_id) x.verdict, l.run_id, l.loop, l.model, l.created_at
     FROM l CROSS JOIN LATERAL (VALUES (l.verdict), ('any')) AS x(verdict)

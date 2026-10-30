@@ -31,6 +31,11 @@
 \newtheorem{remark}{Remark}
 
 \newcommand{\tbd}[1]{\textcolor{red!70!black}{[#1]}}
+% Experiment results: experiments/analyze.sh writes results.tex, a list of
+% \Exp... macros; copy it here and every \expval{Name} shows its value.
+% Without it, each shows as a red placeholder.
+\IfFileExists{results.tex}{\input{results.tex}}{}
+\newcommand{\expval}[1]{\ifcsname Exp#1\endcsname\csname Exp#1\endcsname\else\tbd{#1}\fi}
 \newcommand{\Tset}{\mathsf{T}}
 \newcommand{\Eerr}{\mathsf{E}}
 \newcommand{\Dtree}{\mathsf{D}}
@@ -389,12 +394,12 @@ It does not prove correctness. Saturated visible tests coexist with held-out gap
 \item[C0: real ledger.] Chalk's real runs (51 to date), reported descriptively only.
 \item[C1: benchmark replay.] SWE-bench-style instances \citep{jimenez2023swebench}, with each spec checkpoint set to the instance's fail-to-pass tests. Repositories are rebuilt without future git objects, following \citet{sweprov2026}.
 \item[C2: unsolvable controls.] ImpossibleBench tasks, whose tests contradict the specification, so any pass is a cheat and every honest run is a non-progress run \citep{zhong2025impossiblebench}.
-\item[C3: seeded environment faults.] A catalogue of missing system package, wrong tool version, unset environment variable, blocked network, locale, and file permissions, injected into sandbox images across repositories. A scripted ``office hours'' oracle resolves each fault, producing a lesson and probe. Faults are then re-injected elsewhere (true recall), near-miss faults are injected (false recall), and the base image is repaired (expiry).
+\item[C3: seeded environment faults.] A catalogue of missing system package, wrong tool version, unset environment variable, blocked network, locale, and file permissions, injected into sandbox images across repositories. A scripted ``office hours'' oracle resolves each fault, producing a lesson and probe. Faults are then re-injected elsewhere (true recall), near-miss faults are injected (false recall), and the base image is repaired (expiry). The harness so far implements four missing-tool faults (\texttt{python3}, a C compiler, \texttt{make}, \texttt{jq}), the oracle, and re-injection on a later ticket in the same repository; the other fault classes, re-injection in other repositories, near-miss faults and image repair are not yet built.
 \item[C4: handicaps.] Low per-loop caps and weaker models, to raise the rate of natural stuck loops.
 \end{description}
 
 \paragraph{Spend ceiling.}
-Total model spend is at most $\sum_{\text{runs}} (\text{checkpoints}\times(K{+}1)+\text{review calls})\times B$, fixed before the experiment. With a planning target of \tbd{200--400} runs this is \tbd{\$X}. The target is an estimate, not a power calculation. It is chosen to yield at least 29 firing runs per verdict type.
+A dollar ceiling is fixed before the experiment. Before each run, and before each office-hours and pre-flight step, the harness adds the most that step can cost, $(L + r + 2 + 2R)\times B$ for a loop limit $L$, $r$ explored loops, the spec check, $R$ review rounds with their fixes and a per-call cap $B$ (plus one call for office hours' distillation), to the spend recorded so far, and does not start the step if the sum passes the ceiling. Spend therefore never passes the ceiling. With a planning target of \tbd{200--400} runs this is \tbd{\$X}. The target is an estimate, not a power calculation. It is chosen to yield at least 29 firing runs per verdict type.
 
 \subsection{Policies compared}
 All policies below are stop-only with respect to $\pi_0$ and computable from logged data, so all are evaluated exactly on the \emph{same} runs, and comparisons are paired.
@@ -421,7 +426,17 @@ All policies below are stop-only with respect to $\pi_0$ and computable from log
 The unit of analysis is the run. Precision uses exact Clopper--Pearson bounds. Savings use Hoeffding bounds on the known range, with a bootstrap reported alongside. Multiplicity across verdict types is Bonferroni-corrected. Every hypothesis is reported, including nulls. All code, the fault catalogue and the anonymised ledgers are released.
 
 \subsection{Results}
-\tbd{To be completed. No experiment in this section has been run.}
+\emph{No experiment in this section has been run yet.} The harness that produces these numbers is in \texttt{experiments/}. \texttt{faults.sh} writes the seeded faults (C3), \texttt{run.sh} runs a corpus within a declared spend ceiling, and \texttt{analyze.sh} writes the macros used below. Every bracketed value is filled when its \texttt{results.tex} is present.
+
+\paragraph{Spend and runs.} \expval{Runs} runs, of which \expval{Detained} were detained, cost \$\expval{Spend} in all.
+
+The paragraphs below are descriptive counts of what the harness records. They are not yet the tests of H1--H7: the paired comparisons with syntactic rules, fixed limits and decider thresholds (H1), across model revisions (H2), the recall comparisons (H3--H5), the tamper study on C2 (H6) and the tuning study (H7) need analyses \texttt{analyze.sh} does not compute yet, and each will be reported as not measured until it does.
+
+\paragraph{Stop-only control.} For the agent model with the most judged runs, the union of the stopping verdicts fired on \expval{AnyJudged} judged runs, \expval{AnyWrong} of them wrongful. That gives a 95\% lower bound of \expval{AnyLower} on being right, \$\expval{AnySaved} saved per firing (95\% lower bound), and a net of \$\expval{AnyNet} per firing at \$5 per wrongful stop. \expval{Certified} verdict--model strata were certified.
+
+\paragraph{Evidence-carrying lessons.} Of \expval{Blockers} detentions in the experiment's repositories, not counting pre-flight's, \expval{WithProbe} carried a probe, which failed at detention in \expval{ProbeFailed}, passed in \expval{ProbePassed}, and was inconclusive in \expval{ProbeInconclusive}. The oracle's fix was proved in \expval{OracleProved} of \expval{OracleFixes} cases. Pre-flight caught \expval{PreflightCaught} of \expval{PreflightChecked} regressions, after \expval{PreflightLoops} loops in all.
+
+\paragraph{Evidence records.} \expval{RecordsVerified} of \expval{Records} evidence records verified.
 
 % ===================================================================
 \section{Related work}
@@ -515,6 +530,7 @@ Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chal
 Probes, needs, pre-flight, evidence-based expiry (\texttt{chalk needs}) & implemented (this work) \\
 Per-repository tuning (\texttt{chalk tune}, exploration, prompt A/B) & implemented (this work) \\
 Evidence record and CI verification (\texttt{chalk attest}) & implemented (this work) \\
+Experiment harness (\texttt{experiments/}: faults, runs under a ceiling, analysis) & implemented (this work) \\
 \bottomrule
 \end{tabularx}
 \caption{What is shipped, designed and proposed.}

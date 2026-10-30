@@ -2145,6 +2145,46 @@ check "glab is not used for a GitHub repository" sh -c "! grep -q PROJ-20 '$FAKE
 unset CHALK_FORGE
 cd "$tmp/demo"
 
+# 5b. The experiment harness (experiments/): the seeded jq fault, run with
+# its oracle fix. The fake agent reports the blocker with a probe that
+# fails on the faulty image; office hours proves the oracle's image; a
+# later ticket on the faulty image is caught in pre-flight with no loop;
+# and the analysis gives the paper its numbers. Spend is capped, and with
+# no ceiling set nothing runs.
+exp="$tmp/exp"
+"$here/../experiments/faults.sh" "$exp" > "$tmp/faults.log" 2>&1 || { cat "$tmp/faults.log"; fail "faults.sh"; }
+check "faults.sh: an instance and a task repository per fault" \
+  test "$(find "$exp/corpus" -name '*.json' | wc -l | tr -d ' '):$(jq -r '.image + " " + .oracle.image' "$exp/corpus/fault-jq.json")" = "4:chalk-exp-jq-faulty chalk-sandbox:local"
+mkdir -p "$exp/one" && cp "$exp/corpus/fault-jq.json" "$exp/one/"
+if "$here/../experiments/run.sh" "$exp/one" "$exp/out" > "$tmp/exp0.log" 2>&1; then fail "run.sh must refuse to run without EXP_BUDGET_USD"; fi
+check "run.sh: no budget, no runs" grep -q 'set EXP_BUDGET_USD to the most this experiment may spend' "$tmp/exp0.log"
+if EXP_BUDGET_USD=1 "$here/../experiments/run.sh" "$exp/one" "$exp/out" > "$tmp/exp1.log" 2>&1; then :; fi
+check "run.sh: a run that could cost more than the budget does not start" \
+  sh -c "grep -q 'not starting fault-jq (attempt 1).*over EXP_BUDGET_USD=\\\$1' '$tmp/exp1.log' && test ! -s '$exp/out/results.jsonl'"
+jq_fix="$(jq -cn '{kind: "image", why: "jq: command not found", probe: "test \"$FAKE_CONTAINER_IMAGE\" != chalk-exp-jq-faulty", image: "apt-get install -y jq"}')"
+# The fake database is told what the detention's lesson carries; a real
+# one (make test-db) holds what the detention recorded.
+FAKE_PENDING_EVIDENCE="$(jq -cn --argjson fix "$jq_fix" '{id: 1, fix: $fix, fix_kind: "image", probe: $fix.probe, before_outcome: "failed"}')" \
+FAKE_CLAUDE_MODE=blocked FAKE_BLOCKER_FIX="$jq_fix" EXP_BUDGET_USD=500 \
+  "$here/../experiments/run.sh" "$exp/one" "$exp/out" --oracle CHALK_MAX_LOOPS=3 CHALK_SPEC_CHECK=false > "$tmp/exp2.log" 2>&1 ||
+  { cat "$tmp/exp2.log"; fail "run.sh --oracle"; }
+check "run.sh: the fault's blocker is detained, the oracle's fix is proved, and pre-flight catches the regression with no loop" \
+  test "$(jq -sc '[.[] | [.phase, (.detained // .proved // .caught), (.loops // null)]]' "$exp/out/results.jsonl")" = \
+    '[["run",true,null],["oracle",true,null],["preflight",true,0]]'
+check "run.sh: the task ran from its base commit alone, in a workspace of its own, named for this experiment" \
+  test "$(git -C "$exp/out/ws/fault-jq-1/exp-$(cat "$exp/out/tag")-fault-jq" rev-list --count base/fault-jq)" -eq 1
+if EXP_BUDGET_USD=500 "$here/../experiments/run.sh" "$exp/one" "$exp/out" > "$tmp/exp2b.log" 2>&1; then
+  fail "run.sh must not add a second experiment to an OUT_DIR"
+fi
+check "run.sh: an OUT_DIR holds one experiment" grep -q 'already holds an experiment' "$tmp/exp2b.log"
+"$here/../experiments/analyze.sh" "$exp/out" > "$tmp/exp3.log" 2>&1 || { cat "$tmp/exp3.log"; fail "analyze.sh"; }
+check "analyze.sh: the paper's macros, from the results" \
+  sh -c "grep -qx '\\\\newcommand{\\\\ExpRuns}{1}' '$exp/out/results.tex' &&
+    grep -qx '\\\\newcommand{\\\\ExpPreflightCaught}{1}' '$exp/out/results.tex' &&
+    grep -qx '\\\\newcommand{\\\\ExpOracleProved}{1}' '$exp/out/results.tex' &&
+    jq -e '.runs.detained == 1 and .preflight.loops_before_caught == 0 and .attest.records == 0' '$exp/out/analysis.json' >/dev/null"
+cd "$tmp/demo"
+
 # 6. Guards and cleanup.
 if chalk fleet PROJ-10 --plan /dev/null --yes >/dev/null 2>&1; then fail "empty plan must be rejected"; fi
 pass "invalid plan rejected"

@@ -92,13 +92,15 @@ follows it.
 report card for the last N days (30 by default) and opens it. See
 [Verdicts and the report card](../guide/operating/dashboard.md).
 
-**`chalk certify [--json] [--false-stop-usd N]`** shows, for every
+**`chalk certify [--json] [--false-stop-usd N] [--repos PREFIX]`** shows, for every
 decision that may stop a run early, what the shadow runs say about it:
 each stuck-loop verdict per agent model, and each decider at
 `CHALK_DECIDER_THRESHOLD`. It prints the runs judged, the wrongful stops,
 the latest block of 46 and whether it may act, a 95% lower bound on how
 often it is right, one on what each firing saved, and the net after `N`
-dollars (5 by default) per wrongful stop. Nothing leaves the machine. See
+dollars (5 by default) per wrongful stop. `--repos` counts the verdicts'
+runs only in repositories whose name starts with `PREFIX`, for reading
+(the experiments use it); the gate always counts every repository's. Nothing leaves the machine. See
 [May the verdicts act yet?](../guide/operating/dashboard.md#may-the-verdicts-act-yet).
 
 **`chalk tune [--json] [--days N] [--checkpoint-usd N] [--success-usd N] [--apply]`**

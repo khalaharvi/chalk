@@ -4,7 +4,7 @@ check: lint test
 
 lint:
 	shellcheck -x -s bash bin/chalk lib/core/*.sh lib/*.sh share/sandbox/scripts/*.sh \
-	  scripts/*.sh tests/e2e.sh tests/unit/*.sh tests/fakes/*
+	  scripts/*.sh experiments/*.sh tests/e2e.sh tests/unit/*.sh tests/fakes/*
 	scripts/lint-conventions.sh
 
 # Parses the sandbox scripts with the sandbox's oldest supported bash (5.2).
