@@ -44,7 +44,9 @@ CHALK_MAX_RETRIES=2
 # first error and working tree (see `chalk dashboard`):
 #   shadow  record the verdicts only
 #   on      also detain at once when a loop repeats itself, changes nothing,
-#           or fails like an open detention on another ticket
+#           or fails like an open detention on another ticket, once shadow
+#           runs certify that verdict for the agent's model (see
+#           `chalk certify`); until then, record it only
 #   off     compute nothing
 CHALK_FP_RULES=shadow
 # What a retry is told about the failed loop before it:

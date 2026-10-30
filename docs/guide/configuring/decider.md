@@ -66,14 +66,19 @@ decider starts held to shadow, and `CHALK_DECIDER=on` acts only once it is
   progress after it and was detained, a **false stop** when a later loop
   made progress. A run that has done neither yet is not settled, and does
   not count.
-- **The bar.** At least **20** such runs, and at least **90%** of them
-  right. 90% is what a 0.9 threshold promises. 20 runs is the sample the
-  [verdict ledger](../operating/dashboard.md#verdicts) asks before
-  `CHALK_FP_RULES=on`, so both ways of stopping a run early need the same
-  evidence; it allows two false stops, and a false stop costs a detention
-  you resolve, never a wrong change. Runs, not answers, are counted, so a
-  run asked loop after loop does not fill the sample alone. The bar is
-  fixed, not a setting: a repository's config cannot lower it.
+- **The bar.** The bar every early stop clears
+  ([May the verdicts act yet?](../operating/dashboard.md#may-the-verdicts-act-yet)):
+  judged runs are taken in **blocks of 46**, in the order they were
+  judged, and it may act while its latest complete block had **at most
+  one** false stop, and the block still filling has not already had two.
+  That shows it right at least 90% of the time, 95% sure: 90% is what a
+  0.9 threshold promises, and checking a fixed block, not every new run,
+  keeps the 95% honest. A false stop costs a detention you resolve, never
+  a wrong change. Runs, not answers, are counted, so a run asked loop
+  after loop does not fill a block alone. A later block that fails holds
+  it back again, and a tenth of runs (`CHALK_HOLDOUT`) keep it in shadow
+  mode so that it goes on being judged. The bar is fixed, not a setting:
+  a repository's config cannot lower it.
 - **What it holds.** Until the decider is calibrated, `on` behaves as
   `shadow` for both questions, the stuck question and lesson recall, and
   its answers are recorded as shadow answers, which count towards the
@@ -82,8 +87,9 @@ decider starts held to shadow, and `CHALK_DECIDER=on` acts only once it is
   ```text
   warning: CHALK_DECIDER=on records in shadow mode only: strands-decider-2B-hobson-v19@1a2b3c4
   at http://127.0.0.1:8471 is not calibrated yet: 0 shadow run(s) judged at
-  CHALK_DECIDER_THRESHOLD=0.9; it needs 90% right over at least 20; it would be at
-  CHALK_DECIDER_THRESHOLD=0.7 (see: chalk doctor)
+  CHALK_DECIDER_THRESHOLD=0.9; it needs a block of 46 judged runs with at most 1
+  wrongful stop(s), which shows it right at least 90% of the time, 95% sure; it would
+  be at CHALK_DECIDER_THRESHOLD=0.7 (see: chalk doctor)
   ```
 
   `chalk doctor` and `chalk decider status` show the same numbers, and the

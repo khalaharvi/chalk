@@ -120,6 +120,17 @@ Shadow mode
     `CHALK_FP_RULES=shadow` is the default; the report card shows whether
     turning a rule `on` would pay.
 
+Certified
+:   An early stop, a stopping verdict or the decider's confident "stuck",
+    that shadow runs have shown right often enough to act: its latest block
+    of 46 judged runs had at most one wrongful stop. Under `on`, only a
+    certified stop acts. See `chalk certify` and
+    [May the verdicts act yet?](../guide/operating/dashboard.md#may-the-verdicts-act-yet).
+
+Holdout
+:   A run, a tenth by default (`CHALK_HOLDOUT`), that keeps certified
+    stops in shadow mode, so that they go on being judged after they act.
+
 Harness
 :   The coding-agent CLI that runs each loop. Today it is always Claude
     Code.

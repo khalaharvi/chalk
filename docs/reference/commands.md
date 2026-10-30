@@ -92,6 +92,15 @@ follows it.
 report card for the last N days (30 by default) and opens it. See
 [Verdicts and the report card](../guide/operating/dashboard.md).
 
+**`chalk certify [--json] [--false-stop-usd N]`** shows, for every
+decision that may stop a run early, what the shadow runs say about it:
+each stuck-loop verdict per agent model, and each decider at
+`CHALK_DECIDER_THRESHOLD`. It prints the runs judged, the wrongful stops,
+the latest block of 46 and whether it may act, a 95% lower bound on how
+often it is right, one on what each firing saved, and the net after `N`
+dollars (5 by default) per wrongful stop. Nothing leaves the machine. See
+[May the verdicts act yet?](../guide/operating/dashboard.md#may-the-verdicts-act-yet).
+
 **`chalk share [--days N] [--output FILE] [--json]`** prints an anonymised
 summary of the report card for the last N days (30 by default) as JSON:
 counts, rates, rounded costs, model families and the size of the machine,

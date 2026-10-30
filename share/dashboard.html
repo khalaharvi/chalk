@@ -231,16 +231,18 @@ function notes(d) {
       without one. ${withRate > withoutRate ? "Office-hours notes are paying off." :
       "Lessons are not helping yet; check that the notes describe the fix, not just the symptom."}`);
   }
-  // The bar for turning the verdict rules on: enough detained runs, enough
-  // saved, and at most one run that a stop would have cut short of progress.
-  // The ledger counts only runs in shadow mode, so runs already under
-  // CHALK_FP_RULES=on cannot make the case for turning it on, and only runs
-  // with a verdict the rules judge, so detentions for a blocker cannot.
+  // The bar for turning the verdict rules on is the gate they clear before
+  // they act (lib/certify.sh): a verdict certified for a model, whose net
+  // saving, 95% sure, is positive. Under CHALK_FP_RULES=on a verdict that is
+  // not certified only records, so the note names the ones that would act.
   const g = d.ledger;
-  if (g && g.detained_runs >= 20 && share(g.saved, g.no_progress_cost) >= 0.2 && g.false_stops <= 1) {
-    out.push(`Over ${plural(g.detained_runs, "detained run")}, stopping at the first repeated failure, unchanged
-      tree or failure already in detention would have saved ${pct(share(g.saved, g.no_progress_cost))} of their
-      spend with no progress, with ${plural(g.false_stops, "false stop")}. Set <code>CHALK_FP_RULES=on</code>.`);
+  const ready = ((d.certify && d.certify.verdicts) || [])
+    .filter((v) => v.verdict !== "any" && v.certified && v.net > 0);
+  if (ready.length) {
+    out.push(`${ready.map((v) => `<code>${esc(v.verdict)}</code> for ${esc(v.model)}`).join(", ")}
+      ${ready.length === 1 ? "is" : "are"} certified by shadow runs and would save money even after a wrongful stop
+      costs $5. Set <code>CHALK_FP_RULES=on</code>: only certified verdicts act, and a tenth of runs keep
+      checking them (<code>chalk certify</code>).`);
   }
   for (const u of (g && g.unknown_tests) || []) {
     if (u.loops >= 10 && share(u.unknown, u.loops) > 0.5) {
@@ -346,7 +348,30 @@ function ledger(d) {
     ${why ? `<p class="muted">${esc(why)}</p>` : ""}
     ${marks}
     ${verdicts.length ? "<h3>Savings by first stop</h3>" + table(["First stop", "Runs", "Would have saved"], verdicts) : ""}
-    ${g.runs.length ? "<h3>Runs</h3>" + table(["Run", "Repository", "First stop", "Spend after it", "Decider", "Outcome", "Last activity"], runs, [0, 1, 2, 4, 5]) : ""}`;
+    ${g.runs.length ? "<h3>Runs</h3>" + table(["Run", "Repository", "First stop", "Spend after it", "Decider", "Outcome", "Last activity"], runs, [0, 1, 2, 4, 5]) : ""}
+    ${certified(d)}`;
+}
+
+// The gate the verdicts clear before CHALK_FP_RULES=on lets them act
+// (lib/certify.sh): one row per verdict and agent model.
+function certified(d) {
+  const c = d.certify || {};
+  const rows = (c.verdicts || []).map((v) => [
+    esc(v.verdict === "any" ? "any of them" : v.verdict), esc(v.model),
+    v.certified ? "Certified: may act" : "Not yet: shadow only",
+    `${count(v.judged)} (${count(v.wrong)} wrongful)`, count(v.waiting),
+    v.blocks ? `${count(v.blocks)}; latest: ${count(v.block_wrong)} wrongful` : "none complete",
+    esc(v.lower), money(v.saved_lower), money(v.net),
+  ]);
+  if (!rows.length) return "";
+  const r = c.rules || {};
+  return `<h3>May the verdicts act yet?</h3>
+    <p class="muted">With <code>CHALK_FP_RULES=on</code>, a stopping verdict acts only for an agent model whose
+       latest complete block of ${count(r.block)} judged shadow runs had at most ${count(r.max_wrong)} wrongful
+       stop(s): right at least ${count(r.percent)}% of the time, 95% sure. Until then it is recorded only.
+       “Lower bound” is that rate over every judged run; “saved per firing” is a 95% lower bound on what each
+       firing saved, and “net” takes off $5 for each wrongful stop. Details: <code>chalk certify</code>.</p>` +
+    table(["Verdict", "Model", "Gate", "Judged", "Not settled", "Blocks", "Lower bound", "Saved per firing", "Net"], rows, [0, 1, 2]);
 }
 
 // The decider: what it was asked, what it answered, and whether its answers
@@ -362,7 +387,7 @@ function decider(d) {
   const gate = gates.map((g) => [
     `${esc(g.model || "unnamed model")}<br><span class="muted">${esc(g.url || "unrecorded URL")}</span>`,
     g.calibrated ? "Calibrated: may act" : "Not yet: shadow only",
-    `${count(g.judged)} of ${count(rules.runs)}`,
+    g.blocks ? `${count(g.blocks)} block(s); latest: ${count(g.block_wrong)} false` : `${count(g.judged)} of ${count(rules.block)}`,
     g.judged ? `${count(g.correct)} (${pct(share(g.correct, g.judged))})` : "none",
     count(g.waiting),
     g.suggested === null || g.suggested === undefined ? "none yet" : esc(g.suggested),
@@ -398,10 +423,12 @@ function decider(d) {
          <code>CHALK_DECIDER=on</code> may act; until then <code>on</code> records in shadow mode only. Each
          shadow run counts once, by its first "stuck" at <code>CHALK_DECIDER_THRESHOLD</code>
          (${esc(rules.threshold)}) or above, which is where <code>on</code> would have stopped it: right when
-         the run was detained with no progress after it, a false stop when it progressed. It may act once
-         ${count(rules.percent)}% of at least ${count(rules.runs)} such runs were right. The suggested
-         threshold is the lowest at which that holds. Over every run recorded, not only this period's.</p>` +
-      table(["Decider", "Gate", "Runs judged", "Right", "Not settled", "Suggested threshold"], gate, [0, 1]) : ""}`;
+         the run was detained with no progress after it, a false stop when it progressed. Judged runs are
+         taken in blocks of ${count(rules.block)}, in the order they were judged; it may act while its latest
+         complete block had at most ${count(rules.max_wrong)} false stop(s), which shows it right at least
+         ${count(rules.percent)}% of the time, 95% sure. The suggested threshold is the lowest at which that
+         holds. Over every run recorded, not only this period's.</p>` +
+      table(["Decider", "Gate", "Blocks", "Right", "Not settled", "Suggested threshold"], gate, [0, 1]) : ""}`;
 }
 
 // The tests named most often by failed loops: a test that fails loop after

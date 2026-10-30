@@ -118,6 +118,40 @@ doctor_decider_calibration() {
   esac
 }
 
+# Whether each stopping verdict may act under CHALK_FP_RULES=on
+# (certify_verdict), for every agent model it has evidence for: runs record
+# the model the agent reports, which CHALK_MODEL (an alias) does not name.
+# Nothing unless CHALK_FP_RULES=on.
+doctor_fp_certification() {
+  local verdict model data
+  local -a models
+  local -A cert
+  [[ $CHALK_FP_RULES == on ]] || return 0
+  data="${| certify_data; }"
+  if [[ -z $data ]]; then
+    doctor_check optional "stuck-loop verdicts" \
+      "their evidence could not be read, so CHALK_FP_RULES=on records them in shadow mode only (start the database: chalk db up)" false
+    return 0
+  fi
+  for verdict in "${CERTIFY_VERDICTS[@]}"; do
+    mapfile -t models < <(jq -r --arg v "$verdict" '.[] | select(.verdict == $v) | .model' <<<"$data")
+    if (( ! ${#models[@]} )); then
+      doctor_check optional "verdict $verdict" \
+        "no shadow run has judged it yet; until one does, CHALK_FP_RULES=on records it in shadow mode only" false
+      continue
+    fi
+    for model in "${models[@]}"; do
+      certify_verdict "$verdict" "$model" cert
+      if [[ ${cert[status]} == certified ]]; then
+        doctor_check optional "verdict ${| certify_note cert; }" "" true
+      else
+        doctor_check optional "verdict $verdict for $model" \
+          "${| certify_note cert; }; until it is, CHALK_FP_RULES=on records it in shadow mode only" false
+      fi
+    done
+  done
+}
+
 # How many questions the decider was asked lately and, when none, why
 # (decider_quiet_note). Nothing without the database.
 doctor_decider_questions() {
@@ -226,6 +260,7 @@ cmd_doctor() {
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
   doctor_tls
   doctor_auto_mode
+  doctor_fp_certification
   doctor_decider
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured
   [ "$DOCTOR_FAILED" -eq 0 ] || die "fix the FAIL items above"

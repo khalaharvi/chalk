@@ -92,7 +92,9 @@ current streak without progress, and gets a **verdict**:
   This is shadow mode: Chalk measures what the rules would have done
   before they are allowed to act.
 - **`on`** also detains a run at once on a stopping verdict, with the
-  verdict as the reason.
+  verdict as the reason, once that verdict is
+  [certified](#may-the-verdicts-act-yet) for the agent's model. Until
+  then it records the verdict only, and the run says why once.
 - **`off`** computes nothing.
 
 ### The verdict ledger
@@ -118,10 +120,31 @@ apart, with their counts. The kind of detention does not decide it: a run
 detained at the loop limit or by the review counts when its loops were
 judged.
 
-When there are at least twenty detained runs with verdicts, stopping early
-would have saved at least a fifth of their spend without progress, and
-there was at most one false stop, the notes recommend turning the rules
-on.
+### May the verdicts act yet?
+
+A verdict that can only stop a run earlier is judged exactly by the shadow
+runs it would have stopped: what came after the loop it fired on is what it
+would have saved, or the progress it would have cost. So `on` lets a
+stopping verdict act only once those runs show it right often enough, per
+verdict and per agent model (`lib/certify.sh`):
+
+- each shadow run counts once, by the first loop the verdict fired on:
+  **right** when the run made no progress after it and was detained,
+  **wrongful** when a later loop progressed, not settled otherwise;
+- judged runs are taken in **blocks of 46**, in the order they were judged;
+- the verdict may act while its latest complete block had **at most one**
+  wrongful stop, which shows it right at least 90% of the time, 95% sure,
+  and the block still filling has not already had two.
+
+A later block that fails holds it back again. So that admitted verdicts go
+on being judged, a tenth of runs (`CHALK_HOLDOUT`) keep them in shadow
+mode. The same bar admits the [decider](../configuring/decider.md).
+
+The report card's "May the verdicts act yet?" table and `chalk certify`
+show each verdict's numbers, a 95% lower bound on what each firing saved,
+and the net after $5 per wrongful stop (`--false-stop-usd` to change it).
+When a verdict is certified and its net is positive, the notes recommend
+`CHALK_FP_RULES=on`.
 
 **When it counts no run.** A stopping verdict judges only a loop that
 failed its rubric or passed without ticking a checkpoint. When no

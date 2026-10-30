@@ -210,6 +210,9 @@ case "$cmd" in
         *"chalk share:"*)
           if [ -n "${FAKE_SHARE_COUNTS:-}" ]; then cat "$FAKE_SHARE_COUNTS"; else echo '{}'; fi ;;
         *"SELECT signature FROM lessons"*) echo "rubric failed (exit 1)" ;;
+        # FAKE_CERTIFY=JSON: what db_certify_verdicts answers (certify.sh);
+        # unset, nothing, as when there is no evidence to read.
+        *"-- chalk certify: verdicts"*) printf '%s\n' "${FAKE_CERTIFY:-}" ;;
         # FAKE_OPEN_MATCH=TICKET: an open lesson of TICKET has the same fingerprint.
         *"SELECT ticket FROM lessons"*) echo "${FAKE_OPEN_MATCH:-}" ;;
         # db_decider_gate: no resolved lessons, and no embedding column.

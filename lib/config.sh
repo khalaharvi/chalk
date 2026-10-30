@@ -65,6 +65,12 @@ declare -gA CHALK_ENV_DEFAULTS=(
   # Seconds a run's start of the local decider waits for it; auto adapts
   # to the machine.
   [CHALK_DECIDER_TIMEOUT]=auto
+  # The share of runs, from 0 to 1, that keep every certified early stop
+  # (a stuck-loop verdict or the decider's confident "stuck") in shadow
+  # mode, so that it goes on being judged after it is allowed to act and is
+  # held back again if a later block of runs shows it wrong too often (see
+  # chalk certify). A repository cannot change it.
+  [CHALK_HOLDOUT]=0.10
   # An absolute path to a PEM file of extra CA certificates, for a network
   # that intercepts TLS, such as a corporate proxy. The sandbox image build
   # and every sandbox trust it, as well as the CAs the image already has.
@@ -175,6 +181,8 @@ load_config() {
     die "CHALK_DECIDER_THRESHOLD must be a confidence from 0.5 to 1, to at most three places (got '$CHALK_DECIDER_THRESHOLD')"
   [[ $CHALK_DECIDER_MIN_LESSONS =~ ^[0-9]+$ ]] ||
     die "CHALK_DECIDER_MIN_LESSONS must be a whole number (got '$CHALK_DECIDER_MIN_LESSONS')"
+  [[ $CHALK_HOLDOUT =~ ^(0(\.[0-9]{1,2})?|1(\.0{1,2})?)$ ]] ||
+    die "CHALK_HOLDOUT must be a share from 0 to 1, to at most two places (got '$CHALK_HOLDOUT')"
   [[ $CHALK_DECIDER_IDLE_MINUTES =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_DECIDER_IDLE_MINUTES must be a positive whole number (got '$CHALK_DECIDER_IDLE_MINUTES')"
   [[ $CHALK_DECIDER_TIMEOUT == auto || $CHALK_DECIDER_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||

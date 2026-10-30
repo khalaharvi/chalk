@@ -1,0 +1,512 @@
+% Never Spend More: Certified Stop-Only Control of Coding Agents from
+% Harness-Owned Ground Truth.
+%
+% Build: latexmk -pdf main.tex   (or: pdflatex, bibtex, pdflatex, pdflatex)
+% Tables in Section 4 and Appendix A come from cp_bounds.py.
+%
+% Status: pre-registration draft. Every number in the evaluation is a
+% placeholder in \tbd{...}; no experiment described here has been run.
+
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xurl}
+
+\newtheorem{definition}{Definition}
+\newtheorem{assumption}{Assumption}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+\newcommand{\tbd}[1]{\textcolor{red!70!black}{[#1]}}
+\newcommand{\Tset}{\mathsf{T}}
+\newcommand{\Eerr}{\mathsf{E}}
+\newcommand{\Dtree}{\mathsf{D}}
+\newcommand{\LB}{\mathrm{LB}}
+\newcommand{\UB}{\mathrm{UB}}
+
+\lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,breaklines=true,frame=single,framerule=0.3pt}
+
+\title{Never Spend More:\\Certified Stop-Only Control of Coding Agents\\from Harness-Owned Ground Truth}
+\author{\tbd{Author name}\\Chalk harness project\\\url{https://github.com/khalaharvi/chalk}}
+\date{Pre-registration draft, October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Autonomous coding agents now run for hours, so their main failure has shifted from a wrong answer to spend that buys no progress. Production harnesses stop agents with syntactic repetition rules or loop counters. The strongest certified early-abort method needs the model's hidden activations. We study a different design point: a harness in which the test rubric, the identity of the working tree and the cost of each loop are computed \emph{by the harness, outside the agent's reach}, and recorded per loop in a ground-truth ledger as a fingerprint (failing-test set, normalized first error, git tree ID). We restrict controllers to \emph{stop-only} verdicts, which may end a run earlier than the incumbent policy but never extend it. We show that, over runs logged under the incumbent, every stop-only verdict's counterfactual outcome is contained in the log, so off-policy evaluation is exact and needs no importance weights. Admitting a verdict then reduces to a finite-sample binomial bound on wrongful stops plus a bounded-range bound on dollars saved, certified per verdict type and per model revision. The same ledger supports three further mechanisms that we specify and pre-register: lessons that carry an executable fail-before/pass-after probe and expire on evidence; per-repository harness tuning admitted only on a safe-improvement bound; and pull requests that carry a signed evidence bundle which CI re-verifies against the exact tree. We implement the ledger, shadow-mode verdicts and the block admission rule in Chalk, an open-source, local-first harness for Claude Code. We give an evaluation protocol on \tbd{N} replayed benchmark tasks, unsolvable-task controls and seeded environment faults, with spend bounded in advance. \emph{No results are reported in this draft}; bracketed values are placeholders.
+\end{abstract}
+
+% ===================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Coding agents increasingly work unattended: an agent receives a ticket, edits a repository inside a sandbox, and proposes a pull request. The length of tasks that agents can complete has grown quickly \citep{metr2025horizon}, and turn durations at the tail have nearly doubled within months \citep{anthropic2026autonomy}. As runs lengthen, the expensive failure is no longer a single bad answer but a run that keeps paying for loops that make no progress.
+
+Two facts from 2025--2026 make this hard to fix by asking the model. First, agents misreport their own progress: on tasks whose tests contradict the specification, frontier agents edit or special-case tests at rates of 39--76\% \citep{zhong2025impossiblebench}. Even when visible tests are saturated, held-out gaps persist and grow with code size \citep{specbench2026}. Second, learned monitors are brittle. A cheap learned failure monitor's AUROC fell from 0.885 to 0.527 when moved to a new deployment without recalibration, while a deterministic verification layer caught 60\% of failures with no false positives \citep{dubey2026realtime}. An agent rewarded for autonomy also has an incentive to overstate its confidence \citep{trilemma2026}.
+
+We take the position that the controller should not trust the controlled model, and should not need to see inside it either. Our design rests on one architectural invariant:
+
+\begin{quote}
+\textbf{The agent never grades itself.} The harness runs the tests, identifies the tree and counts the dollars, and records them where the agent cannot write.
+\end{quote}
+
+\paragraph{Contributions.}
+\begin{enumerate}[leftmargin=*,label=\textbf{C\arabic*}.]
+\item \textbf{The ground-truth ledger} (\S\ref{sec:ledger}): a per-loop record whose outcome fields are produced by the harness, not reported by the agent, with a deterministic fingerprint $(\Tset,\Eerr,\Dtree)$ that keys stopping, recall and evidence.
+\item \textbf{Certified stop-only control} (\S\ref{sec:stop}), the main contribution. We show that stop-only verdicts are exactly evaluable from shadow logs (Proposition~\ref{prop:exact}), that the class is closed under composition (Proposition~\ref{prop:union}), and that per-loop spend caps make dollar savings bounded, so a distribution-free admission rule exists. We restate Chalk's calibration gate as a confidence bound and give the required sample sizes.
+\item \textbf{Evidence-carrying lessons} (\S\ref{sec:lessons}): agent memory whose entries carry an executable probe that fails before a human fix and passes after it. The probe is re-run as an environment \emph{need} and retires the lesson on evidence, not on a clock.
+\item \textbf{Ledger-gated per-repository tuning} (\S\ref{sec:tune}): a split of harness changes into decision-level changes, which are exactly evaluable when stop-only, and trajectory-altering changes, which need randomized comparison. Admission uses a conservative improvement bound.
+\item \textbf{Evidence-carrying pull requests} (\S\ref{sec:evidence}): a signed bundle bound to the git tree that CI re-verifies by re-running the rubric and probes in a pinned image.
+\item \textbf{A pre-registered evaluation protocol} (\S\ref{sec:eval}) that a single maintainer can run with spend bounded in advance, together with an open replay corpus and fault-injection suite.
+\end{enumerate}
+
+\paragraph{What we do not claim.}
+Stuck detection, model cascades, spend caps, validated memory, executable skill admission, fail-to-pass tests, harness optimisation and signed run evidence all have prior art (\S\ref{sec:related}, Table~\ref{tab:notnovel}). Each contribution above is a \emph{combination} claim. We found no shipped product or published work that combines its parts, but our market survey checked only about eight of roughly thirty products against primary sources, so ``we found no'' is the strongest form we can honestly use.
+
+\paragraph{Status.}
+Chalk is early software maintained by one person. Its ledger, fingerprints, shadow-mode verdicts, fingerprint recall and calibrated decider are shipped. Probes, tuning and evidence bundles are designed but not shipped (Table~\ref{tab:status}). Its 51 real runs to date produced no rubric failures and four blockers, all caused by the environment. That gives a one-sided 95\% upper bound of 5.7\% on the rubric-failure rate, which is far too few negative examples to certify anything. The evaluation therefore depends on replay and fault injection, and this draft reports no results.
+
+% ===================================================================
+\section{Setting and threat model}
+\label{sec:setting}
+
+\paragraph{Runs, loops and checkpoints.}
+A \emph{ticket} is a Markdown spec with checkbox \emph{checkpoints}. A \emph{run} works through the checkpoints in a disposable Docker sandbox that holds no forge credentials. Each \emph{loop} is one agent call with a dollar cap $B$ (default \$1.00). After every loop the harness itself runs the repository's test command, the \emph{rubric}, inside the sandbox. A loop \emph{progresses} if a checkpoint was ticked and committed with the rubric passing, or if review findings were fixed. Under the incumbent policy $\pi_0$, a run is parked (``detention'') after $K{+}1$ consecutive non-progressing loops ($K=2$ by default), or at once when the agent reports a blocker. Finished work passes an independent review agent and becomes a pull request.
+
+\paragraph{Threat model.}
+We treat the agent as an untrusted, possibly overeager optimiser. It may misreport progress, edit tests, read the future from git history \citep{sweprov2026}, or loop indefinitely. We assume it cannot write to the ledger, the harness process or the host, and cannot alter the rubric command. It \emph{can} change test files in the working tree, so test-file integrity is checked explicitly (\S\ref{sec:evidence}). We do not defend against a compromised host or a malicious operator. Signatures prove which key signed, not that the operator was honest.
+
+% ===================================================================
+\section{The ground-truth ledger}
+\label{sec:ledger}
+
+Each agent call appends one row to a local Postgres table. Table~\ref{tab:ledger} lists the fields that matter here and who produces each. Only \texttt{agent\_status} and the agent's notes come from the agent, and no controller in this paper reads them as evidence of progress.
+
+\begin{table}[t]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}lXl@{}}
+\toprule
+Field & Meaning & Produced by \\
+\midrule
+\texttt{run\_id, ticket, loop, kind} & identity of the call & harness \\
+\texttt{rubric\_exit} & exit status of the test command run by the harness & harness \\
+\texttt{progressed} & checkpoint ticked and committed, or review fixes made & harness \\
+\texttt{tests\_hash}, \texttt{failing\_tests} & $\Tset$: sorted failing test IDs (JUnit XML or log patterns), or \textup{\textsc{unknown}} & harness \\
+\texttt{first\_error} & $\Eerr$: first error line, normalized & harness \\
+\texttt{tree\_id} & $\Dtree$: git tree ID of the working tree after the loop & harness \\
+\texttt{cost\_usd, budget\_usd} & dollars spent and the cap for this call & CLI usage report, harness cap \\
+\texttt{model, prompts} & model ID and revision; hash of the prompt set & harness \\
+\texttt{verdict, fp\_rules} & stop verdict for a non-progressing loop; \texttt{off|shadow|on} & harness \\
+\texttt{agent\_status} & \texttt{ok}, \texttt{blocked}, or a failure class & \emph{agent} \\
+\bottomrule
+\end{tabularx}
+\caption{Ledger fields (from Chalk's \texttt{share/schema.sql}). A separate \texttt{decisions} table records every question asked of the small decider model, its confidence, its mode, whether it acted, and the provider (endpoint URL and model revision).}
+\label{tab:ledger}
+\end{table}
+
+\paragraph{Fingerprints.}
+After each rubric run, and before the harness commits anything for that loop, it computes:
+\begin{itemize}[leftmargin=*]
+\item $\Tset$, the sorted, unique failing test IDs. An empty match is \textup{\textsc{unknown}}, never ``zero failures''.
+\item $\Eerr$, the first line matching an error pattern, with ANSI codes, addresses, line:column positions, temporary paths, timestamps and durations removed. $\Eerr$ is \emph{generic} when it is only a test-runner banner, such as \texttt{npm ERR! Test failed}.
+\item $\Dtree$, a git tree ID written from a copy of the index that includes untracked, non-ignored files and excludes the agent's notes file. Excluding the notes file matters: the agent is told to update it every loop, so including it would make every loop look different.
+\end{itemize}
+The \emph{lesson fingerprint} is $\kappa=\mathrm{sha256}(\Tset,\Eerr)$, defined only when $\Tset$ is known or $\Eerr$ is specific.
+
+\paragraph{Verdicts.}
+Each non-progressing loop receives exactly one verdict, chosen by the first rule that matches (Table~\ref{tab:verdicts}). Three verdicts, \texttt{deja\_vu}, \texttt{repeat} and \texttt{no\_change}, are \emph{stopping} verdicts. Under \texttt{CHALK\_FP\_RULES=on} they park the run at once; under \texttt{shadow} they are recorded and change nothing, including the next prompt.
+
+\begin{table}[t]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}llX@{}}
+\toprule
+\# & Verdict & Condition (rubric failed; baseline = latest fingerprinted loop of the current non-progress streak) \\
+\midrule
+1 & \texttt{deja\_vu} & $\Tset$ known and $\kappa$ matches an open lesson of another ticket in the same repository (no baseline needed) \\
+2 & \texttt{first} & no baseline \\
+3 & \texttt{repeat} & $\Dtree$ unchanged, and $\Tset$ unchanged and known, or $\Tset$ \textup{\textsc{unknown}} on both loops and $\Eerr$ unchanged and specific \\
+4 & \texttt{no\_change} & $\Dtree$ unchanged \\
+5 & \texttt{improving} & $\Tset$ known on both loops, fewer failing now \\
+6 & \texttt{spinning} & $\Tset$ unchanged and known, or $\Tset$ \textup{\textsc{unknown}} on both and $\Eerr$ unchanged and specific \\
+7 & \texttt{other} & anything else \\
+\bottomrule
+\end{tabularx}
+\caption{Stuck-loop verdicts (Chalk \texttt{lib/fingerprint.sh}). A rubric pass without a ticked checkpoint gets \texttt{first}, \texttt{no\_change} or \texttt{other} from $\Dtree$ alone. Blocker reports and agent errors get their own verdicts without a fingerprint.}
+\label{tab:verdicts}
+\end{table}
+
+These verdicts read \emph{outcome state}, not actions. An agent that polls a long job, issuing the same command repeatedly, triggers syntactic repetition detectors \citep{openhands2026issue762}. It does not trigger \texttt{repeat} unless the tree and the failing tests are also unchanged.
+
+% ===================================================================
+\section{Certified stop-only control}
+\label{sec:stop}
+
+\subsection{Model}
+
+Fix a run $r$ executed under the incumbent policy $\pi_0$. It consists of loops $t=1,\dots,\tau_0(r)$ with costs $c_t\ge 0$, progress indicators $g_t\in\{0,1\}$ and ledger rows $h_t$. Write $H_t=(h_1,\dots,h_t)$ for the ledger prefix. A \emph{verdict} is a map $v:H_t\mapsto\{\textup{\textsc{stop}},\textup{\textsc{go}}\}$.
+
+\begin{definition}[Stop-only policy]
+The policy $\pi_v$ induced by $v$ runs as $\pi_0$ does but also stops at the first loop where $v$ says \textup{\textsc{stop}}:
+\[
+\tau_v(r)=\min\bigl(\tau_0(r),\ \min\{t: v(H_t)=\textup{\textsc{stop}}\}\bigr).
+\]
+Hence $\tau_v\le\tau_0$ on every run: $\pi_v$ never spends more than $\pi_0$.
+\end{definition}
+
+\begin{assumption}[Shadow non-interference]
+\label{as:shadow}
+Computing $v$ in shadow mode changes nothing the agent observes: not the prompt, the sandbox, the tree, or the budget.
+\end{assumption}
+
+\begin{assumption}[Ledger measurability]
+\label{as:measurable}
+$v(H_t)$ is a function of ledger rows up to $t$ and of randomness fixed before loop $t{+}1$ starts.
+\end{assumption}
+
+Chalk enforces Assumption~\ref{as:shadow} by design (a shadow verdict is recorded and costed but alters neither the loop's outcome nor its prompt), and its verdicts are deterministic functions of $H_t$.
+
+\begin{proposition}[Exact counterfactuals]
+\label{prop:exact}
+Under Assumptions~\ref{as:shadow}--\ref{as:measurable}, for every run $r$ logged under $\pi_0$ with $v$ in shadow mode, the trajectory $\pi_v$ would have produced on the same realisation of the agent's randomness is the logged trajectory truncated at $\tau_v(r)$. Consequently any functional of the truncated trajectory, such as dollars spent, checkpoints reached or later progress forgone, is observed exactly. No importance weighting is needed.
+\end{proposition}
+
+\begin{proof}
+By induction on $t<\tau_v$. At $t=1$ both policies start the same agent call from the same state. Suppose the two trajectories agree up to loop $t$, with $t<\tau_v$. Then $v(H_t)=\textup{\textsc{go}}$, so $\pi_v$ continues, as $\pi_0$ does. By Assumption~\ref{as:shadow}, computing $v$ did not alter the agent's next observation, so loop $t{+}1$ is the same call under both policies. At $\tau_v$, $\pi_v$ stops, and by Assumption~\ref{as:measurable} that decision is computable from the logged prefix.
+\end{proof}
+
+Classical off-policy evaluation reweights logged outcomes by the ratio of target to logging propensities \citep{dudik2011doubly,bottou2013counterfactual}, and its variance grows with the mismatch between policies. Here the target policy's action agrees with the log on every logged loop before $\tau_v$, and $\tau_v$ itself is computable from the log, so the estimator is the plain sample mean. The price is the restriction to stop-only policies. A policy that could continue past $\tau_0$, for example by raising $K$, is \emph{not} identifiable from $\pi_0$ logs, because those loops were never run.
+
+\begin{proposition}[Closure under composition]
+\label{prop:union}
+If $v_1,\dots,v_k$ are stop-only, so is $v_\vee$, which stops when any $v_i$ does. Moreover $\tau_{v_\vee}=\min_i\tau_{v_i}$, the savings satisfy $S_{v_\vee}\ge\max_i S_{v_i}$, and the wrongful-stop indicator (Definition~\ref{def:outcomes}) satisfies $W_{v_\vee}\le\max_i W_{v_i}$.
+\end{proposition}
+
+\begin{proof}
+The first two claims follow from the definition of $\tau$. For the third, let $j$ be an index attaining the minimum stopping time. Then $W_{v_\vee}=W_{v_j}\le\max_i W_{v_i}$.
+\end{proof}
+
+Proposition~\ref{prop:union} has a practical consequence. The policy actually deployed, the union of every enabled verdict and the decider's \textup{\textsc{stop}} at its threshold, is itself stop-only. It can therefore be certified directly from the same logs, instead of combining per-verdict bounds with a union bound. Chalk currently reports the union of the three stuck-loop verdicts as the pseudo-verdict \texttt{any}, for evaluation only: it gates nothing, and it does not yet include the decider's stops.
+
+\subsection{What a stop costs and saves}
+
+\begin{definition}[Outcomes]
+\label{def:outcomes}
+For a run $r$ and a stop-only verdict $v$, call $v$ \emph{fired} on $r$ if $\tau_v<\tau_0$. A verdict that first says \textsc{stop} on the run's last loop has not fired: the run ended there anyway, so the stop saves nothing and cannot be wrong, and Chalk does not count it. When it fires, define
+\begin{align*}
+S_v(r) &= \textstyle\sum_{t=\tau_v+1}^{\tau_0} c_t && \text{(dollars saved)},\\
+W_v(r) &= \mathbb{1}\bigl[\exists\, t\in(\tau_v,\tau_0]: g_t=1\bigr] && \text{(wrongful stop: progress came later)},\\
+G_v(r) &= \textstyle\sum_{t=\tau_v+1}^{\tau_0} g_t && \text{(progress forgone)}.
+\end{align*}
+\end{definition}
+
+$W$ matches the label Chalk's decider calibration already uses: a \textup{\textsc{stuck}} answer is right when the run went on to detention with no progress after it, and is a false stop when a later loop progressed. A wrongful stop never produces a wrong change. It produces a detention that a person resolves, so its cost is human time, which we price at $\lambda$ dollars per wrongful stop and report as a sensitivity range.
+
+\paragraph{Bounded savings.}
+Each loop is capped at $B$ dollars. Spend is estimated client-side and can slightly exceed the cap, so we use the observed maximum $\bar c\ge B$. The savings from one firing are at most the spend of the remaining loops, so $S_v(r)\in[0,M]$, where $M$ is the number of loops left before $\tau_0$, at most $K\bar c$ within a streak. Because $S$ has a known bounded range, Hoeffding-type bounds hold without distributional assumptions. This gives the per-loop cap a statistical role as well as a safety role.
+
+\subsection{Admission}
+
+The unit of evidence is the run, not the loop. Loops within a run are dependent, but a stop-only policy fires at most once per run, so each run contributes one Bernoulli $W$ and one bounded $S$. We assume runs are exchangeable within a stratum (verdict type, model revision). Strata pool every repository on the machine, as Chalk's telemetry database does, so a verdict certified on one repository's runs acts on another's; a repository whose failures differ in kind is a known limitation, and adding the repository to the stratum is a one-column change at the price of slower certification.
+
+\begin{definition}[Block admission rule]
+\label{def:admit}
+Fix a block size $b$, an error allowance $w^\star$, a precision target $p^\star$ and a level $1-\alpha$ \emph{before} looking at the data, such that $\LB_{1-\alpha}(b-w^\star,b)\ge p^\star$ and $b$ is the smallest such. Order the judged firing runs of a stratum by the time each was judged: its first progressing loop after the firing, or its detention. Split them into consecutive blocks of $b$. Admit $v$ for the stratum while
+\begin{enumerate}[leftmargin=*,label=(\roman*)]
+\item its latest \emph{complete} block had at most $w^\star$ wrongful stops; and
+\item the block still filling has not already had more than $w^\star$.
+\end{enumerate}
+\end{definition}
+
+Each block is evaluated once, as a fixed-$n$ exact binomial test, so admission is not a bound re-checked after every new judgment. Condition (ii) only settles a block's test early: a block that has already exceeded $w^\star$ can no longer pass, so failing it at once does not change its error rate. A later failing block demotes $v$, which gives monitoring without a separate rule. Chalk uses $b=46$, $w^\star=1$, $p^\star=0.90$ and $\alpha=0.05$: $\LB_{0.95}(45/46)=0.9010$, while $\LB_{0.95}(44/46)=0.8694$ and $\LB_{0.95}(44/45)=0.8989$ fall short. The unit test of \texttt{lib/\allowbreak certify.sh} checks that these constants are minimal.
+
+\paragraph{Savings are reported, not gated on.}
+For each stratum Chalk also reports a Hoeffding lower bound, at $\alpha/2$, on the mean spend saved per firing, counting only correct firings and bounding the range by $M=\max(K B, \max_r S_v(r))$. It also reports the Clopper--Pearson upper bound, at $\alpha/2$, on the wrongful rate, and their combination $\mathrm{net}=\LB(\bar S)-\lambda\,\UB(W)$, which holds with probability at least $1-\alpha$. Whether a wrongful stop is worth $\lambda$ dollars is the operator's judgement, so $\mathrm{net}$ informs the decision to set \texttt{on} but does not gate it.
+
+\paragraph{The gate this replaces.}
+Before this design, Chalk let its decider act once at least 20 runs were judged and at least 90\% were right, and let its stuck-loop verdicts act whenever \texttt{CHALK\_FP\_RULES} was \texttt{on}. The first is a point estimate: eighteen right out of twenty gives $\LB_{0.95}=0.717$, and even 20/20 gives only $0.861$. Table~\ref{tab:cp} gives the sample sizes for a 95\% lower bound of 0.90 or 0.95, computed exactly by \texttt{cp\_bounds.py}.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}cccc@{}}
+\toprule
+Wrongful stops allowed & min.\ $n$ for $\LB\ge 0.90$ & bound at that $n$ & min.\ $n$ for $\LB\ge 0.95$ \\
+\midrule
+0 & 29 & 0.9019 & 59 \\
+1 & 46 & 0.9010 & 93 \\
+2 & 61 & 0.9004 & 124 \\
+\bottomrule
+\end{tabular}
+\caption{Exact one-sided 95\% Clopper--Pearson sample sizes. For reference: $\LB(28/28)=0.8985$, $\LB(45/45)=0.9356$.}
+\label{tab:cp}
+\end{table}
+
+\paragraph{Strata.}
+Certifying in aggregate lets rare, costly cases be averaged away \citep{rahman2026rolestratified}. Chalk therefore certifies each stopping verdict per agent model, and each decider per endpoint, model revision and threshold. A new model revision is a new stratum and starts in shadow mode. This follows Dubey's transfer collapse \citep{dubey2026realtime} and the fixed-ceiling account of earned authority, in which authority may contract freely but expand only on specified evidence \citep{zhang2026authorized}. Each stratum is tested at level $\alpha$. The deployed union is also reported directly as a pseudo-verdict (Proposition~\ref{prop:union}), and a Bonferroni-corrected variant at $\alpha/k$ is a configuration choice we leave to evaluation. Three verdicts at a block of 46 each need at least 138 firing runs per model. This multiplication, not the arithmetic of any one bound, is the binding cost.
+
+\paragraph{Incremental evaluation under partial admission.}
+When some verdicts act and others are still held, a held verdict fires only on runs that the acting ones did not stop. Its shadow evidence therefore measures its effect \emph{on top of} the policy actually deployed, which is exactly the change admitting it would make. Proposition~\ref{prop:exact} applies with the deployed policy as the incumbent. A loop call records the verdict mode \texttt{on} only when its verdict detained the run, and those firings are excluded as censored.
+
+\paragraph{After admission: keep a holdout.}
+Once $v$ acts, runs it stops no longer show what would have happened next, so the logs are censored and Proposition~\ref{prop:exact} no longer applies to them. A random fraction $\epsilon$ of runs (\texttt{CHALK\_HOLDOUT}, default 0.10, machine-level) keeps every certified stop in shadow mode. Estimates on that holdout stay exact, at an expected cost of $\epsilon\,\mathbb{E}[S_v]$ per run, and the blocks keep filling, so a degrading verdict is demoted by the rule above.
+
+\subsection{The decision ladder as stop-only verdicts}
+
+Chalk orders its stop decisions as rules (fingerprint verdicts), then a small local decider model asked only in the gray zone, then the frontier model. The ladder \emph{shape} is not new: Claude Code's auto mode uses an allowlist, then a fast classifier, then a reasoning classifier \citep{anthropic2026automode}, and cascades go back to FrugalGPT and AutoMix \citep{chen2023frugalgpt,madaan2023automix}. What the present framework adds is that every rung which only stops is a stop-only verdict. A decider answering \textup{\textsc{stuck}} with confidence at least $\theta$ is a verdict $v_\theta$, keyed by endpoint and model revision. Every rung is therefore admitted by the same certificate, on dollars rather than on agreement with a judge.
+
+\subsection{Relation to certified early abort}
+
+The closest prior work certifies early abort with a recall-controlled cascade of linear probes on hidden activations, cutting tokens by 55--60\% at 90\% recall on 1.7B--7B open-weight models \citep{ruan2026doomed}. Our setting differs in four ways. It is black-box, so it applies to closed frontier models. Its signals are deterministic outcome fingerprints rather than learned probes. Admission is on dollars net of wrongful stops rather than on recall alone. And it is monotone by construction. \citet{ruan2026doomed} report that monitoring behaviour alone is consistently worse than probing activations. Our fingerprints are neither behaviour nor activations, so whether they close that gap is an empirical question (H1 in \S\ref{sec:eval}).
+
+% ===================================================================
+\section{Evidence-carrying lessons}
+\label{sec:lessons}
+
+When a run is parked, a person resolves it in ``office hours'', and the fix is distilled into a \emph{lesson} that later loops receive. Chalk's real blockers changed our view of what a lesson is. All four were environment problems: a missing Python package, a missing C compiler, and twice an unreachable performance budget. In each case the agent's blocker text already named the fix. Yet distillation learned ``report missing gcc as a blocker'' instead of ``this repository needs gcc in its image''. Lessons stored as prose, and validated by a language model, learn the wrong thing silently.
+
+\begin{definition}[Evidence-carrying lesson]
+A lesson is a tuple $\ell=(\kappa,\ f,\ \rho,\ e,\ s)$:
+\begin{itemize}[leftmargin=*,nosep]
+\item $\kappa$, the lesson fingerprint, used as the recall key;
+\item $f$, the fix, with a kind in \{image, config, spec, credential, decision\};
+\item $\rho$, a probe: a shell command, run in the sandbox with a timeout, that should fail before the fix and pass after it (for example \texttt{python3 -c 'import yaml'} or \texttt{gcc --version});
+\item $e=(d_0,\rho(d_0)\neq 0,\ d_1,\rho(d_1)=0)$, the evidence: the probe's results on the environment digests before and after the fix;
+\item $s$, a scope: the repository, or general.
+\end{itemize}
+\end{definition}
+
+\paragraph{Lifecycle and invariants.}
+A lesson moves through \emph{proposed}, \emph{proved}, \emph{accepted}, \emph{need} and \emph{retired}:
+\begin{enumerate}[leftmargin=*,nosep]
+\item \emph{Proposed}: the agent's blocker answer carries a structured fix and a probe.
+\item \emph{Proved}: the harness runs $\rho$ and it fails. A probe that passes means the blocker is not what the agent claimed.
+\item \emph{Accepted}: the person applies or approves the fix, and $\rho$ passes. Only now is $e$ complete and the lesson recallable.
+\item \emph{Need}: environment-shaped lessons (image, config) become saved needs, which pre-flight, \texttt{chalk doctor} and CI re-run before the first loop.
+\item \emph{Retired}: when $\rho$ passes on an environment that never received $f$, for example because the base image now ships the package, the lesson is moot and leaves recall.
+\end{enumerate}
+A failing need on a later run is a regression of the environment, caught before any loop spend.
+
+Fixes to the spec, credentials or decisions have no probe. A spec change proves itself when the agent meets the new spec, and the sandbox holds no credentials to check. These lessons stay text-only and are labelled as such.
+
+\paragraph{Pre-flight needs are stop-only control.}
+A failing need stops a run before loop 1, so a need is a stop-only verdict at $t=0$ and is certified exactly as in \S\ref{sec:stop}.
+
+\paragraph{Recall ladder.}
+Recall tries, in order: an exact match on $\kappa$; lexical similarity on normalized $\Eerr$; embedding similarity (pgvector); and a calibrated rerank by the decider. This is crash bucketing applied to agent memory, with exact signatures first and learned similarity after \citep{glerum2009wer,rodrigues2022tracesim}. Putting a recalled lesson into the prompt changes the trajectory, so recall is \emph{not} exactly evaluable from shadow logs. We measure each rung's precision offline, on seeded faults whose correct lesson is known (\S\ref{sec:eval}).
+
+\paragraph{Sharing without code.}
+A lesson can be exported as $(\kappa,\rho,\text{fix kind},\text{abstract fix})$, with no code, paths or ticket text. A receiver re-runs $\rho$ in its own sandbox before trusting the lesson. This is a local defence against memory poisoning, which reaches over 80\% attack success at under 0.1\% poison rate \citep{chen2024agentpoison}. Three limits remain. The probe is itself untrusted code, so it must run sandboxed. A probe can pass while the shared fix is harmful, so fixes are shown, never applied automatically. And hashing is not anonymisation: fingerprints of small test sets can be brute-forced, and probes can name internal hosts. Thresholds of $k$ organisations or differential privacy are left to future work.
+
+% ===================================================================
+\section{Ledger-gated per-repository tuning}
+\label{sec:tune}
+
+Harness optimisation has converged on a common object: a tree of harness files (system prompt, guardrails, memory, tools, skills, subagents) around a frozen model \citep{xu2026harness2,metaharness2026,ahe2026,selfharness2026,rrsi2026}. These systems optimise offline, on benchmarks. Harness$^2$, for example, deliberately selects among candidate harnesses without ground-truth verifiers \citep{xu2026harness2}. A single repository has its own verifier, the rubric run by the harness, and a stream of live tickets. We propose tuning per repository against that verifier, the review verdict and dollars, and we split candidate changes into three classes.
+
+\begin{description}[leftmargin=*,style=nextline]
+\item[Decision-level and stop-only] (lower caps, stricter detention thresholds, more stopping verdicts, need checks). Exactly evaluable from the ledger by Proposition~\ref{prop:exact}. Choosing the best setting among many on the same data biases the estimate upward, so we split: select on one half of the runs and certify on the other, as in Learn-then-Test \citep{angelopoulos2021ltt} and the certify-after-freeze step of \citet{ruan2026doomed}.
+\item[Decision-level but spend-extending] (raising $K$ or $B$, granting extra loops to a converging run). Not identifiable from $\pi_0$ logs. These need randomised exploration on a fraction of runs, with a stated spend ceiling.
+\item[Trajectory-altering] (prompts, tools, recall changes). Need randomised assignment by ticket. Let $J=\Pr[\text{review pass}]-\mu\cdot\$$. A change is admitted iff the one-sided lower bound on $J_{\text{new}}-J_{\text{old}}$ is positive, a conservative rule in the spirit of SPIBB and high-confidence off-policy evaluation \citep{laroche2019spibb,thomas2015hcope}.
+\end{description}
+
+\paragraph{Guards.}
+Tuned edits may not touch the rubric command, test files or the verdict code, and every adopted edit is versioned with its evidence (\S\ref{sec:evidence}). Self-improvement loops can game visible evaluators \citep{zhang2025dgm}, and poisoned inputs can persist across later clean evolution \citep{roesner2026trusting}. For per-repository tuning the analogous attack is a hostile ticket.
+
+% ===================================================================
+\section{Evidence-carrying pull requests}
+\label{sec:evidence}
+
+Vendors already attach human-readable evidence to agent pull requests. Copilot adds a commit trailer linking to session logs \citep{github2026trailer}, and Cursor attaches videos, screenshots and logs \citep{cursor2026computeruse}. Both are produced in the agent's own environment and are not bound by digest to the merged tree. A measurement of 47 delivery platforms found that none records a content-addressed identity of an agent's full behavioural configuration by default \citep{azarang2026identity}. We propose that the harness emit an in-toto Statement \citep{torresarias2019intoto}, signed with DSSE by a key held by the host harness. The sandbox never holds that key or forge credentials.
+
+\begin{lstlisting}
+{ "_type": "https://in-toto.io/Statement/v1",
+  "subject": [{ "name": "git-tree", "digest": { "gitTree": "<D of PR head>" } }],
+  "predicateType": "<chalk evidence predicate, v0>",
+  "predicate": {
+    "harness": { "version": "...", "prompts": "<hash>", "fp_rules": "on" },
+    "sandbox": { "image": "<digest>", "needs": [{ "probe": "...", "exit": 0 }] },
+    "models":  [{ "kind": "continue", "model": "<id@revision>" }],
+    "base": { "tree": "<D of base>", "test_files": "<tree of test paths>" },
+    "loops": [{ "loop": 1, "rubric_exit": 1, "tests_hash": "...", "first_error": "...",
+                "tree_id": "...", "cost_usd": 0.41, "verdict": "first" }],
+    "checkpoints": [{ "text": "...", "loop": 3, "rubric_exit": 0 }],
+    "review": { "verdict": "pass", "model": "<id@revision>" },
+    "lessons": [{ "fingerprint": "...", "probe": "...", "evidence": ["fail", "pass"] }],
+    "cost": { "total_usd": 1.87, "cap_per_loop_usd": 1.00 } } }
+\end{lstlisting}
+
+\paragraph{Verification in CI.}
+CI checks that the signature is valid and the subject equals the PR head tree. It re-runs the rubric in the recorded image digest and compares the exit status and $\Tset$. It re-runs the probes, checks that test files are unchanged from base unless the spec allows the change, and recomputes the cost total. A mismatch is reported, not hidden; the mismatch rate itself measures flakiness.
+
+\paragraph{What the bundle does not prove.}
+It does not prove correctness. Saturated visible tests coexist with held-out gaps \citep{specbench2026}. The proof-carrying-code analogy \citep{necula1997pcc} holds only in architecture: a small trusted checker re-verifies evidence produced by an untrusted party, but the evidence is test results, not proofs. Agent runs cannot be replayed; only their evidence can be re-checked. The bundle can serve as a log under record-keeping obligations such as the EU AI Act's \citep{euaiact}, but using it is not compliance by itself.
+
+% ===================================================================
+\section{Pre-registered evaluation}
+\label{sec:eval}
+
+\subsection{Corpora}
+\begin{description}[leftmargin=*,style=nextline]
+\item[C0: real ledger.] Chalk's real runs (51 to date), reported descriptively only.
+\item[C1: benchmark replay.] SWE-bench-style instances \citep{jimenez2023swebench}, with each spec checkpoint set to the instance's fail-to-pass tests. Repositories are rebuilt without future git objects, following \citet{sweprov2026}.
+\item[C2: unsolvable controls.] ImpossibleBench tasks, whose tests contradict the specification, so any pass is a cheat and every honest run is a non-progress run \citep{zhong2025impossiblebench}.
+\item[C3: seeded environment faults.] A catalogue of missing system package, wrong tool version, unset environment variable, blocked network, locale, and file permissions, injected into sandbox images across repositories. A scripted ``office hours'' oracle resolves each fault, producing a lesson and probe. Faults are then re-injected elsewhere (true recall), near-miss faults are injected (false recall), and the base image is repaired (expiry).
+\item[C4: handicaps.] Low per-loop caps and weaker models, to raise the rate of natural stuck loops.
+\end{description}
+
+\paragraph{Spend ceiling.}
+Total model spend is at most $\sum_{\text{runs}} (\text{checkpoints}\times(K{+}1)+\text{review calls})\times B$, fixed before the experiment. With a planning target of \tbd{200--400} runs this is \tbd{\$X}. The target is an estimate, not a power calculation. It is chosen to yield at least 29 firing runs per verdict type.
+
+\subsection{Policies compared}
+All policies below are stop-only with respect to $\pi_0$ and computable from logged data, so all are evaluated exactly on the \emph{same} runs, and comparisons are paired.
+\begin{itemize}[leftmargin=*,nosep]
+\item $\pi_0$: Chalk's counter ($K=2$).
+\item OpenHands-style syntactic rules \citep{openhands2026stuck}, re-implemented over Claude Code transcripts.
+\item Fixed loop limits $k\in\{1,2\}$.
+\item Each fingerprint verdict, and their union.
+\item The decider at thresholds $\theta\in\{0.8,0.9,0.95\}$, per revision.
+\end{itemize}
+
+\subsection{Hypotheses}
+\begin{description}[leftmargin=*,style=nextline]
+\item[H1 (stop control).] Admitted fingerprint verdicts save more counterfactual dollars than syntactic rules and fixed limits while holding $\UB_{0.95}$ on wrongful stops at or below 5\%. \emph{Fails if} the paired bootstrap interval on the savings difference includes 0.
+\item[H2 (revision drift).] A verdict certified under model revision $A$ loses its certificate under $B$ more often than resampling within $A$ predicts. \emph{Fails if} the bounds are indistinguishable across revisions.
+\item[H3 (exact recall).] On C3, exact-fingerprint recall has higher precision@1 than lexical and embedding recall. \emph{Fails if} the interval on the difference includes 0.
+\item[H4 (stale memory).] Probe-carrying lessons are recalled after they have become stale less often than equivalent text-only lessons with clock-based expiry. \emph{Fails if} the difference is not significant.
+\item[H5 (poison).] Re-running the probe locally rejects planted lessons that an LLM-judged validator admits. The residual case, where the probe passes but the fix is harmful, is reported as a rate.
+\item[H6 (evidence).] On C2, a test-file diff check from the bundle detects test tampering with higher recall than the independent review agent alone. We found no prior measurement of how often independent reviewers catch tampering.
+\item[H7 (tuning).] On decision-level stop-only knobs, select-then-certify tuning admits no change that regresses on held-out runs. A contrastive selector without ground truth, run over the same candidates, admits at least one. \emph{Fails if} the tuner admits a regression.
+\end{description}
+
+\subsection{Analysis plan}
+The unit of analysis is the run. Precision uses exact Clopper--Pearson bounds. Savings use Hoeffding bounds on the known range, with a bootstrap reported alongside. Multiplicity across verdict types is Bonferroni-corrected. Every hypothesis is reported, including nulls. All code, the fault catalogue and the anonymised ledgers are released.
+
+\subsection{Results}
+\tbd{To be completed. No experiment in this section has been run.}
+
+% ===================================================================
+\section{Related work}
+\label{sec:related}
+
+\paragraph{Stuck detection and loop control.}
+OpenHands ships five fixed repetition rules over action and observation pairs, on by default \citep{openhands2026stuck}, which can misfire on legitimate polling \citep{openhands2026issue762}. Claude Code's auto mode hands control back after 3 consecutive or 20 total classifier denials \citep{anthropic2026automode}. Static analysis finds unbounded loops in harness code \citep{hou2026ial}. Failure taxonomies catalogue why multi-agent systems fail \citep{cemri2025mast}. Certified early abort with activation probes \citep{ruan2026doomed} and telemetry monitors with CUSUM alarms \citep{dubey2026realtime} are the closest controllers. Our setting is black-box and uses the harness's own outcome state.
+
+\paragraph{Calibration, cascades and earned autonomy.}
+Conformal and risk-controlling methods gate actions with guarantees \citep{ren2023knowno,angelopoulos2022crc,angelopoulos2021ltt,rahman2026rolestratified}. Cascades and routers trade cost for quality \citep{chen2023frugalgpt,madaan2023automix,ong2024routellm}. Progressive autonomy has been framed as learning from human approve and deny decisions \citep{ou2026progressive}, and earned authority as expansion only on specified evidence under a fixed ceiling \citep{zhang2026authorized}. Our ``never spend more'' rule is an operational instance of such a ceiling. Our evidence is test outcomes rather than human approval, which does not suffer approval fatigue (auto mode reports that 93\% of prompts were approved).
+
+\paragraph{Off-policy evaluation.}
+Counterfactual evaluation from logs is standard in advertising and recommendation \citep{li2010contextual,bottou2013counterfactual,dudik2011doubly}. It has been applied to single-turn prompt policies \citep{kiyohara2025ope}. We found no application to multi-step agent harnesses. Our exactness result is elementary, and its usefulness comes from restricting controllers to stopping times.
+
+\paragraph{Agent memory.}
+Reflexion, ExpeL, Agent Workflow Memory, ReasoningBank, SWE-Exp and Agent KB store natural-language insights or workflows, and evaluate them by end-task success \citep{shinn2023reflexion,zhao2023expel,wang2024awm,ouyang2025reasoningbank,swe-exp2025,agentkb2025}. Skill libraries admit skills after executing them \citep{wang2023voyager,skillcraft2026,skillfoundry2026}, and surveys note that passing a test shows a skill runs, not that it is correct \citep{skillsurvey2026a,skillsurvey2026b}. Copilot's memory checks code citations before use and expires memories after 28 days \citep{github2026memory}. The fail-to-pass contract is standard for grading and reproduction tests \citep{jimenez2023swebench,mundler2024swtbench}. Crash bucketing supplies the exact-then-similar recall order \citep{glerum2009wer,rodrigues2022tracesim}. Memory poisoning is practical \citep{chen2024agentpoison,dong2025minja}.
+
+\paragraph{Harness optimisation and self-improvement.}
+ADAS, AFlow, MIPRO and GEPA optimise agent designs and prompts \citep{hu2024adas,zhang2024aflow,opsahlong2024mipro,agrawal2025gepa}. DGM, SICA, Huxley--G\"odel Machine, Hyperagents and Live-SWE-agent improve agents themselves \citep{zhang2025dgm,robeyns2025sica,hgm2025,hyperagents2026,liveswe2025}. Harness$^2$, Meta-Harness, AHE, Self-Harness and RRSI optimise the harness tree \citep{xu2026harness2,metaharness2026,ahe2026,selfharness2026,rrsi2026}. Ouroboros evolved its harness over a 161-day deployment through reviewed commits \citep{ouroboros2026}. SICA is the only one we found with dollars inside its objective, and it is evaluated on a benchmark.
+
+\paragraph{Provenance and verification.}
+SLSA and in-toto attest how artifacts were built \citep{slsa,torresarias2019intoto}. NovaFabric signs agent run capsules \citep{novafabric2026}, and Agile-V records gate decisions as receipts bound to the artifact \citep{koch2026agilev}. Proof-carrying code is the architectural ancestor \citep{necula1997pcc}. Kiro derives property-based tests from specifications \citep{kiro2026pbt}. Factory's Agent Readiness scores repository hygiene but gates nothing \citep{factory2026readiness}.
+
+\begin{table}[t]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+Mechanism & Prior art & What remains ours \\
+\midrule
+Deterministic stuck detection & OpenHands rules \citep{openhands2026stuck} & outcome-state signal $(\Tset,\Eerr,\Dtree)$ \\
+Rules $\to$ small $\to$ large model & auto mode \citep{anthropic2026automode}; cascades \citep{chen2023frugalgpt} & stop-only objective; admission on dollars \\
+Spend caps & \texttt{--max-budget-usd} \citep{claudecode2026cli}; Devin limits \citep{devin2026docs} & per-loop caps as a bound on savings \\
+Certified early abort & \citet{ruan2026doomed} & black-box, monotone, in dollars \\
+Validated memory & Copilot memory \citep{github2026memory} & outcome-validated, evidence-expired \\
+Executable admission & Voyager, SkillCraft \citep{wang2023voyager,skillcraft2026} & probe travels with the lesson as a need \\
+Exact-then-similar recall & crash bucketing \citep{glerum2009wer} & applied to agent lessons \\
+Pre-PR review & Copilot self-review \citep{github2025selfreview} & separate context; tampering measured \\
+Harness optimisation & Harness$^2$ and successors & live, per-repository, ground truth, certified \\
+Signed agent evidence & NovaFabric, Agile-V & PR predicate re-verified by re-running \\
+\bottomrule
+\end{tabularx}
+\caption{What is not novel, and the narrower claim that remains.}
+\label{tab:notnovel}
+\end{table}
+
+% ===================================================================
+\section{Limitations and threats to validity}
+\label{sec:limits}
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Exactness is pathwise, not distributional.} Proposition~\ref{prop:exact} holds on the logged runs. Generalising to future runs needs exchangeability, which changes in repositories and models break. That is why certificates are stratified and expire with each revision.
+\item \textbf{Forgone value.} A stop gives up the checkpoints that later loops would have reached. $G$ measures this, but turning it into dollars needs a value for a checkpoint, which we report as a range.
+\item \textbf{Human cost.} $\lambda$ prices a wrongful detention. We give no single value and report sensitivity instead.
+\item \textbf{Synthetic negatives.} Replayed and fault-injected stuck loops may be easier to detect than natural ones. C0 is too small to tell.
+\item \textbf{Labelling.} ``Progress came later'' is the label. A run that would have progressed only through luck counts as a wrongful stop, which is conservative.
+\item \textbf{Probe semantics.} A probe shows the environment can execute something, not that the fix is semantically correct.
+\item \textbf{Generality.} Everything is evaluated in a single harness wrapping a single agent CLI.
+\end{itemize}
+
+% ===================================================================
+\section{Outlook to 2030 (speculative)}
+\label{sec:outlook}
+
+This section is extrapolation, not evidence. If task horizons keep doubling \citep{metr2025horizon}, the dollars at stake in each stuck episode grow, and certified stop policies become more valuable, not less. We expect four shifts:
+\begin{itemize}[leftmargin=*,nosep]
+\item Controllers for coding agents ship with counterfactual ledgers, much as credit models ship with backtests.
+\item Agent memory is managed like packages: signed, carrying an executable check, measured per entry, and shared across organisations only as fingerprints, probes and abstract fixes.
+\item Harness configuration is versioned per repository and changed only through gated shadow, canary and rollout stages.
+\item Forges verify evidence predicates as branch-protection rules, as they verify signed commits today.
+\end{itemize}
+The main risk to this thesis is that vendors build stop logic into the agent. Our counter-argument is the invariant itself: the controller should not be the controlled model.
+
+% ===================================================================
+\section{Conclusion}
+
+Restricting a harness's controllers to stop-only decisions, computed from evidence the agent cannot write, turns autonomy into something that can be measured. Every such decision can be evaluated exactly from shadow logs and admitted on a finite-sample bound, in dollars, per model revision. The same ledger lets lessons carry their own tests, lets tuning be gated on ground truth, and lets pull requests carry evidence that CI can check. The binding constraint is not ideas but negative examples. This draft therefore commits to a replay corpus, a fault-injection suite and a stricter calibration gate before any result is claimed.
+
+\paragraph{Implementation status.}
+Table~\ref{tab:status} separates what Chalk ships from what this paper proposes.
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\linewidth}{@{}Xl@{}}
+\toprule
+Mechanism & Status (Chalk, October 2026) \\
+\midrule
+Ledger, fingerprints $(\Tset,\Eerr,\Dtree)$, verdicts in shadow mode & shipped (v0.6--v0.8) \\
+Fingerprint, lexical and embedding recall; decider rerank & shipped (v0.7--v0.8) \\
+Local decider (its 20-run, 90\% gate replaced by the block gate) & shipped (v0.8) \\
+Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chalk certify} & implemented (this work) \\
+Probes, needs, pre-flight, evidence-based expiry & designed, not shipped \\
+Per-repository tuning (\texttt{chalk tune}) & designed, not shipped \\
+Evidence bundle and CI re-verification & proposed here \\
+\bottomrule
+\end{tabularx}
+\caption{What is shipped, designed and proposed.}
+\label{tab:status}
+\end{table}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\appendix
+\section{Reproducing the bounds}
+\label{app:cp}
+
+\texttt{cp\_bounds.py} in this directory computes every bound in the paper by bisection on the exact binomial tail $\Pr[X\ge x\mid n,p]=\alpha$, in pure Python. Selected values: $\LB_{0.95}(18/20)=0.7174$; $\LB(19/20)=0.7839$; $\LB(20/20)=0.8609$; $\LB(28/28)=0.8985$; $\LB(29/29)=0.9019$; $\LB(45/45)=0.9356$. On Chalk's real runs, 0 rubric failures in 51 give $\UB_{0.95}=5.70\%$ and 4 blockers in 51 give $\UB_{0.95}=17.06\%$.
+
+\section{Citation status}
+\label{app:cites}
+
+Each bibliography entry carries a tag from the prior-art survey of 23 October 2026. [V] means the abstract or page was fetched and confirmed. [S] means it was seen only as a search snippet or secondary summary. [M] means it is cited from memory. All [S] and [M] entries, and all author lists marked ``and others'', must be checked against the source before submission.
+
+\end{document}
