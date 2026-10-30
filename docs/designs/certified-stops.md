@@ -70,10 +70,13 @@ admitted differently, and neither is admitted on a guarantee.
 3. **Judged as today.** A firing is *correct* when the run made no progress
    after it and was detained, *wrongful* when a later loop progressed, and
    *waiting* otherwise. Blocks are ordered by when each run was judged:
-   its first progressing loop after the firing, or its detention.
+   its first progressing loop after the firing, or its detention. A
+   decision on a run's last loop is not a firing: the run ended there
+   anyway, so stopping saved nothing and could not be wrong, and counting
+   it would only pad the right ones.
 4. **Strata.** A verdict is certified per verdict and agent model (the
-   model the call reports). A decider is certified per URL, model revision
-   and threshold, as today. A new model is a new stratum and starts in
+   model the call reports), across every repository on the machine. A
+   decider is certified per URL, model revision and threshold, as today. A new model is a new stratum and starts in
    shadow mode.
 5. **Incremental evaluation under `on`.** When some verdicts act and
    others do not, a held verdict is judged only on the runs the acting ones
@@ -86,7 +89,9 @@ admitted differently, and neither is admitted on a guarantee.
    today.
 7. **The holdout.** With probability `CHALK_HOLDOUT` (default 0.10,
    environment only), a run keeps every certified stop in shadow mode.
-   Without it, an admitted decision would never be judged again.
+   Without it, an admitted decision would never be judged again. Only the
+   stops are held: the rest of the run, the decider's lesson rerank
+   included, is the deployed policy, which the holdout must measure.
 
 ## Recommended Approach
 
@@ -135,7 +140,8 @@ removed, and the report card shows `{threshold, block, max_wrong}`.
 - After the verdict, `run_fp_mode VERDICT MODEL -> REPLY` decides `on`
   (acts) or `shadow` (records), warning once per verdict when it is held.
   The call is recorded with that mode, then acts on it.
-- `decider_mode` also holds to shadow on a holdout run.
+- `decider_stop_mode` holds the decider's stuck decision to shadow on a
+  holdout run; `decider_mode`, which the lesson rerank uses, does not.
 
 ### `chalk certify [--json] [--false-stop-usd N]` (dashboard.sh)
 

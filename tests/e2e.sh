@@ -81,9 +81,9 @@ certified() {
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
                   prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
                   cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict, fp_rules)
-SELECT 'cert', 'CERT-' || i, 'chalk/CERT-' || i, 1, 'continue', 'ok', 1, false, 'claude-fake-1', 'p', 0.25, 1,
-       1, 0, 0, 0, 0, 0, 0, 0, 'cert-' || v || '-' || i, v, 'shadow'
-  FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i;
+SELECT 'cert', 'CERT-' || i, 'chalk/CERT-' || i, n, 'continue', 'ok', 1, false, 'claude-fake-1', 'p', 0.25, 1,
+       1, 0, 0, 0, 0, 0, 0, 0, 'cert-' || v || '-' || i, CASE n WHEN 1 THEN v END, 'shadow'
+  FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i, generate_series(1, 2) n;
 INSERT INTO lessons (repo, ticket, signature, run_id)
 SELECT 'cert', 'CERT-' || i, 'seeded', 'cert-' || v || '-' || i
   FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i;
@@ -404,6 +404,22 @@ check "chalk certify: a price for a wrongful stop must be a number" \
 CHALK_FP_RULES=on chalk doctor > "$tmp/doctor-certify.log" 2>&1 || true
 check "doctor under CHALK_FP_RULES=on: each certified verdict, by model" \
   grep -q '^  ok    verdict repeat for claude-fake-1 is certified' "$tmp/doctor-certify.log"
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  # A verdict on a run's last loop saves nothing and cannot be wrong: the
+  # run ended there anyway. 46 such runs judge nothing.
+  psql "$FAKE_PG_URL" -X -q -v ON_ERROR_STOP=1 <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict, fp_rules)
+SELECT 'cert', 'LAST-' || i, 'chalk/LAST-' || i, 1, 'continue', 'ok', 1, false, 'claude-last', 'p', 0.25, 1,
+       1, 0, 0, 0, 0, 0, 0, 0, 'last-' || i, 'repeat', 'shadow'
+  FROM generate_series(1, 46) i;
+INSERT INTO lessons (repo, ticket, signature, run_id)
+SELECT 'cert', 'LAST-' || i, 'seeded', 'last-' || i FROM generate_series(1, 46) i;
+SQL
+  check "chalk certify: a verdict on a run's last loop is not judged" \
+    test "$(chalk certify --json | jq '[.verdicts[] | select(.model == "claude-last") | .judged] | add // 0')" -eq 0
+fi
 check "rules on: the lesson carries the failing loop's fingerprint and first error" \
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
 check "rules on: the failing loops record their failing test IDs" \

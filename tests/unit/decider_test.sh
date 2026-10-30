@@ -275,10 +275,11 @@ check "a block still filling with two false stops already demotes: it can no lon
 check "... and says so" test "$(note | grep -c '; the block still filling already has 2; it needs')" -eq 1
 gate "$hosted fake-decider 0.95:46:46:0"
 RUN_HOLDOUT=1 CHALK_HOLDOUT=0.10
-check "a holdout run keeps a calibrated decider in shadow mode" test "${| decider_mode 2>/dev/null; }" = shadow
+check "a holdout run keeps a calibrated decider's stops in shadow mode" test "${| decider_stop_mode 2>/dev/null; }" = shadow
+check "... but not the rest of the run, such as the lesson rerank" test "${| decider_mode 2>/dev/null; }" = on
 gate "$hosted fake-decider 0.95:46:46:0"
 check "... and says so once" \
-  test "$(decider_mode 2>&1; decider_mode 2>&1)" = "warning: this run is a holdout (CHALK_HOLDOUT=0.10): the decider's confident answers are recorded, not acted on, so that they go on being judged"
+  test "$(decider_stop_mode 2>&1; decider_stop_mode 2>&1)" = "warning: this run is a holdout (CHALK_HOLDOUT=0.10): the decider's confident stops are recorded, not acted on, so that they go on being judged"
 RUN_HOLDOUT=0
 
 # The levels are the confidences it said "stuck" at; a threshold takes the
