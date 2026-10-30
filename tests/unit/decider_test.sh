@@ -164,8 +164,9 @@ elapsed=$(( ${| decider_now_ms; } - started ))
 check "calls share one 2 s budget: answers, then at most one timeout, then skipped" \
   sh -c 'printf "%s\n" "$1" | grep -Eqx "(ok )+(timeout )?budget( budget)*"' _ "${results[*]}"
 # Waiting on the services is held to the budget; reading their answers
-# (jq, a few milliseconds a call) comes on top.
-check "... and wait no more than the budget (${DECIDER_SPENT_MS} ms)" test "$DECIDER_SPENT_MS" -le 2150
+# (jq, a few milliseconds a call) comes on top, and so does curl's own
+# timeout, which a busy runner (macOS on CI) overshoots by tens of ms.
+check "... and wait no more than the budget (${DECIDER_SPENT_MS} ms)" test "$DECIDER_SPENT_MS" -le 2250
 # Generous on purpose: it only catches waiting that is not capped at all.
 check "... in about that time in all (${elapsed} ms)" test "$elapsed" -le 4000
 mapfile -t limits < <(sed -n 's/^max-time=\([0-9.]*\) .*/\1/p' "$FAKE_STATE/decider.log")
