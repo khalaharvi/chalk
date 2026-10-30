@@ -199,13 +199,13 @@ If $v_1,\dots,v_k$ are stop-only, so is $v_\vee$, which stops when any $v_i$ doe
 The first two claims follow from the definition of $\tau$. For the third, let $j$ be an index attaining the minimum stopping time. Then $W_{v_\vee}=W_{v_j}\le\max_i W_{v_i}$.
 \end{proof}
 
-Proposition~\ref{prop:union} has a practical consequence. The policy actually deployed, the union of every enabled verdict and the decider's \textup{\textsc{stop}} at its threshold, is itself stop-only. It can therefore be certified directly from the same logs, instead of combining per-verdict bounds with a union bound.
+Proposition~\ref{prop:union} has a practical consequence. The policy actually deployed, the union of every enabled verdict and the decider's \textup{\textsc{stop}} at its threshold, is itself stop-only. It can therefore be certified directly from the same logs, instead of combining per-verdict bounds with a union bound. Chalk currently reports the union of the three stuck-loop verdicts as the pseudo-verdict \texttt{any}, for evaluation only: it gates nothing, and it does not yet include the decider's stops.
 
 \subsection{What a stop costs and saves}
 
 \begin{definition}[Outcomes]
 \label{def:outcomes}
-For a run $r$ and a stop-only verdict $v$, call $v$ \emph{fired} on $r$ if $\tau_v<\tau_0$. When it fires, define
+For a run $r$ and a stop-only verdict $v$, call $v$ \emph{fired} on $r$ if $\tau_v<\tau_0$. A verdict that first says \textsc{stop} on the run's last loop has not fired: the run ended there anyway, so the stop saves nothing and cannot be wrong, and Chalk does not count it. When it fires, define
 \begin{align*}
 S_v(r) &= \textstyle\sum_{t=\tau_v+1}^{\tau_0} c_t && \text{(dollars saved)},\\
 W_v(r) &= \mathbb{1}\bigl[\exists\, t\in(\tau_v,\tau_0]: g_t=1\bigr] && \text{(wrongful stop: progress came later)},\\
@@ -220,7 +220,7 @@ Each loop is capped at $B$ dollars. Spend is estimated client-side and can sligh
 
 \subsection{Admission}
 
-The unit of evidence is the run, not the loop. Loops within a run are dependent, but a stop-only policy fires at most once per run, so each run contributes one Bernoulli $W$ and one bounded $S$. We assume runs are exchangeable within a stratum (repository, verdict type, model revision).
+The unit of evidence is the run, not the loop. Loops within a run are dependent, but a stop-only policy fires at most once per run, so each run contributes one Bernoulli $W$ and one bounded $S$. We assume runs are exchangeable within a stratum (verdict type, model revision). Strata pool every repository on the machine, as Chalk's telemetry database does, so a verdict certified on one repository's runs acts on another's; a repository whose failures differ in kind is a known limitation, and adding the repository to the stratum is a one-column change at the price of slower certification.
 
 \begin{definition}[Block admission rule]
 \label{def:admit}
