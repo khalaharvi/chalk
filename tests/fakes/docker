@@ -222,6 +222,10 @@ case "$cmd" in
         *"-- chalk attest: ledger"*)
           ledger='{"loops":[{"loop":1,"kind":"continue","rubric_exit":0,"cost_usd":0.25},{"loop":0,"kind":"review","rubric_exit":0,"cost_usd":0.25}],"lessons":[],"cost_usd":0.5}'
           printf '%s\n' "${FAKE_ATTEST_LEDGER:-$ledger}" ;;
+        # chalk tune's runs (FAKE_TUNE_DATA, none by default) and what
+        # exploring has spent (FAKE_EXPLORE_SPENT, 0 by default).
+        *"-- chalk tune: runs"*) printf '%s\n' "${FAKE_TUNE_DATA:-[]}" ;;
+        *"-- chalk tune: explore spent"*) printf '%s\n' "${FAKE_EXPLORE_SPENT:-0}" ;;
         # FAKE_PENDING_EVIDENCE=JSON: what db_pending_evidence answers; {}
         # by default, as for a lesson with no probe.
         *"'before_outcome', before_outcome"*) printf '%s\n' "${FAKE_PENDING_EVIDENCE:-{\}}" ;;

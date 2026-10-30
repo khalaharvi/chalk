@@ -24,7 +24,13 @@ prompt_known() {
 
 # prompt_file ROOT NAME -> REPLY: the prompt to use. A repository can
 # override any shipped prompt by placing a file at .chalk/prompts/NAME.md.
+# A run in arm b of a prompt A/B test (RUN_ARM_PROMPTS, tune.sh) uses
+# .chalk/prompts-b/NAME.md first, where there is one.
 prompt_file() {
+  if [[ ${RUN_ARM_PROMPTS:-} == b && -f $1/.chalk/prompts-b/$2.md ]]; then
+    REPLY="$1/.chalk/prompts-b/$2.md"
+    return 0
+  fi
   REPLY="$1/.chalk/prompts/$2.md"
   [[ -f $REPLY ]] || REPLY="$CHALK_HOME/share/prompts/$2.md"
 }

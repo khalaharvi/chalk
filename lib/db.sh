@@ -153,19 +153,21 @@ db_record_call() {
     -v cache_write="${usage[cache_write]}" -v turns="${usage[turns]}" -v denials="${usage[denials]}" \
     -v lessons="$lessons" -v fp_rules="$fp_rules" -v run_id="${RUN_ID:-}" -v tests_hash="${__fp[tests_hash]-}" \
     -v failing_tests="$tests" -v failing="${__fp[failing]-}" -v first_error="${__fp[first_error]-}" \
+    -v arm_prompts="${RUN_ARM_DRAWN:+$RUN_ARM_PROMPTS}" -v arm_explore="${RUN_ARM_EXPLORE:-}" -v explored="${RUN_EXPLORING:-}" \
     -v failure="${RUN_CALL_FAILURE:-}" -v tree_id="${__fp[tree_id]-}" -v verdict="${__fp[verdict]-}" <<'SQL'
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed,
                   model, prompts, cost_usd, budget_usd, duration_s, input_tokens,
                   output_tokens, cache_read_tokens, cache_write_tokens, turns, denials, lessons,
                   fp_rules, run_id, tests_hash, failing_tests, failing, first_error, tree_id, verdict,
-                  failure)
+                  failure, arm_prompts, arm_explore, explored)
 VALUES (:'repo', :'ticket', :'branch', :'loop', :'kind', :'status', :'rubric_exit', :'progressed',
         :'model', :'prompts', :'cost', :'budget', :'seconds', :'input',
         :'output', :'cache_read', :'cache_write', :'turns', :'denials', :'lessons',
         nullif(:'fp_rules', ''), nullif(:'run_id', ''), nullif(:'tests_hash', ''), nullif(:'failing_tests', ''),
         nullif(:'failing', '')::int,
         nullif(:'first_error', ''), nullif(:'tree_id', ''), nullif(:'verdict', ''),
-        nullif(:'failure', ''));
+        nullif(:'failure', ''), nullif(:'arm_prompts', ''), nullif(:'arm_explore', '')::boolean,
+        nullif(:'explored', '')::boolean);
 SQL
 }
 
@@ -197,6 +199,42 @@ SELECT :'repo', :'ticket', :'signature', nullif(:'run_id', ''),
        nullif(e ->> 'outcome', ''), nullif(e ->> 'exit', '')::int, nullif(e ->> 'output', ''),
        nullif(e ->> 'image', '')
   FROM (SELECT nullif(:'evidence', '')::jsonb AS e) x;
+SQL
+}
+
+# db_tune_data DAYS: prints, as one JSON array, this repository's runs of
+# the last DAYS days, for chalk tune (tune.sh): per run_id its arm_prompts,
+# explore (it was in the exploring arm), detained (a lesson names it),
+# success (its final review passed), cost, and its calls in order, each
+# with kind, progressed, cost_usd and explored.
+db_tune_data() {
+  db_sql -v repo="${| repo_name; }" -v days="$1" <<'SQL'
+-- chalk tune: runs
+WITH r AS (
+  SELECT * FROM runs
+   WHERE repo = :'repo' AND run_id IS NOT NULL AND kind <> 'distill'
+     AND created_at >= now() - make_interval(days => :'days'::int)
+)
+SELECT coalesce(json_agg(x ORDER BY x.first), '[]') FROM (
+  SELECT run_id, min(created_at) AS first, max(arm_prompts) AS arm_prompts,
+         coalesce(bool_or(arm_explore), false) AS explore,
+         EXISTS (SELECT 1 FROM lessons ls WHERE ls.run_id = r.run_id) AS detained,
+         coalesce(bool_or(kind = 'review' AND agent_status = 'pass'), false) AS success,
+         coalesce(sum(cost_usd), 0)::float8 AS cost,
+         json_agg(json_build_object('loop', loop, 'kind', kind, 'progressed', progressed,
+                                    'cost_usd', cost_usd::float8, 'explored', coalesce(explored, false))
+                  ORDER BY id) AS loops
+    FROM r GROUP BY run_id) x;
+SQL
+}
+
+# db_explore_spent DAYS: prints what loops run because a run explored
+# (CHALK_EXPLORE) cost in the last DAYS days, on this machine.
+db_explore_spent() {
+  db_sql -v days="$1" <<'SQL'
+-- chalk tune: explore spent
+SELECT coalesce(sum(cost_usd), 0) FROM runs
+ WHERE explored AND created_at >= now() - make_interval(days => :'days'::int);
 SQL
 }
 

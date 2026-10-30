@@ -144,6 +144,12 @@ Evidence record
     `CHALK_ATTEST=true`, of how the harness checked its work. See
     [Evidence records](attestation.md).
 
+Exploring
+:   A run, a `CHALK_EXPLORE_SHARE` of them when `CHALK_EXPLORE=true`, that
+    gets a few more loops, once, where it would be detained, so that
+    `chalk tune` can tell whether more retries pay. See
+    [Tuning](../guide/operating/tuning.md).
+
 Holdout
 :   A run, a tenth by default (`CHALK_HOLDOUT`), that keeps certified
     stops in shadow mode, so that they go on being judged after they act.

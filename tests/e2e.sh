@@ -610,6 +610,63 @@ check "office hours --unproved: the resumed run's pre-flight skips the need that
     grep -q 'loop 1' '$tmp/oh94.log'"
 cd "$tmp/demo"
 
+# 2c''. Tuning experiments (tune.sh). An exploring run gets more loops,
+# once, where it would be detained, and records them as explored; a run in
+# arm b of a prompt A/B test reads .chalk/prompts-b/; chalk tune reads the
+# runs and recommends, and --apply writes a stop-only change to the config.
+chalk new PROJ-96 Explore feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-96"
+mkdir -p .chalk/prompts-b
+printf 'PROMPT-B-MARKER\n' > .chalk/prompts-b/continue.md
+printf 'PROMPT-B-MARKER\n' > .chalk/prompts-b/retry.md
+git add -A && git commit -q -m "spec, and prompts b"
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+if FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=0 CHALK_EXPLORE=true CHALK_EXPLORE_SHARE=1 CHALK_PROMPT_AB=b \
+   chalk run > "$tmp/run96.log" 2>&1; then
+  fail "an exploring run that keeps failing must still end in detention"
+fi
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db96.log"
+check "explore: the run says it may explore, then runs two more loops past CHALK_MAX_RETRIES=0" \
+  sh -c "grep -q 'exploring (CHALK_EXPLORE): if it would be detained for failing, this run gets up to 2 more loop' '$tmp/run96.log' &&
+    grep -q 'exploring: one more loop past CHALK_MAX_RETRIES=0 (1 left)' '$tmp/run96.log' &&
+    grep -q 'loop 3 (retry) started' '$tmp/run96.log' && ! grep -q 'loop 4' '$tmp/run96.log' &&
+    grep -q 'DETENTION: rubric failed' '$tmp/run96.log'"
+check "explore: the extra loops are recorded as explored, every call as in the exploring arm" \
+  sh -c "test \"\$(grep -c -e '-v explored=1 ' '$tmp/db96.log')\" -eq 2 &&
+    test \"\$(grep -c 'INSERT INTO runs' '$tmp/db96.log')\" = \"\$(grep -c -e '-v arm_explore=true ' '$tmp/db96.log')\""
+check "A/B: arm b reads .chalk/prompts-b and says so; pinned to it, not drawn, it records no arm" \
+  sh -c "grep -q 'this run uses prompts b, from .chalk/prompts-b/' '$tmp/run96.log' &&
+    grep -q PROMPT-B-MARKER '$XDG_STATE_HOME/chalk/demo/runs/PROJ-96/io/prompt.md' &&
+    test \"\$(grep -c 'INSERT INTO runs' '$tmp/db96.log')\" = \"\$(grep -c -e '-v arm_prompts= ' '$tmp/db96.log')\""
+# The run above explored two loops at $0.25 each: a ceiling of $0.50 is
+# spent, in the fake database's answer and in a real one alike.
+check "explore: no exploring once the 30-day ceiling is spent" \
+  sh -c "! FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=0 CHALK_EXPLORE=true CHALK_EXPLORE_SHARE=1 FAKE_EXPLORE_SPENT=0.50 \
+      CHALK_EXPLORE_BUDGET_USD=0.50 chalk run > '$tmp/run96b.log' 2>&1 &&
+    grep -q 'would pass its ceiling (CHALK_EXPLORE_BUDGET_USD=0.50)' '$tmp/run96b.log' && ! grep -q 'loop 2' '$tmp/run96b.log'"
+chalk tune > "$tmp/tune1.log" 2>&1 || { cat "$tmp/tune1.log"; fail "chalk tune"; }
+check "chalk tune: the three kinds of change, each with what it would take" \
+  sh -c "grep -q '^Fewer retries (stop-only' '$tmp/tune1.log' && grep -q '^More retries (spend-extending' '$tmp/tune1.log' &&
+    grep -q '^Prompts a against b (randomized' '$tmp/tune1.log'"
+if [ -z "${FAKE_PG_URL:-}" ]; then
+  # 46 runs that failed three loops in a row and were detained.
+  FAKE_TUNE_DATA="$(jq -cn '[range(46) | {run_id: "t-\(.)", arm_prompts: null, explore: false, detained: true,
+      success: false, cost: 3, loops: [range(3) | {kind: "retry", progressed: false, cost_usd: 1, explored: false}]}]')"
+  export FAKE_TUNE_DATA
+  # A config whose last line has no newline: the setting goes on a line of
+  # its own.
+  printf '%s' "$(grep -v '^CHALK_MAX_RETRIES=' .chalk/config)" > .chalk/config.new
+  mv .chalk/config.new .chalk/config
+  chalk tune --apply > "$tmp/tune2.log" 2>&1 || { cat "$tmp/tune2.log"; fail "chalk tune --apply"; }
+  check "chalk tune: fewer retries recommended from runs that never recovered, and applied" \
+    sh -c "grep -q 'recommend CHALK_MAX_RETRIES=0' '$tmp/tune2.log' && grep -qx 'CHALK_MAX_RETRIES=0' .chalk/config &&
+      test \"\$(grep -c '' .chalk/config)\" -ge 2 &&
+      grep -q 'applied: CHALK_MAX_RETRIES=0 in .chalk/config; commit it' '$tmp/tune2.log'"
+  git checkout -q -- .chalk/config
+  unset FAKE_TUNE_DATA
+fi
+cd "$tmp/demo"
+
 # 2d. With CHALK_ATTEST=true a finished branch carries a signed evidence
 # record, committed under .chalk/evidence, which chalk attest verify checks
 # against the branch, re-running the rubric with --rerun; a commit after it
