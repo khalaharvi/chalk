@@ -223,12 +223,16 @@ UPDATE lessons SET after_outcome = nullif(:'after', ''), after_image = nullif(:'
 SQL
 }
 
-# db_retire_lesson ID: marks lesson ID retired: its probe passes in an
+# db_retire_lesson ID TICKET PROBE: marks lesson ID retired: its probe passes in an
 # environment without its fix, so it no longer applies and is not recalled.
+# The ID comes from .chalk/needs, which reaches other machines by merge,
+# where it may name another lesson: only one of this repository, TICKET and
+# PROBE is retired.
 db_retire_lesson() {
-  db_sql -v id="$1" <<'SQL'
+  db_sql -v id="$1" -v ticket="$2" -v probe="$3" -v repo="${| repo_name; }" <<'SQL'
 UPDATE lessons SET evidence = 'retired', retired_at = coalesce(retired_at, now())
- WHERE id = :'id'::bigint AND evidence IS DISTINCT FROM 'retired';
+ WHERE id = :'id'::bigint AND repo = :'repo' AND ticket = :'ticket' AND probe = :'probe'
+   AND evidence IS DISTINCT FROM 'retired';
 SQL
 }
 
@@ -421,7 +425,10 @@ SELECT n.id, false, 2, n.similarity
 SELECT coalesce(json_agg(json_build_object(
          'id', l.id, 'exact', s.exact, 'step', s.step,
          'line', '- Seen before: ' || left(regexp_replace(l.signature, '\s+', ' ', 'g'), 240)
-                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution),
+                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution)
+                 || CASE WHEN l.evidence = 'proved'
+                           THEN E'\n  Verified: `' || l.probe || '` failed before this fix and passed after it'
+                         ELSE '' END,
          'failure', left(regexp_replace(coalesce(nullif(l.first_error, ''), l.signature), '\s+', ' ', 'g'), 400),
          'fix', left(coalesce(l.lesson, l.resolution), 400))
          ORDER BY s.step, s.rank_score DESC, l.id DESC), '[]')

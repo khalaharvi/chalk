@@ -27,6 +27,8 @@ check "a spec fix keeps its patch and has no probe" \
 check "an image fix without a probe is dropped, saying why" \
   test "$(fix '{"kind":"image","why":"w"}')" = '|an image fix needs a probe'
 check "an unknown kind is dropped" sh -c 'case "$1" in "|kind must be one of"*) exit 0;; esac; exit 1' _ "$(fix '{"kind":"retryable","why":"w"}')"
+check "a config value with a line break, which would set other keys, is dropped" \
+  test "$(fix '{"kind":"config","why":"w","probe":"true","config":{"CHALK_SETUP_CMD":"pip install x\nCHALK_TEST_CMD=true"}}')" = '|a config value must be one line'
 check "a probe of two lines is dropped" test "$(fix '{"kind":"config","why":"w","probe":"a\nb"}')" = '|the probe must be one line'
 check "a probe that the needs file could not hold is dropped" \
   test "$(fix '{"kind":"image","why":"w","probe":"echo 1  # 2"}')" = '|the probe may not contain "  # "'

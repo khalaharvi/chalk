@@ -73,6 +73,9 @@ office_hours_distill() {
 # fix the agent proposed and its probe's results in words, the lesson's id,
 # its probe and kind, and what the probe proves (proved, unproved or empty).
 OFFICE_FIX_TEXT="" OFFICE_LESSON_ID="" OFFICE_PROBE="" OFFICE_KIND="" OFFICE_EVIDENCE=""
+# A probe that still fails, resumed past with --unproved: the resumed run's
+# pre-flight skips it when it is a saved need, which would detain it again.
+OFFICE_SKIP_NEED=""
 
 # office_hours_check UNPROVED: when the detention's lesson carries a probe
 # (evidence.sh), runs it in a fresh sandbox on this branch, with the
@@ -113,7 +116,7 @@ office_hours_check() {
         die "the probe still fails after your fix (exit ${after[exit]}${first:+: $first})." \
           "Fix the environment, commit, and run office hours again; or add --unproved to resume anyway, with the lesson kept out of recall"
       fi
-      OFFICE_EVIDENCE=unproved
+      OFFICE_EVIDENCE=unproved OFFICE_SKIP_NEED="$OFFICE_PROBE"
       warn "the probe still fails (exit ${after[exit]}); resuming as asked, with the lesson kept out of recall" ;;
     *)
       OFFICE_EVIDENCE=unproved
@@ -136,7 +139,12 @@ office_hours_save_need() {
     return 0
   fi
   file="$RUN_WT/$EVIDENCE_NEEDS_FILE"
-  if [[ -f $file ]] && grep -qF -- "$OFFICE_PROBE$EVIDENCE_NEEDS_SEP" "$file"; then return 0; fi
+  local need
+  local -a saved
+  evidence_needs "$RUN_WT" saved 2>/dev/null
+  for need in "${saved[@]}"; do
+    [[ ${need%%$'\t'*} != "$OFFICE_PROBE" ]] || return 0
+  done
   mkdir -p "${file%/*}"
   printf '%s\n' "$line" >> "$file"
   git -C "$RUN_WT" add "$EVIDENCE_NEEDS_FILE"
@@ -217,9 +225,9 @@ needs_without() {
 # Exits non-zero when a need fails, so CI can run it. --prune removes
 # retired needs from the file, to commit.
 cmd_needs() {
-  local prune=0 root branch need probe kind ticket id status failed=0 retired=0
-  local -a needs keep=()
-  local -A with without
+  local prune=0 root branch need probe kind ticket id status failed=0 retired=0 line
+  local -a needs
+  local -A with without gone
   case "${1:-}" in
     --prune) prune=1 ;;
     '') ;;
@@ -247,17 +255,25 @@ cmd_needs() {
         if [[ ${without[outcome]} == passed ]]; then
           status="retired: passes without the fix too"
           retired=$((retired + 1))
-          if [[ -n $id ]]; then db_retire_lesson "$id" >/dev/null 2>&1 || true; fi
+          if [[ -n $id ]]; then db_retire_lesson "$id" "$ticket" "$probe" >/dev/null 2>&1 || true; fi
+          gone["$probe"]=1
           (( prune )) && continue
         else
           status="holds"
         fi ;;
     esac
-    keep+=("${| evidence_need_line "$probe" "$kind" "$ticket" "$id"; }")
     info "  $status  $probe  ($kind, from $ticket)"
   done
   if (( prune && retired )); then
-    printf '%s\n' "${keep[@]}" > "$root/$EVIDENCE_NEEDS_FILE"
+    # Every other line stays as it was, comments and lines that did not
+    # parse included: the probe is what precedes the last separator.
+    while IFS= read -r line || [[ -n $line ]]; do
+      if [[ $line != \#* && $line == *"$EVIDENCE_NEEDS_SEP"* && -v gone["${line%"$EVIDENCE_NEEDS_SEP"*}"] ]]; then
+        continue
+      fi
+      printf '%s\n' "$line"
+    done < "$root/$EVIDENCE_NEEDS_FILE" > "$root/$EVIDENCE_NEEDS_FILE.tmp"
+    mv "$root/$EVIDENCE_NEEDS_FILE.tmp" "$root/$EVIDENCE_NEEDS_FILE"
     info "removed $retired retired need(s) from $EVIDENCE_NEEDS_FILE; commit it"
   elif (( retired )); then
     info "$retired need(s) retired; remove them with: chalk needs --prune"
