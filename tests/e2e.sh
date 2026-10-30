@@ -610,16 +610,16 @@ check "explore: the run says it may explore, then runs two more loops past CHALK
 check "explore: the extra loops are recorded as explored, every call as in the exploring arm" \
   sh -c "test \"\$(grep -c -e '-v explored=1 ' '$tmp/db96.log')\" -eq 2 &&
     test \"\$(grep -c 'INSERT INTO runs' '$tmp/db96.log')\" = \"\$(grep -c -e '-v arm_explore=true ' '$tmp/db96.log')\""
-check "A/B: arm b reads .chalk/prompts-b, says so, and records its arm" \
+check "A/B: arm b reads .chalk/prompts-b and says so; pinned to it, not drawn, it records no arm" \
   sh -c "grep -q 'this run uses prompts b, from .chalk/prompts-b/' '$tmp/run96.log' &&
     grep -q PROMPT-B-MARKER '$XDG_STATE_HOME/chalk/demo/runs/PROJ-96/io/prompt.md' &&
-    grep -q -e '-v arm_prompts=b ' '$tmp/db96.log'"
+    test \"\$(grep -c 'INSERT INTO runs' '$tmp/db96.log')\" = \"\$(grep -c -e '-v arm_prompts= ' '$tmp/db96.log')\""
 # The run above explored two loops at $0.25 each: a ceiling of $0.50 is
 # spent, in the fake database's answer and in a real one alike.
 check "explore: no exploring once the 30-day ceiling is spent" \
   sh -c "! FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=0 CHALK_EXPLORE=true CHALK_EXPLORE_SHARE=1 FAKE_EXPLORE_SPENT=0.50 \
       CHALK_EXPLORE_BUDGET_USD=0.50 chalk run > '$tmp/run96b.log' 2>&1 &&
-    grep -q 'at its ceiling (CHALK_EXPLORE_BUDGET_USD=0.50)' '$tmp/run96b.log' && ! grep -q 'loop 2' '$tmp/run96b.log'"
+    grep -q 'would pass its ceiling (CHALK_EXPLORE_BUDGET_USD=0.50)' '$tmp/run96b.log' && ! grep -q 'loop 2' '$tmp/run96b.log'"
 chalk tune > "$tmp/tune1.log" 2>&1 || { cat "$tmp/tune1.log"; fail "chalk tune"; }
 check "chalk tune: the three kinds of change, each with what it would take" \
   sh -c "grep -q '^Fewer retries (stop-only' '$tmp/tune1.log' && grep -q '^More retries (spend-extending' '$tmp/tune1.log' &&
@@ -629,9 +629,14 @@ if [ -z "${FAKE_PG_URL:-}" ]; then
   FAKE_TUNE_DATA="$(jq -cn '[range(46) | {run_id: "t-\(.)", arm_prompts: null, explore: false, detained: true,
       success: false, cost: 3, loops: [range(3) | {kind: "retry", progressed: false, cost_usd: 1, explored: false}]}]')"
   export FAKE_TUNE_DATA
+  # A config whose last line has no newline: the setting goes on a line of
+  # its own.
+  printf '%s' "$(grep -v '^CHALK_MAX_RETRIES=' .chalk/config)" > .chalk/config.new
+  mv .chalk/config.new .chalk/config
   chalk tune --apply > "$tmp/tune2.log" 2>&1 || { cat "$tmp/tune2.log"; fail "chalk tune --apply"; }
   check "chalk tune: fewer retries recommended from runs that never recovered, and applied" \
     sh -c "grep -q 'recommend CHALK_MAX_RETRIES=0' '$tmp/tune2.log' && grep -qx 'CHALK_MAX_RETRIES=0' .chalk/config &&
+      test \"\$(grep -c '' .chalk/config)\" -ge 2 &&
       grep -q 'applied: CHALK_MAX_RETRIES=0 in .chalk/config; commit it' '$tmp/tune2.log'"
   git checkout -q -- .chalk/config
   unset FAKE_TUNE_DATA

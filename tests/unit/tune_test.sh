@@ -8,6 +8,8 @@ set -euo pipefail
 . "$(dirname "$0")/testlib.sh"
 load core/log core/runtime db certify agent tune
 
+fails() { ! "$@"; }
+
 # runs N PATTERN [KEY=VALUE...]: prints N runs as db_tune_data does, each
 # with one loop call per letter of PATTERN (P progressed, N did not), at
 # $1.00 each, then a passing review when it ends in P (success) or a
@@ -28,7 +30,7 @@ runs() {
       "$@"
   done
 }
-judge() { tune_judge "$(cat | jq -cs .)" "${1:-2}" 46; jq -r "$2" <<<"$REPLY"; }
+judge() { tune_judge "$(cat | jq -cs .)" "${1:-2}" 46 1; jq -r "$2" <<<"$REPLY"; }
 
 # --- fewer retries: exact, stop-only ------------------------------------------
 
@@ -38,8 +40,10 @@ check "... and the fewest retries that clears the bar, tested most cautious firs
   test "$(runs 46 NNN | judge 2 .retries.recommend)" = 0
 check "a run that progressed after the stop is a wrongful one" \
   test "$( { runs 46 NNN; runs 10 NNP; } | judge 2 '[.retries.candidates[] | "\(.retries):\(.wrong)"] | join(" ")')" = "1:10 0:10"
-check "... and with ten of 56 wrongful, nothing is recommended" \
-  test "$( { runs 46 NNN; runs 10 NNP; } | judge 2 .retries.recommend)" = null
+check "... and with ten wrongful in the block still filling, nothing is recommended, though the first block passed" \
+  test "$( { runs 46 NNN; runs 10 NNP; } | judge 2 '"\(.retries.candidates[0] | "\(.blocks):\(.block_wrong):\(.open_wrong)") \(.retries.recommend)"')" = "1:0:10 null"
+check "the bounds are the latest complete block's, not every run's: an old bad block does not count" \
+  test "$( { runs 46 NNP; runs 46 NNN; } | judge 2 '"\(.retries.candidates[0] | "\(.blocks):\(.block_wrong):\(.lower)") \(.retries.recommend)"')" = "2:0:0.937 0"
 # A run that fails once and then progresses is a wrongful stop for no
 # retries at all, but one retry never stops it.
 check "fixed sequence: the cautious setting passes, the bolder one fails, so the cautious one is recommended" \
@@ -52,8 +56,10 @@ check "progress resets the count: NPN never has two failures in a row" \
 
 # --- more retries: only what exploring runs show ------------------------------
 
-check "exploring runs: rescued by an explored loop that progressed, at the cost of the explored loops" \
-  test "$( { runs 30 NNNR explore=true; runs 10 NNNXX explore=true; } | judge 2 '.explore | "\(.runs) \(.rescued) \(.cost)"')" = "40 30 50"
+check "exploring runs: rescued when the first explored loop progressed, at that loop's cost" \
+  test "$( { runs 30 NNNR explore=true; runs 10 NNNXX explore=true; } | judge 2 '.explore | "\(.runs) \(.rescued) \(.cost)"')" = "40 30 40"
+check "... since one more retry adds only that loop: a rescue by the second explored loop is none" \
+  test "$(runs 60 NNNXR explore=true | judge 2 '.explore | "\(.rescued) \(.recommend)"')" = "0 null"
 check "... recommended when even the worst rescue rate pays for the worst cost" \
   test "$( { runs 30 NNNR explore=true; runs 10 NNNXX explore=true; } | judge 2 .explore.recommend)" = 3
 check "... and not when few rescues come of many explored loops" \
@@ -73,22 +79,32 @@ check "only one arm run: no comparison" test "$(runs 5 PP arm_prompts=a | judge 
 
 draw() { tune_draw "$tmp" 2>"$tmp/draw.err"; printf '%s %s\n' "${RUN_ARM_PROMPTS:--}" "$RUN_EXPLORE_LEFT"; }
 CHALK_EXPLORE=false CHALK_PROMPT_AB=false CHALK_EXPLORE_SHARE=1 CHALK_EXPLORE_RETRIES=2 CHALK_EXPLORE_BUDGET_USD=10.00
+CHALK_BUDGET_USD=1.00
 check "no experiment: no arm" test "$(draw)" = "- 0"
 CHALK_PROMPT_AB=b
-check "CHALK_PROMPT_AB=b: every run on b" test "$(draw)" = "b 0"
+check "CHALK_PROMPT_AB=b without .chalk/prompts-b: the usual prompts, saying why" \
+  sh -c 'test "$1" = "- 0" && grep -q "no .chalk/prompts-b/" "$2"' _ "$(draw)" "$tmp/draw.err"
+mkdir -p "$tmp/.chalk/prompts-b"
+check "CHALK_PROMPT_AB=b: every run on b, recorded as no arm, since none drew it" \
+  test "$(draw; printf '%s' "${RUN_ARM_DRAWN:--}")" = "$(printf 'b 0\n-')"
+rmdir "$tmp/.chalk/prompts-b"
 CHALK_PROMPT_AB=true
 check "CHALK_PROMPT_AB=true without .chalk/prompts-b: no test, saying why" \
   sh -c 'test "$1" = "- 0" && grep -q "no .chalk/prompts-b/" "$2"' _ "$(draw)" "$tmp/draw.err"
 mkdir -p "$tmp/.chalk/prompts-b"
+check "CHALK_PROMPT_AB=true: drawn, so recorded" test "$(draw >/dev/null; printf '%s' "$RUN_ARM_DRAWN")" = 1
 check "CHALK_PROMPT_AB=true: a or b, at even odds" \
   test "$(for i in $(seq 1 60); do draw; done | cut -d' ' -f1 | sort -u | paste -sd ' ' -)" = "a b"
 CHALK_PROMPT_AB=false CHALK_EXPLORE=true
 db_explore_spent() { printf "%s\n" "${explore_spent-}"; }
 explore_spent=2.50
 check "exploring under its ceiling: the extra loops" test "$(draw)" = "- 2"
-explore_spent=10.00
-check "exploring at its ceiling: none, saying why" \
-  sh -c 'test "$1" = "- 0" && grep -q "at its ceiling (CHALK_EXPLORE_BUDGET_USD=10.00)" "$2"' _ "$(draw)" "$tmp/draw.err"
+explore_spent=9.50
+check "exploring where one more loop would pass the ceiling: none, saying why" \
+  sh -c 'test "$1" = "- 0" && grep -q "would pass its ceiling (CHALK_EXPLORE_BUDGET_USD=10.00)" "$2"' _ "$(draw)" "$tmp/draw.err"
+check "... and the room is checked again before each extra loop" fails tune_explore_room 2>/dev/null
+explore_spent=8.00
+check "... which there is while one more loop fits" tune_explore_room
 explore_spent=""
 check "a database that cannot say what was spent: no exploring" test "$(draw)" = "- 0"
 explore_spent=0 CHALK_EXPLORE_SHARE=0

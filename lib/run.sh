@@ -50,7 +50,7 @@ run_context() {
   RUN_PREFLIGHT_NEED=""
   # Tuning experiments (tune_draw): the prompts arm, whether the run may
   # explore, the extra loops it has left, and whether it is in one.
-  RUN_ARM_PROMPTS="" RUN_ARM_EXPLORE="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
+  RUN_ARM_PROMPTS="" RUN_ARM_DRAWN="" RUN_ARM_EXPLORE="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
   RUN_FP_BASE=()
   # Set once the run has said how it ended (run_detain), so that
   # run_teardown parks the sandbox's work only after an unexpected exit.
@@ -816,10 +816,12 @@ cmd_run() {
 
   RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
   RUN_HOLDOUT="${| certify_holdout; }"
+  run_open_sandbox
+  # After the sandbox, whose services include the database that holds the
+  # exploring spend.
   tune_draw "$RUN_WT"
   if [[ $RUN_ARM_PROMPTS == b ]]; then RUN_PROMPTS="$(run_prompts_version)"; fi
   if (( RUN_EXPLORE_LEFT > 0 )); then RUN_ARM_EXPLORE=true; fi
-  run_open_sandbox
   case "$RUN_ARM_PROMPTS" in
     a) run_log "prompt A/B test (CHALK_PROMPT_AB): this run uses prompts a, the usual ones" ;;
     b) run_log "prompt A/B test (CHALK_PROMPT_AB): this run uses prompts b, from $TUNE_AB_DIR/" ;;
@@ -1001,6 +1003,9 @@ cmd_run() {
     fi
 
     failures=$((failures + 1))
+    if (( failures > CHALK_MAX_RETRIES && RUN_EXPLORE_LEFT > 0 )) && ! tune_explore_room; then
+      RUN_EXPLORE_LEFT=0
+    fi
     if (( failures > CHALK_MAX_RETRIES && RUN_EXPLORE_LEFT > 0 )); then
       # Exploring (tune.sh): one more loop where the run would be detained,
       # recorded as explored, so chalk tune can tell what it rescued.

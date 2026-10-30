@@ -26,10 +26,13 @@ and its own stream of tickets.
   in a fixed sequence, most cautious first, each at the full 5%. Stop-only
   candidates are nested (a bolder one fires wherever a cautious one does,
   and earlier), so the sequence is natural.
-- **Exploration has a hard ceiling.** Exploring runs get at most
-  `CHALK_EXPLORE_RETRIES` extra loops once, and the machine stops
-  exploring at `CHALK_EXPLORE_BUDGET_USD` per 30 days. A database that
-  cannot say what was spent counts as spent.
+- **Exploration has a ceiling.** Exploring runs get at most
+  `CHALK_EXPLORE_RETRIES` extra loops once. Before each extra loop, the
+  run checks that one more loop at `CHALK_BUDGET_USD` keeps the 30-day
+  exploring spend within `CHALK_EXPLORE_BUDGET_USD`. Runs exploring at the
+  same moment can each take the last room, so the ceiling can be passed by
+  one loop per other parallel run. A database that cannot say what was
+  spent counts as full.
 
 ## Constraints
 
@@ -64,19 +67,30 @@ and its own stream of tickets.
    a row without progress. A firing is judged once the run was detained,
    finished, or progressed later. It is wrongful when a later loop
    progressed; otherwise it saved the cost of the loops after it. `j`
-   passes when it has at least 46 judged runs, a 95% Clopper-Pearson lower
-   bound of at least 0.90 on being right, and a positive net: a Hoeffding
-   lower bound on dollars saved per firing, less `--checkpoint-usd` per
-   wrongful stop at its upper bound, each bound at 2.5%.
+   is judged as `certify.sh` judges an early stop: its latest complete
+   block of 46 judged runs, in the order they ran, and the block still
+   filling, each have at most one wrongful stop (a 95% Clopper-Pearson
+   lower bound of at least 0.90 on being right), and the block's net is
+   positive: a Hoeffding lower bound on dollars saved per firing, less
+   `--checkpoint-usd` per wrongful stop at its upper bound, each bound at
+   2.5%. A block is tested once; one bound re-checked every time tune runs
+   would not keep its 95%.
 2. **More retries.** Among exploring runs that used extra loops, a run is
-   rescued when an explored loop progressed. Raising `K` by one is
+   rescued when its first explored loop progressed: that loop is what
+   one more retry adds, so it alone, and its cost, are judged. Raising `K` by one is
    recommended when the lower bound on the rescue rate times
    `--checkpoint-usd` exceeds the Hoeffding upper bound on explored cost
    per run.
 3. **Prompts.** Per judged run (finished or detained), its value is
    `--success-usd` if it finished, less its cost. `b` is adopted when a
-   two-sample Hoeffding lower bound on `mean(b) - mean(a)` is above zero.
-   The range is the largest run cost plus the success value.
+   two-sample Hoeffding lower bound on `mean(b) - mean(a)`, at 2.5% on each
+   side, is above zero. The range is the largest run cost plus the success
+   value. Only runs that drew their arm count: `CHALK_PROMPT_AB=a` or `b`
+   pins every run to one arm, and is recorded as no arm.
+
+The exploring and A/B bounds are fixed-n bounds. Read once, at a number
+of runs chosen in advance, they hold at 95%; read after every run, they do
+not. An anytime-valid bound is future work.
 
 ## Not in scope
 
