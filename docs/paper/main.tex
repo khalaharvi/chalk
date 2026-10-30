@@ -70,7 +70,7 @@ We take the position that the controller should not trust the controlled model, 
 \item \textbf{Certified stop-only control} (\S\ref{sec:stop}), the main contribution. We show that stop-only verdicts are exactly evaluable from shadow logs (Proposition~\ref{prop:exact}), that the class is closed under composition (Proposition~\ref{prop:union}), and that per-loop spend caps make dollar savings bounded, so a distribution-free admission rule exists. We restate Chalk's calibration gate as a confidence bound and give the required sample sizes.
 \item \textbf{Evidence-carrying lessons} (\S\ref{sec:lessons}): agent memory whose entries carry an executable probe that fails before a human fix and passes after it. The probe is re-run as an environment \emph{need} and retires the lesson on evidence, not on a clock.
 \item \textbf{Ledger-gated per-repository tuning} (\S\ref{sec:tune}): a split of harness changes into decision-level changes, which are exactly evaluable when stop-only, and trajectory-altering changes, which need randomized comparison. Admission uses a conservative improvement bound.
-\item \textbf{Evidence-carrying pull requests} (\S\ref{sec:evidence}): a signed bundle bound to the git tree that CI re-verifies by re-running the rubric and probes in a pinned image.
+\item \textbf{Evidence-carrying pull requests} (\S\ref{sec:evidence}): a signed bundle bound to the git tree that CI re-verifies, re-running the recorded rubric and the probes in a fresh sandbox on the recorded image.
 \item \textbf{A pre-registered evaluation protocol} (\S\ref{sec:eval}) that a single maintainer can run with spend bounded in advance, together with an open replay corpus and fault-injection suite.
 \end{enumerate}
 
@@ -78,7 +78,7 @@ We take the position that the controller should not trust the controlled model, 
 Stuck detection, model cascades, spend caps, validated memory, executable skill admission, fail-to-pass tests, harness optimisation and signed run evidence all have prior art (\S\ref{sec:related}, Table~\ref{tab:notnovel}). Each contribution above is a \emph{combination} claim. We found no shipped product or published work that combines its parts, but our market survey checked only about eight of roughly thirty products against primary sources, so ``we found no'' is the strongest form we can honestly use.
 
 \paragraph{Status.}
-Chalk is early software maintained by one person. Its ledger, fingerprints, shadow-mode verdicts, fingerprint recall and calibrated decider are shipped. Probes, tuning and evidence bundles are designed but not shipped (Table~\ref{tab:status}). Its 51 real runs to date produced no rubric failures and four blockers, all caused by the environment. That gives a one-sided 95\% upper bound of 5.7\% on the rubric-failure rate, which is far too few negative examples to certify anything. The evaluation therefore depends on replay and fault injection, and this draft reports no results.
+Chalk is early software maintained by one person. Its ledger, fingerprints, shadow-mode verdicts, fingerprint recall and calibrated decider are shipped. The block gate, probes and evidence bundles are implemented in this work but not yet released, and tuning is designed but not shipped (Table~\ref{tab:status}). Its 51 real runs to date produced no rubric failures and four blockers, all caused by the environment. That gives a one-sided 95\% upper bound of 5.7\% on the rubric-failure rate, which is far too few negative examples to certify anything. The evaluation therefore depends on replay and fault injection, and this draft reports no results.
 
 % ===================================================================
 \section{Setting and threat model}
@@ -340,27 +340,39 @@ Tuned edits may not touch the rubric command, test files or the verdict code, an
 \section{Evidence-carrying pull requests}
 \label{sec:evidence}
 
-Vendors already attach human-readable evidence to agent pull requests. Copilot adds a commit trailer linking to session logs \citep{github2026trailer}, and Cursor attaches videos, screenshots and logs \citep{cursor2026computeruse}. Both are produced in the agent's own environment and are not bound by digest to the merged tree. A measurement of 47 delivery platforms found that none records a content-addressed identity of an agent's full behavioural configuration by default \citep{azarang2026identity}. We propose that the harness emit an in-toto Statement \citep{torresarias2019intoto}, signed with DSSE by a key held by the host harness. The sandbox never holds that key or forge credentials.
+Vendors already attach human-readable evidence to agent pull requests. Copilot adds a commit trailer linking to session logs \citep{github2026trailer}, and Cursor attaches videos, screenshots and logs \citep{cursor2026computeruse}. Both are produced in the agent's own environment and are not bound by digest to the merged tree. A measurement of 47 delivery platforms found that none records a content-addressed identity of an agent's full behavioural configuration by default \citep{azarang2026identity}. The harness emits an in-toto Statement \citep{torresarias2019intoto} in a DSSE envelope, signed with \texttt{ssh-keygen -Y sign} by a key the host holds. The sandbox never holds that key or forge credentials. The subject is the branch's git tree \emph{without} the directory the record lives in, \texttt{.chalk/evidence/}, so the record can be committed to the branch it describes. Chalk implements this behind \texttt{CHALK\_ATTEST=true} (Listing abridged; the full format is documented in the repository):
 
 \begin{lstlisting}
 { "_type": "https://in-toto.io/Statement/v1",
-  "subject": [{ "name": "git-tree", "digest": { "gitTree": "<D of PR head>" } }],
-  "predicateType": "<chalk evidence predicate, v0>",
+  "subject": [{ "name": "chalk/PROJ-123", "digest": { "gitTree": "<tree without .chalk/evidence>" } }],
+  "predicateType": "https://github.com/khalaharvi/chalk/blob/main/docs/reference/attestation.md",
   "predicate": {
-    "harness": { "version": "...", "prompts": "<hash>", "fp_rules": "on" },
-    "sandbox": { "image": "<digest>", "needs": [{ "probe": "...", "exit": 0 }] },
-    "models":  [{ "kind": "continue", "model": "<id@revision>" }],
-    "base": { "tree": "<D of base>", "test_files": "<tree of test paths>" },
-    "loops": [{ "loop": 1, "rubric_exit": 1, "tests_hash": "...", "first_error": "...",
-                "tree_id": "...", "cost_usd": 0.41, "verdict": "first" }],
-    "checkpoints": [{ "text": "...", "loop": 3, "rubric_exit": 0 }],
-    "review": { "verdict": "pass", "model": "<id@revision>" },
-    "lessons": [{ "fingerprint": "...", "probe": "...", "evidence": ["fail", "pass"] }],
-    "cost": { "total_usd": 1.87, "cap_per_loop_usd": 1.00 } } }
+    "version": 0, "ticket": "PROJ-123",
+    "base": { "branch": "main", "commit": "<merge base>", "tree": "..." },
+    "harness": { "chalk": "0.8.0", "prompts": "<hash>", "fp_rules": "on", "decider": "off" },
+    "sandbox": { "image": "chalk-sandbox:local", "image_id": "sha256:...",
+                 "needs": [{ "probe": "gcc --version", "kind": "image", "ticket": "GO-5" }] },
+    "rubric": { "command": "go test ./..." },
+    "review": { "ran": true, "summary": "..." },
+    "tests_changed": [],
+    "ledger": {
+      "loops": [{ "loop": 1, "kind": "continue", "rubric_exit": 1, "tests_hash": "...",
+                  "first_error": "...", "tree_id": "...", "verdict": "first",
+                  "model": "...", "cost_usd": 0.41, "budget_usd": 1.00 }],
+      "lessons": [{ "fingerprint": "...", "probe": "...", "before": "failed",
+                    "after": "passed", "evidence": "proved" }],
+      "cost_usd": 1.87 } } }
 \end{lstlisting}
 
 \paragraph{Verification in CI.}
-CI checks that the signature is valid and the subject equals the PR head tree. It re-runs the rubric in the recorded image digest and compares the exit status and $\Tset$. It re-runs the probes, checks that test files are unchanged from base unless the spec allows the change, and recomputes the cost total. A mismatch is reported, not hidden; the mismatch rate itself measures flakiness.
+\texttt{chalk attest verify} makes these checks:
+\begin{itemize}[leftmargin=*,nosep]
+\item the signature verifies against \texttt{allowed\_signers} as committed at the branch's merge base with its base branch, never the branch's own copy, which whoever pushes the branch could extend;
+\item the subject equals the checked-out tree without \texttt{.chalk/evidence/}, so any later commit fails;
+\item the existing test files the branch changed, deleted or renamed are exactly those recorded;
+\item the recorded calls add up to the recorded cost.
+\end{itemize}
+With \texttt{--rerun} it also runs the recorded rubric and setup, then every saved need, in a fresh sandbox on the recorded image, and reports when the local image's ID differs from the recorded one; the branch's own configuration is not used, since the branch could change it. Changed test files are listed for the reviewer rather than rejected, because changing an existing test can be correct. A mismatch is reported, not hidden, and the rerun's mismatch rate itself measures flakiness.
 
 \paragraph{What the bundle does not prove.}
 It does not prove correctness. Saturated visible tests coexist with held-out gaps \citep{specbench2026}. The proof-carrying-code analogy \citep{necula1997pcc} holds only in architecture: a small trusted checker re-verifies evidence produced by an untrusted party, but the evidence is test results, not proofs. Agent runs cannot be replayed; only their evidence can be re-checked. The bundle can serve as a log under record-keeping obligations such as the EU AI Act's \citep{euaiact}, but using it is not compliance by itself.
@@ -499,7 +511,7 @@ Local decider (its 20-run, 90\% gate replaced by the block gate) & shipped (v0.8
 Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chalk certify} & implemented (this work) \\
 Probes, needs, pre-flight, evidence-based expiry (\texttt{chalk needs}) & implemented (this work) \\
 Per-repository tuning (\texttt{chalk tune}) & designed, not shipped \\
-Evidence bundle and CI re-verification & proposed here \\
+Evidence record and CI verification (\texttt{chalk attest}) & implemented (this work) \\
 \bottomrule
 \end{tabularx}
 \caption{What is shipped, designed and proposed.}

@@ -55,6 +55,10 @@ CHALK_FP_RULES=shadow
 #          lines (needs CHALK_FP_RULES shadow or on). The dashboard's prompt
 #          sets compare the two.
 CHALK_FP_FEEDBACK=false
+# Commit a signed record of how each finished branch was checked
+# (.chalk/evidence/TICKET.json: the harness's rubric runs, verdicts, cost,
+# review, lessons and needs), which CI checks with `chalk attest verify`.
+CHALK_ATTEST=false
 # Agents `chalk fleet` will run at once on one machine. auto picks the
 # smallest of 8, half of Docker's CPUs, and Docker's memory less 1 GiB
 # divided by CHALK_SANDBOX_MEM_MB (4 when Docker cannot be asked).

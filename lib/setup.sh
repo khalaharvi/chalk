@@ -260,6 +260,10 @@ cmd_doctor() {
     "could not confirm; needs Docker running and the image built" sandbox_image_bash_ok
   doctor_tls
   doctor_auto_mode
+  if [[ $CHALK_ATTEST == true ]]; then
+    doctor_check optional "ssh-keygen (CHALK_ATTEST=true)" \
+      "needed to sign evidence records; install OpenSSH, or branches are submitted without them" command -v ssh-keygen
+  fi
   doctor_fp_certification
   doctor_decider
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured

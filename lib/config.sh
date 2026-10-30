@@ -37,6 +37,8 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_FP_RULES]=shadow
   [CHALK_FP_FEEDBACK]=false
   [CHALK_TEST_REPORT]=""
+  # Commit a signed evidence record with each finished branch (attest.sh).
+  [CHALK_ATTEST]=false
   [CHALK_DECIDER]=off
   [CHALK_DECIDER_THRESHOLD]=0.9
   [CHALK_DECIDER_MIN_LESSONS]=30
@@ -71,6 +73,14 @@ declare -gA CHALK_ENV_DEFAULTS=(
   # held back again if a later block of runs shows it wrong too often (see
   # chalk certify). A repository cannot change it.
   [CHALK_HOLDOUT]=0.10
+  # The SSH private key that signs evidence records (CHALK_ATTEST=true), and
+  # the name allowed_signers knows it by. By default, a key Chalk makes in
+  # its state directory, and your git email.
+  [CHALK_ATTEST_KEY]=""
+  [CHALK_ATTEST_PRINCIPAL]=""
+  # The allowed_signers file chalk attest verify trusts, when not the
+  # repository's .chalk/allowed_signers.
+  [CHALK_ATTEST_SIGNERS]=""
   # An absolute path to a PEM file of extra CA certificates, for a network
   # that intercepts TLS, such as a corporate proxy. The sandbox image build
   # and every sandbox trust it, as well as the CAs the image already has.
@@ -166,6 +176,10 @@ load_config() {
     die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
   [[ $CHALK_AGENT_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_AGENT_TIMEOUT must be a positive number of seconds (got '$CHALK_AGENT_TIMEOUT')"
+  case "$CHALK_ATTEST" in
+    true|false) ;;
+    *) die "CHALK_ATTEST must be 'true' or 'false' (got '$CHALK_ATTEST')" ;;
+  esac
   case "$CHALK_REVIEW_REQUIRED" in
     true|false) ;;
     *) die "CHALK_REVIEW_REQUIRED must be 'true' or 'false' (got '$CHALK_REVIEW_REQUIRED')" ;;

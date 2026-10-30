@@ -121,6 +121,7 @@ nav:
           - Troubleshooting: guide/operating/troubleshooting.md
   - Reference:
       - Commands: reference/commands.md
+      - Evidence records: reference/attestation.md
       - Privacy: privacy.md
       - Decider protocol: decider-protocol.md
       - Glossary: reference/glossary.md

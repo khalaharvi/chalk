@@ -200,6 +200,31 @@ SELECT :'repo', :'ticket', :'signature', nullif(:'run_id', ''),
 SQL
 }
 
+# db_attest_ledger TICKET: prints, as one JSON object, what the evidence
+# record (attest.sh) says about TICKET's calls: loops, every agent call but
+# distillation in order, with what the harness recorded of it; lessons,
+# its detentions with their probes and evidence; and cost_usd, their total.
+db_attest_ledger() {
+  db_sql -v repo="${| repo_name; }" -v ticket="$1" <<'SQL'
+-- chalk attest: ledger
+SELECT json_build_object(
+  'loops', coalesce((SELECT json_agg(json_build_object(
+              'run_id', run_id, 'loop', loop, 'kind', kind, 'agent_status', agent_status,
+              'rubric_exit', rubric_exit, 'progressed', progressed, 'tests_hash', tests_hash,
+              'first_error', first_error, 'tree_id', tree_id, 'verdict', verdict, 'fp_rules', fp_rules,
+              'model', model, 'prompts', prompts, 'cost_usd', cost_usd::float8, 'budget_usd', budget_usd::float8)
+              ORDER BY id)
+             FROM runs WHERE repo = :'repo' AND ticket = :'ticket' AND kind <> 'distill'), '[]'),
+  'lessons', coalesce((SELECT json_agg(json_build_object(
+              'id', id, 'fingerprint', fingerprint, 'fix_kind', fix_kind, 'probe', probe,
+              'before', before_outcome, 'after', after_outcome, 'evidence', evidence,
+              'resolved', resolution IS NOT NULL) ORDER BY id)
+             FROM lessons WHERE repo = :'repo' AND ticket = :'ticket'), '[]'),
+  'cost_usd', (SELECT coalesce(sum(cost_usd), 0)::float8 FROM runs
+                WHERE repo = :'repo' AND ticket = :'ticket' AND kind <> 'distill'));
+SQL
+}
+
 # db_pending_evidence TICKET: prints, as one JSON object, the evidence of
 # the newest unresolved lesson for TICKET: id, fix, fix_kind, probe and
 # before_outcome; {} when there is none.

@@ -139,6 +139,11 @@ Need
     first loop (pre-flight) and by `chalk needs`. See
     [Saved needs](../guide/running/failures.md#saved-needs).
 
+Evidence record
+:   A signed in-toto statement, committed with a finished branch when
+    `CHALK_ATTEST=true`, of how the harness checked its work. See
+    [Evidence records](attestation.md).
+
 Holdout
 :   A run, a tenth by default (`CHALK_HOLDOUT`), that keeps certified
     stops in shadow mode, so that they go on being judged after they act.
