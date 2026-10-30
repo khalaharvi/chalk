@@ -48,6 +48,9 @@ run_context() {
   RUN_EVIDENCE=""
   # The need pre-flight found failing, for its next step.
   RUN_PREFLIGHT_NEED=""
+  # Tuning experiments (tune_draw): the prompts arm, whether the run may
+  # explore, the extra loops it has left, and whether it is in one.
+  RUN_ARM_PROMPTS="" RUN_ARM_EXPLORE="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
   RUN_FP_BASE=()
   # Set once the run has said how it ended (run_detain), so that
   # run_teardown parks the sandbox's work only after an unexpected exit.
@@ -813,7 +816,17 @@ cmd_run() {
 
   RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
   RUN_HOLDOUT="${| certify_holdout; }"
+  tune_draw "$RUN_WT"
+  if [[ $RUN_ARM_PROMPTS == b ]]; then RUN_PROMPTS="$(run_prompts_version)"; fi
+  if (( RUN_EXPLORE_LEFT > 0 )); then RUN_ARM_EXPLORE=true; fi
   run_open_sandbox
+  case "$RUN_ARM_PROMPTS" in
+    a) run_log "prompt A/B test (CHALK_PROMPT_AB): this run uses prompts a, the usual ones" ;;
+    b) run_log "prompt A/B test (CHALK_PROMPT_AB): this run uses prompts b, from $TUNE_AB_DIR/" ;;
+  esac
+  if [[ $RUN_ARM_EXPLORE == true ]]; then
+    run_log "exploring (CHALK_EXPLORE): if it would be detained for failing, this run gets up to $RUN_EXPLORE_LEFT more loop(s), once"
+  fi
   if [ -n "$CHALK_SETUP_CMD" ]; then
     run_log "running the setup command: $CHALK_SETUP_CMD"
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
@@ -954,6 +967,8 @@ cmd_run() {
     fi
 
     if [ "$progressed" = "true" ]; then
+      # A run explores once: progress in its extra loops ends the exploring.
+      if [[ -n $RUN_EXPLORING ]]; then RUN_EXPLORING="" RUN_EXPLORE_LEFT=0; fi
       failures=0
       feedback=""
       findings=""
@@ -986,7 +1001,12 @@ cmd_run() {
     fi
 
     failures=$((failures + 1))
-    if [ "$failures" -gt "$CHALK_MAX_RETRIES" ]; then
+    if (( failures > CHALK_MAX_RETRIES && RUN_EXPLORE_LEFT > 0 )); then
+      # Exploring (tune.sh): one more loop where the run would be detained,
+      # recorded as explored, so chalk tune can tell what it rescued.
+      RUN_EXPLORE_LEFT=$((RUN_EXPLORE_LEFT - 1)) RUN_EXPLORING=1
+      run_log "exploring: one more loop past CHALK_MAX_RETRIES=$CHALK_MAX_RETRIES ($RUN_EXPLORE_LEFT left)"
+    elif [ "$failures" -gt "$CHALK_MAX_RETRIES" ]; then
       run_detain "$ended" "$reason" "" "${lesson[@]}"
       return 1
     fi

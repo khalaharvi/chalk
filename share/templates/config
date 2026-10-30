@@ -55,6 +55,16 @@ CHALK_FP_RULES=shadow
 #          lines (needs CHALK_FP_RULES shadow or on). The dashboard's prompt
 #          sets compare the two.
 CHALK_FP_FEEDBACK=false
+# Tuning experiments, read by `chalk tune`. CHALK_EXPLORE=true gives a
+# CHALK_EXPLORE_SHARE of runs CHALK_EXPLORE_RETRIES more loops, once, where
+# they would be detained for failing, to measure whether more retries pay;
+# its spend is capped by CHALK_EXPLORE_BUDGET_USD on the machine.
+# CHALK_PROMPT_AB=true runs half the runs on the prompts in
+# .chalk/prompts-b/ (a or b runs every run on one).
+CHALK_EXPLORE=false
+CHALK_EXPLORE_RETRIES=2
+CHALK_EXPLORE_SHARE=0.20
+CHALK_PROMPT_AB=false
 # Commit a signed record of how each finished branch was checked
 # (.chalk/evidence/TICKET.json: the harness's rubric runs, verdicts, cost,
 # review, lessons and needs), which CI checks with `chalk attest verify`.

@@ -28,7 +28,7 @@ for module in log runtime jobs system; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
-for module in repo forge state config db certify decider memory sandbox evidence attest fingerprint agent \
+for module in repo forge state config db certify decider memory sandbox evidence attest tune fingerprint agent \
               run fleet lifecycle dashboard setup share; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib" "$module.sh"
@@ -58,6 +58,8 @@ Work
   chalk logs TICKET [-f]       Show a run log
   chalk dashboard [--days N]   Open the report card: spend, waste and what to tune
   chalk certify [--json]       Show whether each early stop has earned the right to act
+  chalk tune [--json] [--apply]
+                               Recommend settings from this repository's own runs
   chalk share [--days N] [--output FILE] [--json]
                                Print an anonymised report card to post if you choose; sends nothing
 
@@ -92,6 +94,7 @@ main() {
     logs)          cmd_logs "$@" ;;
     dashboard)     cmd_dashboard "$@" ;;
     certify)       cmd_certify "$@" ;;
+    tune)          cmd_tune "$@" ;;
     share)         cmd_share "$@" ;;
     office-hours)  cmd_office_hours "$@" ;;
     needs)         cmd_needs "$@" ;;

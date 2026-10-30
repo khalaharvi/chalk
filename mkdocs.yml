@@ -117,6 +117,7 @@ nav:
           - The decider: guide/configuring/decider.md
       - Operating:
           - Verdicts and the report card: guide/operating/dashboard.md
+          - Tuning: guide/operating/tuning.md
           - Pull and merge request gates: guide/operating/merge-request-gates.md
           - Troubleshooting: guide/operating/troubleshooting.md
   - Reference:

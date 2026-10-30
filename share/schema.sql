@@ -126,6 +126,13 @@ ALTER TABLE lessons ADD COLUMN IF NOT EXISTS scope TEXT;
 --                   not), retired (passes in an environment without the
 --                   fix, so it is moot: chalk needs); NULL without a
 --                   probe. Only NULL and proved lessons are recalled.
+-- Tuning experiments (lib/tune.sh), per call: arm_prompts a | b when the
+-- run is in a prompt A/B test (CHALK_PROMPT_AB); arm_explore when it may
+-- explore (CHALK_EXPLORE); explored for a loop run past CHALK_MAX_RETRIES
+-- because it explored. NULL outside an experiment.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS arm_prompts TEXT;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS arm_explore BOOLEAN;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS explored BOOLEAN;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fix JSONB;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fix_kind TEXT;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS probe TEXT;

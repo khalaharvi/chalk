@@ -37,6 +37,11 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_FP_RULES]=shadow
   [CHALK_FP_FEEDBACK]=false
   [CHALK_TEST_REPORT]=""
+  # Tuning experiments (tune.sh, chalk tune).
+  [CHALK_EXPLORE]=false
+  [CHALK_EXPLORE_RETRIES]=2
+  [CHALK_EXPLORE_SHARE]=0.20
+  [CHALK_PROMPT_AB]=false
   # Commit a signed evidence record with each finished branch (attest.sh).
   [CHALK_ATTEST]=false
   [CHALK_DECIDER]=off
@@ -73,6 +78,9 @@ declare -gA CHALK_ENV_DEFAULTS=(
   # held back again if a later block of runs shows it wrong too often (see
   # chalk certify). A repository cannot change it.
   [CHALK_HOLDOUT]=0.10
+  # The most that loops run because a run explored (CHALK_EXPLORE) may
+  # cost on this machine in 30 days. A repository cannot raise it.
+  [CHALK_EXPLORE_BUDGET_USD]=10.00
   # The SSH private key that signs evidence records (CHALK_ATTEST=true), and
   # the name allowed_signers knows it by. By default, a key Chalk makes in
   # its state directory, and your git email.
@@ -176,6 +184,20 @@ load_config() {
     die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
   [[ $CHALK_AGENT_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_AGENT_TIMEOUT must be a positive number of seconds (got '$CHALK_AGENT_TIMEOUT')"
+  case "$CHALK_EXPLORE" in
+    true|false) ;;
+    *) die "CHALK_EXPLORE must be 'true' or 'false' (got '$CHALK_EXPLORE')" ;;
+  esac
+  [[ $CHALK_EXPLORE_RETRIES =~ ^[1-5]$ ]] ||
+    die "CHALK_EXPLORE_RETRIES must be a whole number from 1 to 5 (got '$CHALK_EXPLORE_RETRIES')"
+  [[ $CHALK_EXPLORE_SHARE =~ ^(0(\.[0-9]{1,2})?|1(\.0{1,2})?)$ ]] ||
+    die "CHALK_EXPLORE_SHARE must be a share from 0 to 1, to at most two places (got '$CHALK_EXPLORE_SHARE')"
+  [[ $CHALK_EXPLORE_BUDGET_USD =~ ^[0-9]+(\.[0-9]{1,2})?$ ]] ||
+    die "CHALK_EXPLORE_BUDGET_USD must be an amount in dollars (got '$CHALK_EXPLORE_BUDGET_USD')"
+  case "$CHALK_PROMPT_AB" in
+    true|false|a|b) ;;
+    *) die "CHALK_PROMPT_AB must be 'true', 'false', 'a' or 'b' (got '$CHALK_PROMPT_AB')" ;;
+  esac
   case "$CHALK_ATTEST" in
     true|false) ;;
     *) die "CHALK_ATTEST must be 'true' or 'false' (got '$CHALK_ATTEST')" ;;

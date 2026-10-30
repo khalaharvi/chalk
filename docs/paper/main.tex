@@ -332,6 +332,9 @@ Harness optimisation has converged on a common object: a tree of harness files (
 \item[Trajectory-altering] (prompts, tools, recall changes). Need randomised assignment by ticket. Let $J=\Pr[\text{review pass}]-\mu\cdot\$$. A change is admitted iff the one-sided lower bound on $J_{\text{new}}-J_{\text{old}}$ is positive, a conservative rule in the spirit of SPIBB and high-confidence off-policy evaluation \citep{laroche2019spibb,thomas2015hcope}.
 \end{description}
 
+\paragraph{Implementation.}
+Chalk implements the three classes in \texttt{chalk tune}. The decision-level, stop-only knob is a lower retry limit $j<K$. Every run outside the exploring arm shows exactly where $j$ would have fired and what followed. Because the candidates are nested, a bolder $j$ fires wherever a more cautious one does, and earlier. So they are tested as a fixed sequence, from the most cautious down, each at the full $\alpha$, stopping at the first failure. That controls the family-wise error rate without correction. A candidate passes on at least $b=46$ judged runs, $\LB_{0.95}\ge 0.90$, and a positive net bound. The spend-extending knob is studied by randomized exploration. A configurable share of runs gets at most $r$ extra loops, once, at the point where it would be detained. Those loops are recorded as explored, and a machine-level ceiling caps their total cost per 30 days. Raising $K$ is recommended when the lower bound on the rescue rate, times the value of a checkpoint, exceeds the upper bound on the explored cost per run. Prompt changes use a randomized A/B test: each run draws the usual prompts or a variant at even odds. Adoption needs a two-sample Hoeffding lower bound on the variant's advantage in value per run (a finished run's value less its cost) to be above zero. Variants are written by the engineer, and tuning only judges them; proposing them with a model, as Harness$^2$ does, is left to future work.
+
 \paragraph{Guards.}
 Tuned edits may not touch the rubric command, test files or the verdict code, and every adopted edit is versioned with its evidence (\S\ref{sec:evidence}). Self-improvement loops can game visible evaluators \citep{zhang2025dgm}, and poisoned inputs can persist across later clean evolution \citep{roesner2026trusting}. For per-repository tuning the analogous attack is a hostile ticket.
 
@@ -509,7 +512,7 @@ Fingerprint, lexical and embedding recall; decider rerank & shipped (v0.7--v0.8)
 Local decider (its 20-run, 90\% gate replaced by the block gate) & shipped (v0.8) \\
 Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chalk certify} & implemented (this work) \\
 Probes, needs, pre-flight, evidence-based expiry (\texttt{chalk needs}) & implemented (this work) \\
-Per-repository tuning (\texttt{chalk tune}) & designed, not shipped \\
+Per-repository tuning (\texttt{chalk tune}, exploration, prompt A/B) & implemented (this work) \\
 Evidence record and CI verification (\texttt{chalk attest}) & implemented (this work) \\
 \bottomrule
 \end{tabularx}

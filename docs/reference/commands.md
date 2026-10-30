@@ -101,6 +101,13 @@ often it is right, one on what each firing saved, and the net after `N`
 dollars (5 by default) per wrongful stop. Nothing leaves the machine. See
 [May the verdicts act yet?](../guide/operating/dashboard.md#may-the-verdicts-act-yet).
 
+**`chalk tune [--json] [--days N] [--checkpoint-usd N] [--success-usd N] [--apply]`**
+reads this repository's runs and recommends settings, each on the evidence
+its kind of change needs: fewer retries from every run, more retries only
+from exploring runs (`CHALK_EXPLORE`), prompts only from an A/B test
+(`CHALK_PROMPT_AB`). `--apply` writes what it recommends, for you to
+commit. See [Tuning](../guide/operating/tuning.md).
+
 **`chalk share [--days N] [--output FILE] [--json]`** prints an anonymised
 summary of the report card for the last N days (30 by default) as JSON:
 counts, rates, rounded costs, model families and the size of the machine,
