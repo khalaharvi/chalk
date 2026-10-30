@@ -586,6 +586,39 @@ check "chalk needs --prune: drops the retired need, keeps the others" \
 git checkout -q -- .chalk/needs
 cd "$tmp/demo"
 
+# 2d. With CHALK_ATTEST=true a finished branch carries a signed evidence
+# record, committed under .chalk/evidence, which chalk attest verify checks
+# against the branch, re-running the rubric with --rerun; a commit after it
+# makes it fail. CI trusts the key through the line chalk attest key prints.
+chalk new PROJ-95 Attested feature >/dev/null
+cd "$tmp/demo.worktrees/PROJ-95"
+git add -A && git commit -q -m "spec"
+CHALK_ATTEST=true chalk run > "$tmp/run95.log" 2>&1 || { cat "$tmp/run95.log"; fail "an attested run"; }
+check "attest: the record is committed on the branch, and the request names it" \
+  sh -c "grep -q 'evidence record committed: .chalk/evidence/PROJ-95.json' '$tmp/run95.log' &&
+    test \"\$(git log -1 --format=%s)\" = 'chalk: evidence for PROJ-95' &&
+    grep -q 'Evidence: .\.chalk/evidence/PROJ-95\.json., signed by the harness' '$FAKE_STATE/glab.log'"
+check "attest: the record is an in-toto statement about this branch's tree, from the harness's ledger" \
+  test "$(jq -r .payload .chalk/evidence/PROJ-95.json | openssl base64 -d -A |
+          jq -r '"\(.subject[0].name) \(.predicate.rubric.command) \(.predicate.ledger.loops | length > 0)"')" = \
+    "chalk/PROJ-95 test ! -e BROKEN true"
+chalk attest key > "$tmp/attest-key.log" 2>&1 || { cat "$tmp/attest-key.log"; fail "chalk attest key"; }
+tail -n 1 "$tmp/attest-key.log" > "$tmp/allowed_signers"
+CHALK_ATTEST_SIGNERS="$tmp/allowed_signers" chalk attest verify --rerun PROJ-95 > "$tmp/verify95.log" 2>&1 ||
+  { cat "$tmp/verify95.log"; fail "chalk attest verify"; }
+check "attest verify: signature, subject, tests, cost, and a fresh rubric run all hold" \
+  test "$(grep -c '^  [a-z]*: ok: ' "$tmp/verify95.log")" -eq 6
+echo late > late.txt && git add late.txt && git commit -q -m "a change after the record"
+if CHALK_ATTEST_SIGNERS="$tmp/allowed_signers" chalk attest verify PROJ-95 > "$tmp/verify95b.log" 2>&1; then
+  fail "a record must not verify after the branch changed"
+fi
+check "attest verify: a commit after the record fails it, saying so" \
+  grep -q '  subject: FAIL: .*the branch changed after it was recorded' "$tmp/verify95b.log"
+if chalk attest verify PROJ-95 > "$tmp/verify95c.log" 2>&1; then fail "a record must not verify without trusted signers"; fi
+check "attest verify: with no trusted signers, it says how to add one" \
+  grep -q "signature: FAIL: no trusted signers: add 'chalk attest key' output to .chalk/allowed_signers" "$tmp/verify95c.log"
+cd "$tmp/demo"
+
 # 2b'''. An agent call that cannot run is reported with the CLI's own words.
 # A refused key stops the run at the spec check, before any loop.
 chalk new PROJ-75 Refused key >/dev/null

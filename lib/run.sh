@@ -765,6 +765,15 @@ run_graduate() {
 - Agent review before submission: did not run ($RUN_REVIEW_ERROR)"
   fi
 
+  local evidence=""
+  if [[ $CHALK_ATTEST == true ]]; then
+    attest_record "$RUN_WT" "$RUN_TICKET" "$RUN_BRANCH"
+    if [[ -n $REPLY ]]; then
+      run_log "evidence record committed: $REPLY"
+      evidence="
+- Evidence: \`$REPLY\`, signed by the harness; check it with \`chalk attest verify\`"
+    fi
+  fi
   need "${| forge_cli; }"
   forge_push "$RUN_WT" "$RUN_BRANCH"
   forge_open_request "$RUN_WT" "$RUN_BRANCH" "$CHALK_BASE_BRANCH" "$(spec_title "$RUN_SPEC")" \
@@ -774,7 +783,7 @@ run_graduate() {
 - Agent loops: ${summary[loops]}
 - Agent cost: ${| agent_usd "${summary[cost]}"; }
 - Human interventions (office hours): ${summary[fixes]}
-- Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review
+- Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review$evidence
 
 This change was written by an agent. Review the diff as you would any other."
   db_event "$RUN_TICKET" submitted 2>/dev/null || true

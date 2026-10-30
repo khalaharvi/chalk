@@ -118,6 +118,12 @@ lesson, saves a proved environment probe as a need, moves to a
 stops, unless `--unproved` resumes anyway with the lesson kept out of
 recall. See [Detention and office hours](../guide/running/failures.md).
 
+**`chalk attest key`** prints the line that lets CI trust evidence records
+this machine signs, for `.chalk/allowed_signers`. **`chalk attest verify
+[--rerun] [TICKET...]`** checks a branch's records: signature, subject
+tree, changed test files and cost, and with `--rerun` the rubric and the
+saved needs in a fresh sandbox. See [Evidence records](attestation.md).
+
 **`chalk needs [--prune]`** checks every need saved in `.chalk/needs`, in
 fresh sandboxes, with and without its fix: `holds`, `FAILS`, or
 `retired` when it passes without the fix too. `--prune` removes retired

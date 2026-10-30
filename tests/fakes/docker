@@ -218,6 +218,10 @@ case "$cmd" in
         # FAKE_CERTIFY=JSON: what db_certify_verdicts answers (certify.sh);
         # unset, nothing, as when there is no evidence to read.
         *"-- chalk certify: verdicts"*) printf '%s\n' "${FAKE_CERTIFY:-}" ;;
+        # The evidence record's ledger: FAKE_ATTEST_LEDGER, or two calls.
+        *"-- chalk attest: ledger"*)
+          ledger='{"loops":[{"loop":1,"kind":"continue","rubric_exit":0,"cost_usd":0.25},{"loop":0,"kind":"review","rubric_exit":0,"cost_usd":0.25}],"lessons":[],"cost_usd":0.5}'
+          printf '%s\n' "${FAKE_ATTEST_LEDGER:-$ledger}" ;;
         # FAKE_PENDING_EVIDENCE=JSON: what db_pending_evidence answers; {}
         # by default, as for a lesson with no probe.
         *"'before_outcome', before_outcome"*) printf '%s\n' "${FAKE_PENDING_EVIDENCE:-{\}}" ;;
