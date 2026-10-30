@@ -11,6 +11,9 @@ trap 'rm -rf "$tmp"' EXIT
 export PATH="$here/fakes:$here/../bin:$PATH"
 export FAKE_STATE="$tmp/fake" XDG_STATE_HOME="$tmp/state" HOME="$tmp/home"
 export ANTHROPIC_API_KEY="test-key"
+# No run is a holdout (certify.sh) unless a test says so: a certified stop
+# acts every time, so a test of it cannot pass or fail by chance.
+export CHALK_HOLDOUT=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
 mkdir -p "$FAKE_STATE" "$HOME"
 
