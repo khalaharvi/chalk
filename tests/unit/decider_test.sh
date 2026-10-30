@@ -733,8 +733,11 @@ check "a loop whose turn comes after a wait is answered" ask
 check "... in a time that includes the wait ($DECIDER_MS ms)" test "$DECIDER_MS" -ge 400
 wait "$holder"
 max="$(sed -n 's/^max-time=\([0-9.]*\) .*/\1/p' "$FAKE_STATE/decider.log")"
+# Without the wait the call could take nearly the whole 2 s; the wait for
+# the 0.5 s turn takes at least a quarter of a second of it, less what the
+# caller spent before it started waiting, which varies by machine.
 check "... and its call may take only what the wait left of the budget (--max-time $max)" \
-  awk -v m="$max" 'BEGIN { exit !(m > 0 && m <= 1.6) }'
+  awk -v m="$max" 'BEGIN { exit !(m > 0 && m <= 1.75) }'
 
 # --- health, with /health optional ------------------------------------------
 
