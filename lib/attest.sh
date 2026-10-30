@@ -70,7 +70,9 @@ attest_tree() {
 # (HEAD) changed or deleted. Added tests are not listed: writing them is
 # the work.
 attest_tests_changed() {
-  git -C "$1" diff --name-only --diff-filter=MD "$2" "${3:-HEAD}" -- . ":(exclude).chalk" |
+  # A test renamed and edited, or moved out of the test paths, counts as
+  # the existing test deleted, whatever git's rename detection is set to.
+  git -C "$1" diff --no-renames --name-only --diff-filter=MD "$2" "${3:-HEAD}" -- . ":(exclude).chalk" |
     grep -E "$ATTEST_TEST_PATHS" | LC_ALL=C sort || true
 }
 
@@ -98,7 +100,7 @@ attest_statement() {
      --arg base_tree "$base_tree" --arg base_branch "$CHALK_BASE_BRANCH" --arg version "${CHALK_VERSION:-}" \
      --arg prompts "${RUN_PROMPTS:-}" --arg fp_rules "${CHALK_FP_RULES:-}" --arg decider "${CHALK_DECIDER:-}" \
      --arg image "$CHALK_IMAGE" --arg image_id "$image_id" --argjson needs "$needs" \
-     --arg rubric "$CHALK_TEST_CMD" --arg review "${RUN_REVIEW_SUMMARY:-}" --arg review_error "${RUN_REVIEW_ERROR:-}" \
+     --arg rubric "$CHALK_TEST_CMD" --arg setup "$CHALK_SETUP_CMD" --arg review "${RUN_REVIEW_SUMMARY:-}" --arg review_error "${RUN_REVIEW_ERROR:-}" \
      --argjson tests "$tests" --argjson ledger "$ledger" --arg type "$ATTEST_PREDICATE" \
      --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     {_type: "https://in-toto.io/Statement/v1",
@@ -109,7 +111,7 @@ attest_statement() {
        base: {branch: $base_branch, commit: $base, tree: $base_tree},
        harness: {chalk: $version, prompts: $prompts, fp_rules: $fp_rules, decider: $decider},
        sandbox: {image: $image, image_id: $image_id, needs: $needs},
-       rubric: {command: $rubric},
+       rubric: {command: $rubric, setup: $setup},
        review: (if $review != "" then {ran: true, summary: $review}
                 else {ran: false, error: $review_error} end),
        tests_changed: $tests,
@@ -173,25 +175,45 @@ attest_payload() {
   jq -r '.payload' "$1" | openssl base64 -d -A
 }
 
-# attest_verify_one DIR FILE RERUN VAR: checks the record FILE against the
-# repository at DIR and fills VAR with one entry per check: signature,
+# attest_trusted DIR REF -> REPLY: the commit whose ATTEST_SIGNERS_FILE
+# verification trusts: the merge base of HEAD with REF, the base branch.
+# The branch's own copy is never trusted, since whoever pushes the branch
+# could add a key to it. Empty when there is no merge base.
+attest_trusted() {
+  REPLY="$(git -C "$1" merge-base "$2" HEAD 2>/dev/null || true)"
+}
+
+# attest_signers DIR TRUSTED OUT: writes the signers verification trusts
+# to the file OUT: CHALK_ATTEST_SIGNERS, else ATTEST_SIGNERS_FILE as
+# committed at the commit TRUSTED. Fails when there are none.
+attest_signers() {
+  if [[ -n ${CHALK_ATTEST_SIGNERS:-} ]]; then
+    cat "$CHALK_ATTEST_SIGNERS" > "$3" 2>/dev/null
+  else
+    [[ -n $2 ]] && git -C "$1" show "$2:$ATTEST_SIGNERS_FILE" > "$3" 2>/dev/null
+  fi
+}
+
+# attest_verify_one DIR FILE RERUN VAR TRUSTED: checks the record FILE
+# against the repository at DIR, trusting the signers committed at TRUSTED
+# (attest_signers), and fills VAR with one entry per check: signature,
 # subject, tests, cost and, with RERUN 1, rubric and needs. Each value is
 # "ok: ..." or "FAIL: ..." (or "skip: ..." when it cannot be checked).
 attest_verify_one() {
-  local dir="$1" file="$2" rerun="$3" payload principal sig base tree recorded now total sum
+  local dir="$1" file="$2" rerun="$3" trusted="${5:-}" payload principal sig signers base tree recorded now total sum
   local -n __checks=$4
   __checks=()
-  payload="$(mktemp)" sig="$(mktemp)"
+  payload="$(mktemp)" sig="$(mktemp)" signers="$(mktemp)"
   if ! attest_payload "$file" > "$payload" 2>/dev/null || ! jq -e . "$payload" >/dev/null 2>&1; then
     __checks["signature"]="FAIL: not a DSSE envelope with a JSON payload"
-    rm -f "$payload" "$sig"
+    rm -f "$payload" "$sig" "$signers"
     return 0
   fi
   principal="$(jq -r '.signatures[0].keyid // "" | split(" ")[0]' "$file")"
   jq -r '.signatures[0].sig // ""' "$file" | openssl base64 -d -A > "$sig" 2>/dev/null || true
-  if [[ ! -f $dir/$ATTEST_SIGNERS_FILE && -z ${CHALK_ATTEST_SIGNERS:-} ]]; then
-    __checks["signature"]="FAIL: no trusted signers: add 'chalk attest key' output to $ATTEST_SIGNERS_FILE"
-  elif attest_pae "$payload" | ssh-keygen -Y verify -f "${CHALK_ATTEST_SIGNERS:-$dir/$ATTEST_SIGNERS_FILE}" \
+  if ! attest_signers "$dir" "$trusted" "$signers"; then
+    __checks["signature"]="FAIL: no trusted signers: commit 'chalk attest key' output to $ATTEST_SIGNERS_FILE on the base branch"
+  elif attest_pae "$payload" | ssh-keygen -Y verify -f "$signers" \
          -I "$principal" -n "$ATTEST_NAMESPACE" -s "$sig" >/dev/null 2>&1; then
     __checks["signature"]="ok: signed by $principal"
   else
@@ -230,17 +252,28 @@ attest_verify_one() {
   fi
 
   if (( rerun )); then attest_rerun "$dir" "$payload" "$4"; fi
-  rm -f "$payload" "$sig"
+  rm -f "$payload" "$sig" "$signers"
 }
 
 # attest_rerun DIR STATEMENT_FILE VAR: runs the rubric, then every saved
-# need, in a fresh sandbox on CHALK_IMAGE with the branch checked out at
-# DIR, as the harness did, and adds the rubric and needs checks to VAR.
+# need, in a fresh sandbox with the branch checked out at DIR, as the
+# harness did, and adds the rubric and needs checks to VAR. The rubric,
+# setup and image are those the record names, not the branch's
+# .chalk/config, which the branch itself could have changed; a local image
+# whose ID differs from the recorded one is reported.
 attest_rerun() {
-  local dir="$1" name io need probe failed=0 status=0
+  local dir="$1" name io need probe failed=0 status=0 image_id note=""
   local -n __rerun=$3
   local -a needs
   local -A got
+  local CHALK_TEST_CMD CHALK_SETUP_CMD CHALK_IMAGE
+  CHALK_TEST_CMD="$(jq -r '.predicate.rubric.command // ""' "$2")"
+  CHALK_SETUP_CMD="$(jq -r '.predicate.rubric.setup // ""' "$2")"
+  CHALK_IMAGE="$(jq -r '.predicate.sandbox.image // ""' "$2")"
+  if [[ -z $CHALK_TEST_CMD || -z $CHALK_IMAGE ]]; then
+    __rerun["rubric"]="FAIL: the record names no rubric command or image to re-run"
+    return 0
+  fi
   name="${| sandbox_name "attest-verify"; }"
   io="$(mktemp -d)"
   sandbox_ensure_image >/dev/null
@@ -253,10 +286,14 @@ attest_rerun() {
   if [[ -n $CHALK_SETUP_CMD ]]; then sandbox_sh "$name" "$CHALK_SETUP_CMD" > "$io/setup.log" 2>&1 || true; fi
   docker exec -w /work/repo "$name" timeout "$CHALK_RUBRIC_TIMEOUT" bash -c "$CHALK_TEST_CMD" > "$io/rubric.log" 2>&1 ||
     status=$?
+  image_id="$(docker image inspect -f '{{.Id}}' "$CHALK_IMAGE" 2>/dev/null || true)"
+  if [[ $image_id != "$(jq -r '.predicate.sandbox.image_id // ""' "$2")" ]]; then
+    note=" (its image ID differs from the recorded one)"
+  fi
   if (( status == 0 )); then
-    __rerun["rubric"]="ok: the rubric passes in a fresh sandbox on $CHALK_IMAGE"
+    __rerun["rubric"]="ok: the recorded rubric passes in a fresh sandbox on $CHALK_IMAGE$note"
   else
-    __rerun["rubric"]="FAIL: the rubric exits $status in a fresh sandbox: $(tail -n 3 "$io/rubric.log" | tr '\n' ' ')"
+    __rerun["rubric"]="FAIL: the recorded rubric exits $status in a fresh sandbox on $CHALK_IMAGE$note: $(tail -n 3 "$io/rubric.log" | tr '\n' ' ')"
   fi
   evidence_needs "$dir" needs 2>/dev/null
   for need in "${needs[@]}"; do
@@ -273,9 +310,9 @@ attest_rerun() {
   rm -rf "$io"
 }
 
-# chalk attest key | verify [--rerun] [TICKET...]
+# chalk attest key | verify [--rerun] [--base REF] [TICKET...]
 cmd_attest() {
-  local sub="${1:-}" rerun=0 root file check failed=0
+  local sub="${1:-}" rerun=0 root file check failed=0 base="" trusted
   local -a tickets=() files=()
   local -A checks
   [[ $# -eq 0 ]] || shift
@@ -288,7 +325,10 @@ cmd_attest() {
       while [ $# -gt 0 ]; do
         case "$1" in
           --rerun) rerun=1 ;;
-          -*) die "usage: chalk attest verify [--rerun] [TICKET...]" ;;
+          --base)
+            [[ -n ${2:-} ]] || die "usage: chalk attest verify [--rerun] [--base REF] [TICKET...]"
+            base="$2"; shift ;;
+          -*) die "usage: chalk attest verify [--rerun] [--base REF] [TICKET...]" ;;
           *) tickets+=("$1") ;;
         esac
         shift
@@ -296,15 +336,27 @@ cmd_attest() {
       need git jq openssl ssh-keygen
       root="${| repo_root; }"
       load_config "$root"
+      if [[ -z $base ]]; then
+        base="origin/$CHALK_BASE_BRANCH"
+        git -C "$root" rev-parse -q --verify "$base^{commit}" >/dev/null || base="$CHALK_BASE_BRANCH"
+      fi
+      trusted="${| attest_trusted "$root" "$base"; }"
+      [[ -n $trusted ]] ||
+        die "this branch has no merge base with $base: fetch it with enough history, or name the base branch with --base"
       if (( ${#tickets[@]} )); then
         for file in "${tickets[@]}"; do files+=("$root/$ATTEST_DIR/$file.json"); done
       else
-        files=("$root/$ATTEST_DIR"/*.json)
+        # The records this branch added or changed: those of tickets merged
+        # into the base earlier name trees that are gone, and were checked
+        # when they were merged.
+        while IFS= read -r file; do
+          [[ $file == *.json ]] && files+=("$root/$file")
+        done < <(git -C "$root" diff --no-renames --name-only --diff-filter=AM "$trusted" HEAD -- "$ATTEST_DIR")
       fi
-      (( ${#files[@]} )) || die "no evidence record in $ATTEST_DIR (set CHALK_ATTEST=true before the run)"
+      (( ${#files[@]} )) || die "this branch adds no evidence record in $ATTEST_DIR (set CHALK_ATTEST=true before the run)"
       for file in "${files[@]}"; do
         [[ -f $file ]] || die "no evidence record: ${file#"$root/"}"
-        attest_verify_one "$root" "$file" "$rerun" checks
+        attest_verify_one "$root" "$file" "$rerun" checks "$trusted"
         info "${file#"$root/"}:"
         for check in signature subject tests cost rubric needs; do
           [[ -v checks[$check] ]] || continue
@@ -313,6 +365,6 @@ cmd_attest() {
         done
       done
       (( ! failed )) || die "an evidence record does not hold" ;;
-    *) die "usage: chalk attest key | chalk attest verify [--rerun] [TICKET...]" ;;
+    *) die "usage: chalk attest key | chalk attest verify [--rerun] [--base REF] [TICKET...]" ;;
   esac
 }

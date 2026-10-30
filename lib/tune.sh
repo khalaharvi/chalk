@@ -7,7 +7,8 @@
 #                  run (as certify.sh does for verdicts). Candidates are
 #                  tested from the most cautious down, each at the full 5%,
 #                  stopping at the first that fails (fixed-sequence testing,
-#                  which needs no correction for testing several).
+#                  which needs no correction for testing several), each on
+#                  its latest complete block of judged runs, as the gate is.
 #   spend-extending  more retries cannot be judged from runs that stopped:
 #                  the loops after the stop never ran. With CHALK_EXPLORE=true
 #                  a random share of runs get CHALK_EXPLORE_RETRIES more loops
@@ -26,8 +27,9 @@ TUNE_DAYS=90
 TUNE_EXPLORE_DAYS=30
 
 # The arms of this run (tune_draw): a or b for the prompts (empty without
-# an A/B test), and how many extra loops it may use once (0 without).
-RUN_ARM_PROMPTS="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
+# an A/B test), whether that was drawn at random (only drawn runs are
+# evidence), and how many extra loops it may use once (0 without).
+RUN_ARM_PROMPTS="" RUN_ARM_DRAWN="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
 
 # tune_share_percent SHARE -> REPLY: a share from 0 to 1, to two places, as
 # a whole percentage; 0 for anything else.
@@ -42,19 +44,25 @@ tune_share_percent() {
 }
 
 # tune_draw ROOT: draws this run's arms. Prompts: with CHALK_PROMPT_AB true
-# and ROOT/TUNE_AB_DIR present, a or b at even odds; a or b set by name.
-# Exploration: with CHALK_EXPLORE true, CHALK_EXPLORE_RETRIES extra loops on
-# a CHALK_EXPLORE_SHARE of runs, unless the last TUNE_EXPLORE_DAYS days'
-# extra loops already cost CHALK_EXPLORE_BUDGET_USD (a database that cannot
-# say counts as spent: no exploring without a ceiling). Reports each arm.
+# and ROOT/TUNE_AB_DIR present, a or b at even odds; a or b set by name,
+# which is not recorded as an arm, since a run that did not draw it is no
+# evidence. Exploration: with CHALK_EXPLORE true, CHALK_EXPLORE_RETRIES
+# extra loops on a CHALK_EXPLORE_SHARE of runs, while there is room under
+# the ceiling (tune_explore_room). Reports each arm.
 tune_draw() {
-  local root="$1" spent pct
-  RUN_ARM_PROMPTS="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
+  local root="$1" pct
+  RUN_ARM_PROMPTS="" RUN_ARM_DRAWN="" RUN_EXPLORE_LEFT=0 RUN_EXPLORING=""
   case "${CHALK_PROMPT_AB:-false}" in
-    a|b) RUN_ARM_PROMPTS="$CHALK_PROMPT_AB" ;;
+    a) RUN_ARM_PROMPTS=a ;;
+    b)
+      if [[ -d $root/$TUNE_AB_DIR ]]; then
+        RUN_ARM_PROMPTS=b
+      else
+        warn "CHALK_PROMPT_AB=b, but there is no $TUNE_AB_DIR/; running on the usual prompts"
+      fi ;;
     true)
       if [[ -d $root/$TUNE_AB_DIR ]]; then
-        RUN_ARM_PROMPTS=a
+        RUN_ARM_PROMPTS=a RUN_ARM_DRAWN=1
         if (( SRANDOM % 2 )); then RUN_ARM_PROMPTS=b; fi
       else
         warn "CHALK_PROMPT_AB=true, but there is no $TUNE_AB_DIR/ with the prompts to compare; running without the test"
@@ -63,27 +71,41 @@ tune_draw() {
   [[ ${CHALK_EXPLORE:-false} == true ]] || return 0
   pct="${| tune_share_percent "$CHALK_EXPLORE_SHARE"; }"
   (( SRANDOM % 100 < pct )) || return 0
-  spent="$(db_explore_spent "$TUNE_EXPLORE_DAYS" 2>/dev/null || true)"
-  if [[ ! $spent =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    warn "CHALK_EXPLORE=true, but the spend on exploring could not be read, so this run does not explore"
-    return 0
-  fi
-  if awk -v s="$spent" -v c="$CHALK_EXPLORE_BUDGET_USD" 'BEGIN { exit !(s >= c) }'; then
-    warn "exploring has spent \$$spent in the last $TUNE_EXPLORE_DAYS days, at its ceiling (CHALK_EXPLORE_BUDGET_USD=$CHALK_EXPLORE_BUDGET_USD); this run does not explore"
-    return 0
-  fi
+  tune_explore_room || return 0
   RUN_EXPLORE_LEFT="$CHALK_EXPLORE_RETRIES"
 }
 
-# tune_judge DATA RETRIES BLOCK -> REPLY: tune's findings from DATA (as
+# tune_explore_room: true when one more explored loop, at most
+# CHALK_BUDGET_USD, keeps what explored loops cost on this machine in the
+# last TUNE_EXPLORE_DAYS days within CHALK_EXPLORE_BUDGET_USD. Checked when
+# a run draws its arms and again before each extra loop. A database that
+# cannot say counts as full: no exploring without a ceiling. Runs that
+# explore at the same moment can each take the last room, so the ceiling
+# can be passed by at most one loop per other parallel run.
+tune_explore_room() {
+  local spent
+  spent="$(db_explore_spent "$TUNE_EXPLORE_DAYS" 2>/dev/null || true)"
+  if [[ ! $spent =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    warn "CHALK_EXPLORE=true, but the spend on exploring could not be read, so this run does not explore"
+    return 1
+  fi
+  if awk -v s="$spent" -v b="$CHALK_BUDGET_USD" -v c="$CHALK_EXPLORE_BUDGET_USD" 'BEGIN { exit !(s + b > c) }'; then
+    warn "exploring has spent \$$spent in the last $TUNE_EXPLORE_DAYS days; one more loop, up to \$$CHALK_BUDGET_USD, would pass its ceiling (CHALK_EXPLORE_BUDGET_USD=$CHALK_EXPLORE_BUDGET_USD), so this run does not explore"
+    return 1
+  fi
+}
+
+# tune_judge DATA RETRIES BLOCK [MAX_WRONG] -> REPLY: tune's findings from DATA (as
 # db_tune_data prints it), as one JSON object: retries (the stop-only test
 # of each lower CHALK_MAX_RETRIES than RETRIES, and the one recommended),
 # explore (what the extra loops rescued and cost) and ab (prompts a against
 # b). CHECKPOINT_USD and SUCCESS_USD (globals TUNE_CHECKPOINT_USD and
-# TUNE_SUCCESS_USD) price a checkpoint and a finished run; a stop needs at
-# least BLOCK judged runs before it is tested.
+# TUNE_SUCCESS_USD) price a checkpoint and a finished run. A lower setting
+# passes as an early stop does (certify.sh): its latest complete block of
+# BLOCK judged runs, and the block still filling, have at most MAX_WRONG
+# (CERTIFY_MAX_WRONG) wrongful stops, and it saves money net of them.
 tune_judge() {
-  REPLY="$(certify_jq -c --argjson k "$2" --argjson need "$3" --argjson cp "${TUNE_CHECKPOINT_USD:-5}" \
+  REPLY="$(certify_jq -c --argjson k "$2" --argjson need "$3" --argjson maxw "${4:-$CERTIFY_MAX_WRONG}" --argjson cp "${TUNE_CHECKPOINT_USD:-5}" \
              --argjson win "${TUNE_SUCCESS_USD:-10}" '
     def loops: [.loops[] | select(.kind == "continue" or .kind == "retry" or .kind == "fix-review")];
     # The loop index at which j+1 non-progress loops in a row are reached.
@@ -99,20 +121,31 @@ tune_judge() {
        | select(.judged)] as $f
       | ($f | length) as $n | ([$f[] | select(.wrong)] | length) as $w
       | ([$f[] | select(.wrong | not) | .saved] | add // 0) as $saved
-      | {retries: $j, judged: $n, wrong: $w, lower: (cp_lower($n - $w; $n; $alpha) | round4),
+      # The bounds are those of the latest complete block of $need runs, in
+      # the order they ran, as certify.sh judges early stops: a fixed-size
+      # test per block, not a bound re-checked every time tune is run.
+      # Before a block is complete, they are those of every run, to read.
+      | (($n / $need) | floor) as $blocks
+      | (if $blocks > 0 then $f[($blocks - 1) * $need:$blocks * $need] else $f end) as $b
+      | ($b | length) as $bn | ([$b[] | select(.wrong)] | length) as $bw
+      | ([$f[$blocks * $need:][] | select(.wrong)] | length) as $ow
+      | ([$b[] | select(.wrong | not) | .saved] | add // 0) as $bsaved
+      | {retries: $j, judged: $n, wrong: $w, blocks: $blocks, block_wrong: $bw, open_wrong: $ow,
+         lower: (cp_lower($bn - $bw; $bn; $alpha) | round4),
          saved: ($saved | round4),
-         saved_lower: ([hoeffding_lower((if $n > 0 then $saved / $n else 0 end);
-                         ([$f[].saved] | max // 0); $n; $alpha / 2), 0] | max | round4),
-         wrong_upper: (cp_upper($w; $n; $alpha / 2) | round4)};
+         saved_lower: ([hoeffding_lower((if $bn > 0 then $bsaved / $bn else 0 end);
+                         ([$b[].saved] | max // 0); $bn; $alpha / 2), 0] | max | round4),
+         wrong_upper: (cp_upper($bw; $bn; $alpha / 2) | round4)};
     . as $runs
     | [range($k - 1; -1; -1) | . as $j | $runs | candidate($j)] as $c
     # Fixed sequence: most cautious first; stop at the first that fails.
     | (reduce $c[] as $x ({ok: true, pick: null};
-         if .ok and $x.judged >= $need and $x.lower >= 0.9 and ($x.saved_lower - $cp * $x.wrong_upper) > 0
+         if .ok and $x.blocks > 0 and $x.block_wrong <= $maxw and $x.open_wrong <= $maxw and ($x.saved_lower - $cp * $x.wrong_upper) > 0
          then .pick = $x.retries else .ok = false end) | .pick) as $pick
     | ([$runs[] | select(.explore) | . as $r
-        | [($r | loops)[] | select(.explored)] as $x | select(($x | length) > 0)
-        | {cost: ([$x[].cost_usd] | add // 0), rescued: ([$x[] | select(.progressed)] | length > 0)}]) as $e
+        # Only the first extra loop: it is what one more retry would add.
+        | [($r | loops)[] | select(.explored)][:1] as $x | select(($x | length) > 0)
+        | {cost: $x[0].cost_usd, rescued: $x[0].progressed}]) as $e
     | ($e | length) as $en | ([$e[] | select(.rescued)] | length) as $er
     | ([$e[].cost] | add // 0) as $ecost
     | ([$runs[] | select(.arm_prompts == "a" or .arm_prompts == "b") | select(.success or .detained)
@@ -132,7 +165,9 @@ tune_judge() {
                             then $k + 1 else null end)
     | .ab += (if .ab.a > 0 and .ab.b > 0 then
                 (.ab.mean_b - .ab.mean_a) as $d
-                | ($range * ((1 / $alpha | log) / 2 * (1 / .ab.a + 1 / .ab.b) | sqrt)) as $m
+                # Each side at alpha/2: a 95% interval, and at most a 5%
+                # chance of recommending either arm wrongly.
+                | ($range * ((2 / $alpha | log) / 2 * (1 / .ab.a + 1 / .ab.b) | sqrt)) as $m
                 | {diff: ($d | round4), lower: ($d - $m | round4), upper: ($d + $m | round4)}
                 | . + {recommend: (if .lower > 0 then "b" elif .upper < 0 then "a" else null end)}
               else {diff: null, lower: null, upper: null, recommend: null} end)' <<<"${1:-[]}" 2>/dev/null || true)"
@@ -177,14 +212,14 @@ cmd_tune() {
     if [[ -n $pick ]]; then
       info "  recommend CHALK_MAX_RETRIES=$pick: right at least 90% of the time, 95% sure, and it saves money net of wrongful stops"
     else
-      info "  keep CHALK_MAX_RETRIES=$CHALK_MAX_RETRIES: no lower setting clears the bar yet ($CERTIFY_BLOCK judged runs, 90% right, positive net)"
+      info "  keep CHALK_MAX_RETRIES=$CHALK_MAX_RETRIES: no lower setting clears the bar yet (a block of $CERTIFY_BLOCK judged runs with at most $CERTIFY_MAX_WRONG wrongful stop(s), and a positive net)"
     fi
     info ""
     info "More retries (spend-extending, judged only from exploring runs; CHALK_EXPLORE=$CHALK_EXPLORE):"
     explore="$(jq -r '.explore | "  \(.runs) run(s) explored, \(.rescued) rescued by the extra loops, for $\(.cost); rescue rate at least \(.rescue_lower), cost per run at most $\(.cost_upper)"' <<<"$judged")"
     info "$explore"
     if [[ -n $(jq -r '.explore.recommend // empty' <<<"$judged") ]]; then
-      info "  recommend raising CHALK_MAX_RETRIES by one: the rescued checkpoints are worth more than the extra loops cost"
+      info "  recommend raising CHALK_MAX_RETRIES by one: the checkpoints the first extra loop rescued are worth more than it cost"
     else
       info "  no change: the evidence does not show more retries paying"
     fi
@@ -205,6 +240,8 @@ cmd_tune() {
     if grep -q '^CHALK_MAX_RETRIES=' "$file" 2>/dev/null; then
       sed -i.bak "s/^CHALK_MAX_RETRIES=.*/CHALK_MAX_RETRIES=$pick/" "$file" && rm -f "$file.bak"
     else
+      # A last line without its newline would run into the new one.
+      if [[ -s $file && $(tail -c 1 "$file") != "" ]]; then printf '\n' >> "$file"; fi
       printf 'CHALK_MAX_RETRIES=%s\n' "$pick" >> "$file"
     fi
     info "applied: CHALK_MAX_RETRIES=$pick in .chalk/config; commit it"

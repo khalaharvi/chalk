@@ -24,6 +24,8 @@ git -C "$repo" switch -q -c chalk/T-1
 echo changed >> "$repo/tests/test_a.py"
 echo new > "$repo/tests/test_new.py"
 git -C "$repo" rm -q "$repo/src/gone_test.js"
+mkdir -p "$repo/legacy"
+git -C "$repo" mv tests/b_test.go legacy/b_check.txt
 echo more >> "$repo/src/app.py"
 git -C "$repo" add -A && git -C "$repo" commit -q -m work
 
@@ -34,8 +36,11 @@ check "the subject is the branch's tree" test "$tree" = "$(git -C "$repo" rev-pa
 mkdir -p "$repo/.chalk/evidence" && echo '{}' > "$repo/.chalk/evidence/T-1.json"
 git -C "$repo" add -A && git -C "$repo" commit -q -m "record"
 check "... and stays the same once a record is committed under .chalk/evidence" test "${| attest_tree "$repo"; }" = "$tree"
-check "existing test files the branch changed or deleted are listed; added ones are not" \
-  test "$(attest_tests_changed "$repo" "$base")" = "$(printf 'src/gone_test.js\ntests/test_a.py')"
+check "existing test files the branch changed, deleted or moved away are listed; added ones are not" \
+  test "$(attest_tests_changed "$repo" "$base")" = "$(printf 'src/gone_test.js\ntests/b_test.go\ntests/test_a.py')"
+git -C "$repo" config diff.renames copies
+check "... whatever git's rename detection is set to" \
+  test "$(attest_tests_changed "$repo" "$base")" = "$(printf 'src/gone_test.js\ntests/b_test.go\ntests/test_a.py')"
 
 # --- DSSE: what is signed ------------------------------------------------------
 
@@ -59,7 +64,7 @@ mkdir -p "$repo/.chalk"
 printf '%s\n' "${| attest_signer_line; }" > "$tmp/signers"
 CHALK_ATTEST_SIGNERS="$tmp/signers"
 
-CHALK_BASE_BRANCH=main CHALK_IMAGE=chalk-sandbox:local CHALK_TEST_CMD="pytest" CHALK_FP_RULES=shadow CHALK_DECIDER=off
+CHALK_BASE_BRANCH=main CHALK_IMAGE=chalk-sandbox:local CHALK_TEST_CMD="pytest" CHALK_SETUP_CMD="" CHALK_FP_RULES=shadow CHALK_DECIDER=off
 RUN_REVIEW_SUMMARY="Looks complete."
 fake_ledger='{"loops":[{"loop":1,"kind":"continue","rubric_exit":1,"cost_usd":0.4},{"loop":2,"kind":"retry","rubric_exit":0,"cost_usd":0.6}],"lessons":[],"cost_usd":1.0}'
 db_attest_ledger() { printf '%s\n' "$fake_ledger"; }
@@ -75,13 +80,16 @@ check "the record is an in-toto Statement about the branch's tree" \
     "https://in-toto.io/Statement/v1 chalk/T-1 ${| attest_tree "$repo"; }"
 check "... with the base, the review, the changed tests and the ledger" \
   test "$(jq -c '[.predicate.base.commit, .predicate.review.ran, .predicate.tests_changed, .predicate.ledger.cost_usd == 1]' <<<"$statement")" = \
-    "[\"$base\",true,[\"src/gone_test.js\",\"tests/test_a.py\"],true]"
+    "[\"$base\",true,[\"src/gone_test.js\",\"tests/b_test.go\",\"tests/test_a.py\"],true]"
+check "... and the rubric and setup it ran" \
+  test "$(jq -c '.predicate.rubric' <<<"$statement")" = '{"command":"pytest","setup":""}'
 
-verify() { local -A got; attest_verify_one "$repo" "$record" 0 got; printf '%s\n' "${got[$1]}"; }
+trusted="$base"
+verify() { local -A got; attest_verify_one "$repo" "$record" 0 got "$trusted"; printf '%s\n' "${got[$1]}"; }
 check "verify: the signature holds for the trusted principal" test "$(verify signature)" = "ok: signed by ci@example.com"
 check "verify: the subject is this tree" sh -c 'case "$1" in "ok: the record names this tree"*) exit 0;; esac; exit 1' _ "$(verify subject)"
 check "verify: the changed tests are named for the reviewer" \
-  test "$(verify tests)" = "ok: existing test files changed, for the reviewer: src/gone_test.js, tests/test_a.py"
+  test "$(verify tests)" = "ok: existing test files changed, for the reviewer: src/gone_test.js, tests/b_test.go, tests/test_a.py"
 check "verify: the costs add up" test "$(verify cost)" = 'ok: $1 over 2 recorded call(s)'
 
 echo after >> "$repo/src/app.py"
@@ -103,4 +111,34 @@ printf 'ci@example.com namespaces="chalk-attestation" %s\n' "$(cut -d' ' -f1,2 "
 check "verify: a key the signers file does not trust fails" sh -c 'case "$1" in FAIL:*) exit 0;; esac; exit 1' _ "$(verify signature)"
 unset CHALK_ATTEST_SIGNERS
 check "verify: with no signers file at all, it says how to make one" \
-  test "$(verify signature)" = "FAIL: no trusted signers: add 'chalk attest key' output to .chalk/allowed_signers"
+  test "$(verify signature)" = "FAIL: no trusted signers: commit 'chalk attest key' output to .chalk/allowed_signers on the base branch"
+
+# The branch's own .chalk/allowed_signers is not trusted: whoever pushes
+# the branch could add their key to it. The base branch's copy is.
+printf '%s\n' "${| attest_signer_line; }" > "$repo/.chalk/allowed_signers"
+check "verify: a signers file only the branch has is not trusted" \
+  sh -c 'case "$1" in "FAIL: no trusted signers"*) exit 0;; esac; exit 1' _ "$(verify signature)"
+rm "$repo/.chalk/allowed_signers"
+git -C "$repo" switch -q main
+mkdir -p "$repo/.chalk" && printf '%s\n' "${| attest_signer_line; }" > "$repo/.chalk/allowed_signers"
+git -C "$repo" add .chalk/allowed_signers && git -C "$repo" commit -q -m "trust the harness"
+git -C "$repo" switch -q chalk/T-1
+trusted="$(git -C "$repo" rev-parse main)"
+check "verify: the base branch's signers file is trusted" test "$(verify signature)" = "ok: signed by ci@example.com"
+
+# --- chalk attest verify: which records ------------------------------------------
+
+# T-1 is merged; T-2 branches from main after it and gets its own record.
+# Verify checks only the record its branch added: T-1's names a tree that
+# is gone.
+git -C "$repo" switch -q main
+git -C "$repo" merge -q --no-ff -m "merge T-1" chalk/T-1
+git -C "$repo" switch -q -c chalk/T-2
+echo t2 >> "$repo/src/app.py" && git -C "$repo" commit -q -am "T-2 work"
+attest_record "$repo" T-2 chalk/T-2
+out="$(cd "$repo" && cmd_attest verify 2>&1)"
+check "verify with no ticket checks only the records the branch added" \
+  sh -c 'case "$1" in *T-1.json*) exit 1;; *".chalk/evidence/T-2.json:"*"subject: ok"*) exit 0;; esac; exit 1' _ "$out"
+verify_ticket() { (cd "$repo" && cmd_attest verify "$@") >/dev/null 2>&1; }
+check "... while a record merged earlier, named, fails its subject" fails verify_ticket T-1
+check "--base names the base branch" sh -c 'case "$1" in *"subject: ok"*) exit 0;; esac; exit 1' _ "$(cd "$repo" && cmd_attest verify --base main 2>&1)"

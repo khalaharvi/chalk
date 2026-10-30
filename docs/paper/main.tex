@@ -75,7 +75,7 @@ We take the position that the controller should not trust the controlled model, 
 \item \textbf{Certified stop-only control} (\S\ref{sec:stop}), the main contribution. We show that stop-only verdicts are exactly evaluable from shadow logs (Proposition~\ref{prop:exact}), that the class is closed under composition (Proposition~\ref{prop:union}), and that per-loop spend caps make dollar savings bounded, so a distribution-free admission rule exists. We restate Chalk's calibration gate as a confidence bound and give the required sample sizes.
 \item \textbf{Evidence-carrying lessons} (\S\ref{sec:lessons}): agent memory whose entries carry an executable probe that fails before a human fix and passes after it. The probe is re-run as an environment \emph{need} and retires the lesson on evidence, not on a clock.
 \item \textbf{Ledger-gated per-repository tuning} (\S\ref{sec:tune}): a split of harness changes into decision-level changes, which are exactly evaluable when stop-only, and trajectory-altering changes, which need randomized comparison. Admission uses a conservative improvement bound.
-\item \textbf{Evidence-carrying pull requests} (\S\ref{sec:evidence}): a signed bundle bound to the git tree that CI re-verifies by re-running the rubric and probes in a pinned image.
+\item \textbf{Evidence-carrying pull requests} (\S\ref{sec:evidence}): a signed bundle bound to the git tree that CI re-verifies, re-running the recorded rubric and the probes in a fresh sandbox on the recorded image.
 \item \textbf{A pre-registered evaluation protocol} (\S\ref{sec:eval}) that a single maintainer can run with spend bounded in advance, together with an open replay corpus and fault-injection suite.
 \end{enumerate}
 
@@ -83,7 +83,7 @@ We take the position that the controller should not trust the controlled model, 
 Stuck detection, model cascades, spend caps, validated memory, executable skill admission, fail-to-pass tests, harness optimisation and signed run evidence all have prior art (\S\ref{sec:related}, Table~\ref{tab:notnovel}). Each contribution above is a \emph{combination} claim. We found no shipped product or published work that combines its parts, but our market survey checked only about eight of roughly thirty products against primary sources, so ``we found no'' is the strongest form we can honestly use.
 
 \paragraph{Status.}
-Chalk is early software maintained by one person. Its ledger, fingerprints, shadow-mode verdicts, fingerprint recall and calibrated decider are shipped. Probes, tuning and evidence bundles are designed but not shipped (Table~\ref{tab:status}). Its 51 real runs to date produced no rubric failures and four blockers, all caused by the environment. That gives a one-sided 95\% upper bound of 5.7\% on the rubric-failure rate, which is far too few negative examples to certify anything. The evaluation therefore depends on replay and fault injection, and this draft reports no results.
+Chalk is early software maintained by one person. Its ledger, fingerprints, shadow-mode verdicts, fingerprint recall and calibrated decider are shipped. The block gate, probes and evidence bundles are implemented in this work but not yet released, and tuning is designed but not shipped (Table~\ref{tab:status}). Its 51 real runs to date produced no rubric failures and four blockers, all caused by the environment. That gives a one-sided 95\% upper bound of 5.7\% on the rubric-failure rate, which is far too few negative examples to certify anything. The evaluation therefore depends on replay and fault injection, and this draft reports no results.
 
 % ===================================================================
 \section{Setting and threat model}
@@ -204,13 +204,13 @@ If $v_1,\dots,v_k$ are stop-only, so is $v_\vee$, which stops when any $v_i$ doe
 The first two claims follow from the definition of $\tau$. For the third, let $j$ be an index attaining the minimum stopping time. Then $W_{v_\vee}=W_{v_j}\le\max_i W_{v_i}$.
 \end{proof}
 
-Proposition~\ref{prop:union} has a practical consequence. The policy actually deployed, the union of every enabled verdict and the decider's \textup{\textsc{stop}} at its threshold, is itself stop-only. It can therefore be certified directly from the same logs, instead of combining per-verdict bounds with a union bound.
+Proposition~\ref{prop:union} has a practical consequence. The policy actually deployed, the union of every enabled verdict and the decider's \textup{\textsc{stop}} at its threshold, is itself stop-only. It can therefore be certified directly from the same logs, instead of combining per-verdict bounds with a union bound. Chalk currently reports the union of the three stuck-loop verdicts as the pseudo-verdict \texttt{any}, for evaluation only: it gates nothing, and it does not yet include the decider's stops.
 
 \subsection{What a stop costs and saves}
 
 \begin{definition}[Outcomes]
 \label{def:outcomes}
-For a run $r$ and a stop-only verdict $v$, call $v$ \emph{fired} on $r$ if $\tau_v<\tau_0$. When it fires, define
+For a run $r$ and a stop-only verdict $v$, call $v$ \emph{fired} on $r$ if $\tau_v<\tau_0$. A verdict that first says \textsc{stop} on the run's last loop has not fired: the run ended there anyway, so the stop saves nothing and cannot be wrong, and Chalk does not count it. When it fires, define
 \begin{align*}
 S_v(r) &= \textstyle\sum_{t=\tau_v+1}^{\tau_0} c_t && \text{(dollars saved)},\\
 W_v(r) &= \mathbb{1}\bigl[\exists\, t\in(\tau_v,\tau_0]: g_t=1\bigr] && \text{(wrongful stop: progress came later)},\\
@@ -225,7 +225,7 @@ Each loop is capped at $B$ dollars. Spend is estimated client-side and can sligh
 
 \subsection{Admission}
 
-The unit of evidence is the run, not the loop. Loops within a run are dependent, but a stop-only policy fires at most once per run, so each run contributes one Bernoulli $W$ and one bounded $S$. We assume runs are exchangeable within a stratum (repository, verdict type, model revision).
+The unit of evidence is the run, not the loop. Loops within a run are dependent, but a stop-only policy fires at most once per run, so each run contributes one Bernoulli $W$ and one bounded $S$. We assume runs are exchangeable within a stratum (verdict type, model revision). Strata pool every repository on the machine, as Chalk's telemetry database does, so a verdict certified on one repository's runs acts on another's; a repository whose failures differ in kind is a known limitation, and adding the repository to the stratum is a one-column change at the price of slower certification.
 
 \begin{definition}[Block admission rule]
 \label{def:admit}
@@ -299,12 +299,13 @@ A lesson moves through \emph{proposed}, \emph{proved}, \emph{accepted}, \emph{ne
 \item \emph{Proposed}: the agent's blocker answer carries a structured fix and a probe.
 \item \emph{Proved}: the harness runs $\rho$ and it fails. A probe that passes means the blocker is not what the agent claimed.
 \item \emph{Accepted}: the person applies or approves the fix, and $\rho$ passes. Only now is $e$ complete and the lesson recallable.
-\item \emph{Need}: environment-shaped lessons (image, config) become saved needs, which pre-flight, \texttt{chalk doctor} and CI re-run before the first loop.
+\item \emph{Need}: environment-shaped lessons (image, config) become saved needs, which pre-flight re-runs before the first loop and \texttt{chalk needs} re-runs on demand, in CI for instance.
 \item \emph{Retired}: when $\rho$ passes on an environment that never received $f$, for example because the base image now ships the package, the lesson is moot and leaves recall.
 \end{enumerate}
+In Chalk's ledger, \emph{proved} is the probe's outcome at detention, \texttt{failed}, and \emph{accepted} is the lesson's evidence state \texttt{proved}, set when the probe passes after the fix; a lesson whose probe proves nothing is \texttt{unproved} and is not recalled.
 A failing need on a later run is a regression of the environment, caught before any loop spend.
 
-Fixes to the spec, credentials or decisions have no probe. A spec change proves itself when the agent meets the new spec, and the sandbox holds no credentials to check. These lessons stay text-only and are labelled as such.
+Fixes to the spec, credentials or decisions have no probe. A spec change proves itself when the agent meets the new spec, and the sandbox holds no credentials to check. These lessons stay text-only: recall shows them without the \emph{Verified} line that an accepted probed lesson carries.
 
 \paragraph{Implementation.}
 Chalk implements this lifecycle in \texttt{lib/evidence.sh}. A blocked answer may carry a structured fix. A fix that breaks a rule is dropped and logged, so the detention is as before. The rules are:
@@ -317,7 +318,7 @@ Chalk implements this lifecycle in \texttt{lib/evidence.sh}. A blocked answer ma
 A probe that exits 0 \emph{passed}. Any other exit \emph{failed}, a missing tool's 127 included, since that is what most environment blockers are. A 30-second timeout, a sandbox that is not running, or a setup command that failed first is \emph{inconclusive}. The probe runs after the detention commit, so nothing it writes reaches the parked work. At office hours a failing probe stops the command before anything is recorded, unless the engineer explicitly resumes, in which case the lesson is unproved. A proved image or config probe is committed to \texttt{.chalk/needs} on the detention branch, and reaches other tickets by merge. Recall excludes every lesson whose evidence is unproved or retired.
 
 \paragraph{Pre-flight needs are stop-only control.}
-A failing need stops a run before loop 1, so a need is a stop-only verdict at $t=0$ and is certified exactly as in \S\ref{sec:stop}.
+A failing need stops a run before loop 1, so a need is a stop-only verdict at $t=0$. Chalk lets it act at once, without the block gate of \S\ref{sec:stop}: its probe failed before the fix and passed after it, which is evidence about this environment that a stuck-loop verdict lacks. Certifying needs from shadow logs, like any other stop, is possible but not implemented.
 
 \paragraph{Recall ladder.}
 Recall tries, in order: an exact match on $\kappa$; lexical similarity on normalized $\Eerr$; embedding similarity (pgvector); and a calibrated rerank by the decider. This is crash bucketing applied to agent memory, with exact signatures first and learned similarity after \citep{glerum2009wer,rodrigues2022tracesim}. Putting a recalled lesson into the prompt changes the trajectory, so recall is \emph{not} exactly evaluable from shadow logs. We measure each rung's precision offline, on seeded faults whose correct lesson is known (\S\ref{sec:eval}).
@@ -332,13 +333,13 @@ A lesson can be exported as $(\kappa,\rho,\text{fix kind},\text{abstract fix})$,
 Harness optimisation has converged on a common object: a tree of harness files (system prompt, guardrails, memory, tools, skills, subagents) around a frozen model \citep{xu2026harness2,metaharness2026,ahe2026,selfharness2026,rrsi2026}. These systems optimise offline, on benchmarks. Harness$^2$, for example, deliberately selects among candidate harnesses without ground-truth verifiers \citep{xu2026harness2}. A single repository has its own verifier, the rubric run by the harness, and a stream of live tickets. We propose tuning per repository against that verifier, the review verdict and dollars, and we split candidate changes into three classes.
 
 \begin{description}[leftmargin=*,style=nextline]
-\item[Decision-level and stop-only] (lower caps, stricter detention thresholds, more stopping verdicts, need checks). Exactly evaluable from the ledger by Proposition~\ref{prop:exact}. Choosing the best setting among many on the same data biases the estimate upward, so we split: select on one half of the runs and certify on the other, as in Learn-then-Test \citep{angelopoulos2021ltt} and the certify-after-freeze step of \citet{ruan2026doomed}.
+\item[Decision-level and stop-only] (lower caps, stricter detention thresholds, more stopping verdicts, need checks). Exactly evaluable from the ledger by Proposition~\ref{prop:exact}. Choosing the best setting among many on the same data biases the estimate upward. In general one splits: select on one half of the runs and certify on the other, as in Learn-then-Test \citep{angelopoulos2021ltt} and the certify-after-freeze step of \citet{ruan2026doomed}. For nested candidates, such as retry limits, a fixed testing sequence avoids the split, and this is what Chalk does.
 \item[Decision-level but spend-extending] (raising $K$ or $B$, granting extra loops to a converging run). Not identifiable from $\pi_0$ logs. These need randomised exploration on a fraction of runs, with a stated spend ceiling.
 \item[Trajectory-altering] (prompts, tools, recall changes). Need randomised assignment by ticket. Let $J=\Pr[\text{review pass}]-\mu\cdot\$$. A change is admitted iff the one-sided lower bound on $J_{\text{new}}-J_{\text{old}}$ is positive, a conservative rule in the spirit of SPIBB and high-confidence off-policy evaluation \citep{laroche2019spibb,thomas2015hcope}.
 \end{description}
 
 \paragraph{Implementation.}
-Chalk implements the three classes in \texttt{chalk tune}. The decision-level, stop-only knob is a lower retry limit $j<K$. Every run outside the exploring arm shows exactly where $j$ would have fired and what followed. Because the candidates are nested, a bolder $j$ fires wherever a more cautious one does, and earlier. So they are tested as a fixed sequence, from the most cautious down, each at the full $\alpha$, stopping at the first failure. That controls the family-wise error rate without correction. A candidate passes on at least $b=46$ judged runs, $\LB_{0.95}\ge 0.90$, and a positive net bound. The spend-extending knob is studied by randomized exploration. A configurable share of runs gets at most $r$ extra loops, once, at the point where it would be detained. Those loops are recorded as explored, and a machine-level ceiling caps their total cost per 30 days. Raising $K$ is recommended when the lower bound on the rescue rate, times the value of a checkpoint, exceeds the upper bound on the explored cost per run. Prompt changes use a randomized A/B test: each run draws the usual prompts or a variant at even odds. Adoption needs a two-sample Hoeffding lower bound on the variant's advantage in value per run (a finished run's value less its cost) to be above zero. Variants are written by the engineer, and tuning only judges them; proposing them with a model, as Harness$^2$ does, is left to future work.
+Chalk implements the three classes in \texttt{chalk tune}. The decision-level, stop-only knob is a lower retry limit $j<K$. Every run outside the exploring arm shows exactly where $j$ would have fired and what followed. Because the candidates are nested, a bolder $j$ fires wherever a more cautious one does, and earlier. So they are tested as a fixed sequence, from the most cautious down, each at the full $\alpha$, stopping at the first failure. That controls the family-wise error rate without correction. A candidate is judged as the block gate of \S\ref{sec:stop} judges a stop: on its latest complete block of $b=46$ judged runs, which must have at most $w^\star=1$ wrongful stops (so $\LB_{0.95}\ge 0.90$), as must the block still filling, with a positive net bound on that block. Re-checking one bound as the window grows would not keep its 95\%; a fixed-size block is tested once. The spend-extending knob is studied by randomized exploration. A configurable share of runs gets at most $r$ extra loops, once, at the point where it would be detained. Those loops are recorded as explored. A machine-level ceiling caps their total cost per 30 days: before each extra loop, the harness checks that one more loop at the per-loop cap $B$ stays within it, so the ceiling holds up to one loop per other run exploring at the same moment. Only the first extra loop of each exploring run is judged, since it is what $K{+}1$ would add. Raising $K$ by one is recommended when the lower bound on that loop's rescue rate, times the value of a checkpoint, exceeds the upper bound on its cost per run. Prompt changes use a randomized A/B test: each run draws the usual prompts or a variant at even odds, and only drawn runs are evidence; a run pinned to one arm is not. Adoption needs a two-sample Hoeffding bound on the variant's advantage in value per run (a finished run's value less its cost), at $\alpha/2$ on each side, to be above zero. The exploring and A/B bounds are fixed-$n$ bounds: read once at a sample size chosen in advance, they hold at 95\%; read after every run, they do not, and an anytime-valid bound is future work. Variants are written by the engineer, and tuning only judges them; proposing them with a model, as Harness$^2$ does, is left to future work.
 
 \paragraph{Guards.}
 Tuned edits may not touch the rubric command, test files or the verdict code, and every adopted edit is versioned with its evidence (\S\ref{sec:evidence}). Self-improvement loops can game visible evaluators \citep{zhang2025dgm}, and poisoned inputs can persist across later clean evolution \citep{roesner2026trusting}. For per-repository tuning the analogous attack is a hostile ticket.
@@ -374,12 +375,12 @@ Vendors already attach human-readable evidence to agent pull requests. Copilot a
 \paragraph{Verification in CI.}
 \texttt{chalk attest verify} makes these checks:
 \begin{itemize}[leftmargin=*,nosep]
-\item the signature verifies against the repository's committed \texttt{allowed\_signers};
+\item the signature verifies against \texttt{allowed\_signers} as committed at the branch's merge base with its base branch, never the branch's own copy, which whoever pushes the branch could extend;
 \item the subject equals the checked-out tree without \texttt{.chalk/evidence/}, so any later commit fails;
-\item the existing test files the branch changed or deleted are exactly those recorded;
+\item the existing test files the branch changed, deleted or renamed are exactly those recorded;
 \item the recorded calls add up to the recorded cost.
 \end{itemize}
-With \texttt{--rerun} it also runs the rubric and every saved need in a fresh sandbox on the configured image. Changed test files are listed for the reviewer rather than rejected, because changing an existing test can be correct. A mismatch is reported, not hidden, and the rerun's mismatch rate itself measures flakiness.
+With \texttt{--rerun} it also runs the recorded rubric and setup, then every saved need, in a fresh sandbox on the recorded image, and reports when the local image's ID differs from the recorded one; the branch's own configuration is not used, since the branch could change it. Changed test files are listed for the reviewer rather than rejected, because changing an existing test can be correct. A mismatch is reported, not hidden, and the rerun's mismatch rate itself measures flakiness.
 
 \paragraph{What the bundle does not prove.}
 It does not prove correctness. Saturated visible tests coexist with held-out gaps \citep{specbench2026}. The proof-carrying-code analogy \citep{necula1997pcc} holds only in architecture: a small trusted checker re-verifies evidence produced by an untrusted party, but the evidence is test results, not proofs. Agent runs cannot be replayed; only their evidence can be re-checked. The bundle can serve as a log under record-keeping obligations such as the EU AI Act's \citep{euaiact}, but using it is not compliance by itself.

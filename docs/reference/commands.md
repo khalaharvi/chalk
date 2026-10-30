@@ -129,9 +129,11 @@ recall. See [Detention and office hours](../guide/running/failures.md).
 
 **`chalk attest key`** prints the line that lets CI trust evidence records
 this machine signs, for `.chalk/allowed_signers`. **`chalk attest verify
-[--rerun] [TICKET...]`** checks a branch's records: signature, subject
-tree, changed test files and cost, and with `--rerun` the rubric and the
-saved needs in a fresh sandbox. See [Evidence records](attestation.md).
+[--rerun] [--base REF] [TICKET...]`** checks the records a branch added
+since its merge base with `REF` (by default `origin/CHALK_BASE_BRANCH`),
+or the named tickets' records: signature, subject tree, changed test
+files and cost, and with `--rerun` the recorded rubric and the saved needs
+in a fresh sandbox. See [Evidence records](attestation.md).
 
 **`chalk needs [--prune]`** checks every need saved in `.chalk/needs`, in
 fresh sandboxes, with and without its fix: `holds`, `FAILS`, or

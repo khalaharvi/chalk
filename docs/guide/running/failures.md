@@ -121,7 +121,8 @@ chalk office-hours -m "Payments client needs the sandbox base URL in tests"
    after `CHALK_SETUP_CMD`, as the resumed run will see the environment.
    If the probe still fails, it stops before recording anything: fix it,
    commit, and run office hours again, or add `--unproved` to resume
-   anyway. A probe that failed at detention and passes now **proves** the
+   anyway; when the probe is a saved need, the resumed run's pre-flight
+   skips it, rather than detaining the run again. A probe that failed at detention and passes now **proves** the
    fix; any other result leaves the lesson unproved, and an unproved
    lesson is never recalled.
 2. **Records your note** as the resolution of the open lesson, with your

@@ -81,9 +81,9 @@ certified() {
 INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
                   prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
                   cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict, fp_rules)
-SELECT 'cert', 'CERT-' || i, 'chalk/CERT-' || i, 1, 'continue', 'ok', 1, false, 'claude-fake-1', 'p', 0.25, 1,
-       1, 0, 0, 0, 0, 0, 0, 0, 'cert-' || v || '-' || i, v, 'shadow'
-  FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i;
+SELECT 'cert', 'CERT-' || i, 'chalk/CERT-' || i, n, 'continue', 'ok', 1, false, 'claude-fake-1', 'p', 0.25, 1,
+       1, 0, 0, 0, 0, 0, 0, 0, 'cert-' || v || '-' || i, CASE n WHEN 1 THEN v END, 'shadow'
+  FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i, generate_series(1, 2) n;
 INSERT INTO lessons (repo, ticket, signature, run_id)
 SELECT 'cert', 'CERT-' || i, 'seeded', 'cert-' || v || '-' || i
   FROM unnest(string_to_array(:'verdicts', ' ')) v, generate_series(1, 46) i;
@@ -404,6 +404,22 @@ check "chalk certify: a price for a wrongful stop must be a number" \
 CHALK_FP_RULES=on chalk doctor > "$tmp/doctor-certify.log" 2>&1 || true
 check "doctor under CHALK_FP_RULES=on: each certified verdict, by model" \
   grep -q '^  ok    verdict repeat for claude-fake-1 is certified' "$tmp/doctor-certify.log"
+if [ -n "${FAKE_PG_URL:-}" ]; then
+  # A verdict on a run's last loop saves nothing and cannot be wrong: the
+  # run ended there anyway. 46 such runs judge nothing.
+  psql "$FAKE_PG_URL" -X -q -v ON_ERROR_STOP=1 <<'SQL'
+INSERT INTO runs (repo, ticket, branch, loop, kind, agent_status, rubric_exit, progressed, model,
+                  prompts, cost_usd, budget_usd, duration_s, input_tokens, output_tokens,
+                  cache_read_tokens, cache_write_tokens, turns, denials, lessons, run_id, verdict, fp_rules)
+SELECT 'cert', 'LAST-' || i, 'chalk/LAST-' || i, 1, 'continue', 'ok', 1, false, 'claude-last', 'p', 0.25, 1,
+       1, 0, 0, 0, 0, 0, 0, 0, 'last-' || i, 'repeat', 'shadow'
+  FROM generate_series(1, 46) i;
+INSERT INTO lessons (repo, ticket, signature, run_id)
+SELECT 'cert', 'LAST-' || i, 'seeded', 'last-' || i FROM generate_series(1, 46) i;
+SQL
+  check "chalk certify: a verdict on a run's last loop is not judged" \
+    test "$(chalk certify --json | jq '[.verdicts[] | select(.model == "claude-last") | .judged] | add // 0')" -eq 0
+fi
 check "rules on: the lesson carries the failing loop's fingerprint and first error" \
   grep -Eq -e "-v fingerprint=[0-9a-f]{64} -v first_error=AssertionError: BROKEN exists" "$tmp/db12.log"
 check "rules on: the failing loops record their failing test IDs" \
@@ -566,7 +582,7 @@ cd "$tmp/demo"
 chalk new PROJ-94 Pre-flight >/dev/null
 cd "$tmp/demo.worktrees/PROJ-94"
 mkdir -p .chalk
-printf '%s  # image PROJ-93 lesson=93\ntrue  # config PROJ-1 lesson=\n' "$needs_probe" > .chalk/needs
+printf '# Needs of earlier tickets.\n%s  # image PROJ-93 lesson=93\ntrue  # config PROJ-1 lesson=\n' "$needs_probe" > .chalk/needs
 git add -A && git commit -q -m "spec, and the needs of earlier tickets"
 if chalk run > "$tmp/run94.log" 2>&1; then fail "a run whose saved need fails must be detained"; fi
 check "pre-flight: a saved need that fails detains the run before any loop" \
@@ -581,9 +597,17 @@ CHALK_IMAGE=repo-image chalk needs > "$tmp/needs2.log" 2>&1 || { cat "$tmp/needs
 check "chalk needs: on the repository image the need holds, since the default image still lacks it" \
   grep -qF "holds  $needs_probe  (image, from PROJ-93)" "$tmp/needs2.log"
 CHALK_IMAGE=repo-image chalk needs --prune > "$tmp/needs3.log" 2>&1 || { cat "$tmp/needs3.log"; fail "chalk needs --prune"; }
-check "chalk needs --prune: drops the retired need, keeps the others" \
-  test "$(cat .chalk/needs)" = "$needs_probe  # image PROJ-93 lesson=93"
+check "chalk needs --prune: drops the retired need, keeps the others and the comments" \
+  test "$(cat .chalk/needs)" = "$(printf '# Needs of earlier tickets.\n%s  # image PROJ-93 lesson=93' "$needs_probe")"
 git checkout -q -- .chalk/needs
+# Office hours with --unproved resumes past a need that still fails: the
+# resumed run's pre-flight skips it, rather than detaining the run again.
+git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-94-*')"
+FAKE_PENDING_EVIDENCE="$(jq -cn --arg p "$needs_probe" '{id: 94, fix_kind: "image", probe: $p, before_outcome: "failed"}')" \
+  chalk office-hours --unproved -m "no gcc yet; going on without it" > "$tmp/oh94.log" 2>&1 || true
+check "office hours --unproved: the resumed run's pre-flight skips the need that still fails" \
+  sh -c "grep -qF 'pre-flight: skipping the saved need' '$tmp/oh94.log' && ! grep -q 'DETENTION: pre-flight' '$tmp/oh94.log' &&
+    grep -q 'loop 1' '$tmp/oh94.log'"
 cd "$tmp/demo"
 
 # 2c''. Tuning experiments (tune.sh). An exploring run gets more loops,
@@ -610,16 +634,16 @@ check "explore: the run says it may explore, then runs two more loops past CHALK
 check "explore: the extra loops are recorded as explored, every call as in the exploring arm" \
   sh -c "test \"\$(grep -c -e '-v explored=1 ' '$tmp/db96.log')\" -eq 2 &&
     test \"\$(grep -c 'INSERT INTO runs' '$tmp/db96.log')\" = \"\$(grep -c -e '-v arm_explore=true ' '$tmp/db96.log')\""
-check "A/B: arm b reads .chalk/prompts-b, says so, and records its arm" \
+check "A/B: arm b reads .chalk/prompts-b and says so; pinned to it, not drawn, it records no arm" \
   sh -c "grep -q 'this run uses prompts b, from .chalk/prompts-b/' '$tmp/run96.log' &&
     grep -q PROMPT-B-MARKER '$XDG_STATE_HOME/chalk/demo/runs/PROJ-96/io/prompt.md' &&
-    grep -q -e '-v arm_prompts=b ' '$tmp/db96.log'"
+    test \"\$(grep -c 'INSERT INTO runs' '$tmp/db96.log')\" = \"\$(grep -c -e '-v arm_prompts= ' '$tmp/db96.log')\""
 # The run above explored two loops at $0.25 each: a ceiling of $0.50 is
 # spent, in the fake database's answer and in a real one alike.
 check "explore: no exploring once the 30-day ceiling is spent" \
   sh -c "! FAKE_CLAUDE_MODE=break CHALK_MAX_RETRIES=0 CHALK_EXPLORE=true CHALK_EXPLORE_SHARE=1 FAKE_EXPLORE_SPENT=0.50 \
       CHALK_EXPLORE_BUDGET_USD=0.50 chalk run > '$tmp/run96b.log' 2>&1 &&
-    grep -q 'at its ceiling (CHALK_EXPLORE_BUDGET_USD=0.50)' '$tmp/run96b.log' && ! grep -q 'loop 2' '$tmp/run96b.log'"
+    grep -q 'would pass its ceiling (CHALK_EXPLORE_BUDGET_USD=0.50)' '$tmp/run96b.log' && ! grep -q 'loop 2' '$tmp/run96b.log'"
 chalk tune > "$tmp/tune1.log" 2>&1 || { cat "$tmp/tune1.log"; fail "chalk tune"; }
 check "chalk tune: the three kinds of change, each with what it would take" \
   sh -c "grep -q '^Fewer retries (stop-only' '$tmp/tune1.log' && grep -q '^More retries (spend-extending' '$tmp/tune1.log' &&
@@ -629,9 +653,14 @@ if [ -z "${FAKE_PG_URL:-}" ]; then
   FAKE_TUNE_DATA="$(jq -cn '[range(46) | {run_id: "t-\(.)", arm_prompts: null, explore: false, detained: true,
       success: false, cost: 3, loops: [range(3) | {kind: "retry", progressed: false, cost_usd: 1, explored: false}]}]')"
   export FAKE_TUNE_DATA
+  # A config whose last line has no newline: the setting goes on a line of
+  # its own.
+  printf '%s' "$(grep -v '^CHALK_MAX_RETRIES=' .chalk/config)" > .chalk/config.new
+  mv .chalk/config.new .chalk/config
   chalk tune --apply > "$tmp/tune2.log" 2>&1 || { cat "$tmp/tune2.log"; fail "chalk tune --apply"; }
   check "chalk tune: fewer retries recommended from runs that never recovered, and applied" \
     sh -c "grep -q 'recommend CHALK_MAX_RETRIES=0' '$tmp/tune2.log' && grep -qx 'CHALK_MAX_RETRIES=0' .chalk/config &&
+      test \"\$(grep -c '' .chalk/config)\" -ge 2 &&
       grep -q 'applied: CHALK_MAX_RETRIES=0 in .chalk/config; commit it' '$tmp/tune2.log'"
   git checkout -q -- .chalk/config
   unset FAKE_TUNE_DATA
@@ -668,7 +697,7 @@ check "attest verify: a commit after the record fails it, saying so" \
   grep -q '  subject: FAIL: .*the branch changed after it was recorded' "$tmp/verify95b.log"
 if chalk attest verify PROJ-95 > "$tmp/verify95c.log" 2>&1; then fail "a record must not verify without trusted signers"; fi
 check "attest verify: with no trusted signers, it says how to add one" \
-  grep -q "signature: FAIL: no trusted signers: add 'chalk attest key' output to .chalk/allowed_signers" "$tmp/verify95c.log"
+  grep -q "signature: FAIL: no trusted signers: commit 'chalk attest key' output to .chalk/allowed_signers on the base branch" "$tmp/verify95c.log"
 cd "$tmp/demo"
 
 # 2b'''. An agent call that cannot run is reported with the CLI's own words.
