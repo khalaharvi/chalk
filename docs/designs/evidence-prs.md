@@ -24,7 +24,7 @@ already holds that evidence in its ledger. It never leaves the machine.
 - **It shows test edits.** Existing test files the branch changed or
   deleted are listed, the failure mode reward-hacking studies document,
   and verification recomputes the list.
-- **It can be re-run.** `--rerun` runs the rubric and the saved needs in a
+- **It can be re-run.** `--rerun` runs the recorded rubric and the saved needs in a
   fresh sandbox in CI. That checks the evidence; the agent's run itself is
   never replayed.
 
@@ -46,9 +46,12 @@ already holds that evidence in its ledger. It never leaves the machine.
    `docs/reference/attestation.md` and a `version` field.
 2. **The subject is the tree without `.chalk/evidence/`.** That lets the
    record be committed to the branch it describes, and records of other
-   tickets merged earlier do not matter.
+   tickets merged earlier do not matter: verify checks the records the
+   branch added since its merge base.
 3. **Signers are trusted per repository.** `.chalk/allowed_signers` is
-   committed on the base branch; `CHALK_ATTEST_SIGNERS` overrides it.
+   read as committed at the branch's merge base with its base branch,
+   never from the branch itself, which whoever pushes it could extend;
+   `CHALK_ATTEST_SIGNERS`, set outside the repository, overrides it.
 4. **Report, don't judge, test edits.** Changing an existing test can be
    right. The record lists such changes for the reviewer; verification
    fails only when the list no longer matches the branch.

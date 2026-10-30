@@ -616,7 +616,7 @@ check "attest verify: a commit after the record fails it, saying so" \
   grep -q '  subject: FAIL: .*the branch changed after it was recorded' "$tmp/verify95b.log"
 if chalk attest verify PROJ-95 > "$tmp/verify95c.log" 2>&1; then fail "a record must not verify without trusted signers"; fi
 check "attest verify: with no trusted signers, it says how to add one" \
-  grep -q "signature: FAIL: no trusted signers: add 'chalk attest key' output to .chalk/allowed_signers" "$tmp/verify95c.log"
+  grep -q "signature: FAIL: no trusted signers: commit 'chalk attest key' output to .chalk/allowed_signers on the base branch" "$tmp/verify95c.log"
 cd "$tmp/demo"
 
 # 2b'''. An agent call that cannot run is reported with the CLI's own words.
