@@ -13,7 +13,8 @@ do about it.
 
 | Reason in the log | What happened | What `next:` says |
 | :-- | :-- | :-- |
-| `agent reported a blocker` | The agent answered `blocked`, for example for a missing credential or a contradiction in the spec. Retrying cannot fix that, so there is no retry. | Provide what the agent asked for (printed above it): a credential, access or a decision |
+| `agent reported a blocker` | The agent answered `blocked`, for example for a missing credential or a contradiction in the spec. Retrying cannot fix that, so there is no retry. The agent also proposes a fix, with a probe for an environment problem: see [Blockers with a fix](#blockers-with-a-fix). | By the kind of fix: the packages a repository image needs (`image`), the settings to commit (`config`), the spec change (`spec`); otherwise, provide what the agent asked for: a credential, access or a decision |
+| `pre-flight: a saved need fails: …` | Before the first loop, a need an earlier ticket saved in `.chalk/needs` failed: the environment lacks what that ticket needed. No loop ran, so nothing was spent. | Restore it in `CHALK_IMAGE` or `CHALK_SETUP_CMD`; check with `chalk needs` |
 | `rubric failed (exit N)` | The rubric failed on `CHALK_MAX_RETRIES` + 1 loops in a row. | Fix the failure in `io/rubric.log`, or make the checkpoint smaller |
 | `agent stopped early (CLASS: message)` | The loop's Claude Code call failed. CLASS says how, and the message is the CLI's own. A failure that would repeat (`tls`, `auth`, `cli_missing`, `usage_limit`) detains at once; the others (`network`, `rate_limit`, `overloaded`, `server`, `timeout`, `budget`, `max_turns`, `error`, `crash`) are retried first. | One line per class, for example: check `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (`auth`); set `CHALK_EXTRA_CA_CERTS` (`tls`); raise `CHALK_AGENT_TIMEOUT` (`timeout`) or `CHALK_BUDGET_USD` (`budget`) |
 | `rubric timed out after Ns (CHALK_RUBRIC_TIMEOUT)` | The rubric ran longer than `CHALK_RUBRIC_TIMEOUT` on every retry. A rubric killed with exit 137, usually for running out of memory, and one whose command was not found (126, 127) are named the same way. | Fix the failure in `io/rubric.log`, or make the checkpoint smaller |
@@ -34,6 +35,35 @@ Whatever the reason, when the last loop had three or more actions refused
 by permission checks, `next:` says so and points to `chalk doctor` instead:
 that is what a loop looks like when auto mode is unavailable for the model
 (see [Permissions](../configuring/permissions.md#auto-mode-requirements)).
+
+### Blockers with a fix
+
+When the agent reports a blocker, it also proposes a fix, of one kind:
+`image` (the sandbox lacks a tool or a system package), `config` (the
+setup command or the rubric timeout is wrong), `spec`, `credential` or
+`decision`. The detention shows it. A config fix may only name
+`CHALK_SETUP_CMD` and `CHALK_RUBRIC_TIMEOUT`; any other setting it
+proposes is dropped.
+
+An `image` or `config` fix comes with a **probe**: one command that fails
+now and must pass once the environment is fixed, such as `gcc --version`.
+Chalk runs it right after parking the work, so what it writes never
+reaches the detention branch, and says what it showed:
+
+```text
+[GO-5] the agent proposes a fix:
+[GO-5]   kind: image
+[GO-5]   why: go test -race: cgo: C compiler "gcc" not found
+[GO-5]   probe: gcc --version
+[GO-5]   image needs: apt-get install -y gcc libc6-dev
+[GO-5] proof: the probe fails (exit 127), so the blocker is real; it must pass once you fix it
+[GO-5] next: build a repository image FROM chalk-sandbox:local that adds: apt-get install -y gcc libc6-dev; set CHALK_IMAGE to it in .chalk/config and commit; the probe is checked again in a fresh sandbox at office hours
+```
+
+A probe that passes says the blocker may not be real; one that times out
+after 30 seconds proves nothing. A missing tool's exit 127 counts as a
+failure, since that is what most environment blockers are. Nothing acts
+on the probe by itself: the run is detained either way.
 
 ### When a run stops without a detention
 
@@ -86,12 +116,21 @@ chalk office-hours -m "Payments client needs the sandbox base URL in tests"
 
 `chalk office-hours` must be run from a `detention/…` branch. It:
 
-1. **Records your note** as the resolution of the open lesson, with your
+1. **Checks your fix**, when the blocker came with a probe. It runs the
+   probe in a fresh sandbox on the detention branch, on `CHALK_IMAGE`
+   after `CHALK_SETUP_CMD`, as the resumed run will see the environment.
+   If the probe still fails, it stops before recording anything: fix it,
+   commit, and run office hours again, or add `--unproved` to resume
+   anyway; when the probe is a saved need, the resumed run's pre-flight
+   skips it, rather than detaining the run again. A probe that failed at detention and passes now **proves** the
+   fix; any other result leaves the lesson unproved, and an unproved
+   lesson is never recalled.
+2. **Records your note** as the resolution of the open lesson, with your
    git email. This is the record of human intervention that the pull or
    merge request reports.
 2. **Distils a lesson.** With `CHALK_DISTILL=true` (the default), a cheap
-   model in a short-lived, read-only sandbox reads the failure, your note
-   and your fix: the diff since the detention commit or, when you
+   model in a short-lived, read-only sandbox reads the failure, your note,
+   the fix the agent proposed with what its probe showed, and your fix: the diff since the detention commit or, when you
    committed nothing, the fact that the fix was made outside the
    repository. Your note is the source of truth about what changed where.
    The model writes a rule and gives it a scope:
@@ -105,9 +144,14 @@ chalk office-hours -m "Payments client needs the sandbox base URL in tests"
     The log says which: `lesson: …`, `lesson, recalled in this repository
     only: …` or `no lesson distilled: …`. If distillation fails, your note
     is still kept and used as the lesson.
-3. **Moves to a tutoring branch**, `tutoring/<TICKET>-<timestamp>`, so the
+3. **Saves the need**, when the fix is proved and about the environment
+   (an `image` or `config` fix): its probe goes into `.chalk/needs`,
+   committed, and every later run checks it before its first loop
+   (pre-flight), so the same gap is never paid for twice. It reaches other
+   tickets when this branch merges.
+4. **Moves to a tutoring branch**, `tutoring/<TICKET>-<timestamp>`, so the
    detention branch stays as it was.
-4. **Resumes the run** if the spec still has open checkpoints, or opens the
+5. **Resumes the run** if the spec still has open checkpoints, or opens the
    pull or merge request if your fix finished it. `--detach` resumes in the
    background.
 
@@ -132,6 +176,28 @@ python3-yaml; requirements.txt also declares PyYAML."
 
 Rules that should apply to every ticket from now on belong in the
 textbook instead.
+
+### Saved needs
+
+`.chalk/needs` holds one need per line, written by office hours:
+
+```text
+gcc --version  # image GO-5 lesson=12
+```
+
+the probe, then, after the last `  # `, the kind of fix, the ticket and
+its lesson. Every run checks each need after the setup command and before
+the first loop. A need that fails detains the run as `pre-flight`, with
+the need's probe on its lesson, so office hours checks your fix the same
+way. One that times out is reported and the run goes on.
+
+`chalk needs` checks every need in fresh sandboxes, twice: with the fix
+(`CHALK_IMAGE` and `CHALK_SETUP_CMD`, as a run sees them), where it must
+pass, and without it (the default image for an `image` need, no setup
+command for a `config` one). A need that passes without its fix too is
+**retired**: the environment no longer needs it, and its lesson stops
+being recalled. `chalk needs --prune` removes retired needs from the file,
+for you to commit. It exits non-zero when a need fails, so CI can run it.
 
 ## The failure lifecycle
 

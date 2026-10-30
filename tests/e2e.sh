@@ -495,11 +495,119 @@ detain refused FAKE_CLAUDE_MODE=refused CHALK_MAX_RETRIES=0
 check "next step after many permission refusals: check auto mode with chalk doctor" \
   detained refused "rubric passed but no checkpoint was ticked" \
     "4 actions were refused in the last loop, as when auto mode is unavailable for the model; run: chalk doctor"
+# A blocker about the environment comes with a fix and a probe
+# (evidence.sh): the probe runs at detention, as proof. The fake sandbox
+# shows its image as FAKE_CONTAINER_IMAGE, so the probe below passes only
+# on an image named repo-image.
+needs_probe='test "$FAKE_CONTAINER_IMAGE" = repo-image'
+image_fix="$(jq -cn --arg p "$needs_probe" '{kind: "image", why: "gcc not found", probe: $p, image: "apt-get install -y gcc"}')"
+detain fix_fails FAKE_CLAUDE_MODE=blocked FAKE_BLOCKER="cgo: C compiler gcc not found" FAKE_BLOCKER_FIX="$image_fix"
+check "a blocker's fix is shown, and its failing probe proves the blocker real" \
+  sh -c "grep -q '\] the agent proposes a fix:' '$tmp/detain-fix_fails.log' && grep -q '\]   kind: image' '$tmp/detain-fix_fails.log' &&
+    grep -q '\]   image needs: apt-get install -y gcc' '$tmp/detain-fix_fails.log' &&
+    grep -q '\] proof: the probe fails (exit 1), so the blocker is real' '$tmp/detain-fix_fails.log'"
+check "next step for an image fix on the default image: build a repository image on it" \
+  detained fix_fails "agent reported a blocker" "build a repository image FROM chalk-sandbox:local that adds: apt-get install -y gcc"
+detain fix_passes FAKE_CLAUDE_MODE=blocked FAKE_BLOCKER_FIX='{"kind":"config","why":"w","probe":"true","config":{"CHALK_SETUP_CMD":"make deps"}}'
+check "a probe that passes says the blocker may not be real" \
+  grep -q 'the probe passes, so this blocker may not be real' "$tmp/detain-fix_passes.log"
+check "next step for a config fix: the settings to commit" \
+  detained fix_passes "agent reported a blocker" "set in .chalk/config and commit: CHALK_SETUP_CMD=make deps"
+detain fix_hangs FAKE_CLAUDE_MODE=blocked FAKE_PROBE_TIMEOUT=sleep FAKE_BLOCKER_FIX='{"kind":"image","why":"w","probe":"sleep 99"}'
+check "a probe that times out is inconclusive" grep -q 'the probe was inconclusive (timed out after 30s' "$tmp/detain-fix_hangs.log"
+detain fix_bad FAKE_CLAUDE_MODE=blocked FAKE_BLOCKER_FIX='{"kind":"image","why":"no probe"}'
+check "a fix that breaks the rules is dropped, saying why, and the detention is as before" \
+  sh -c "grep -q 'the agent.s proposed fix was not kept: an image fix needs a probe' '$tmp/detain-fix_bad.log' &&
+    grep -q 'next: provide what the agent asked for above' '$tmp/detain-fix_bad.log'"
+check "the lesson records the fix and the probe's outcome at detention" \
+  grep -q -e '-v evidence={"fix":{"kind":"image","why":"gcc not found".*"outcome":"failed","exit":"1"' "$FAKE_STATE/db.log"
+
 # Last, as its first loop's progress lands on the working branch.
 detain loop_limit CHALK_MAX_LOOPS=1
 check "next step at the loop limit: split the checkpoints or raise the limit" \
   detained loop_limit "loop limit of 1 reached" \
     "split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now 1)"
+cd "$tmp/demo"
+
+# 2c. Office hours checks a probe-carrying fix in a fresh sandbox before it
+# keeps the lesson: still failing, it stops and records nothing; passing,
+# after failing at detention, the lesson is proved and its probe is saved
+# as a need, committed on the branch, which the resumed run checks before
+# its first loop. The fake database is told what the lesson carries; a
+# real one (make test-db) holds what the detention recorded.
+chalk new PROJ-93 Needs gcc >/dev/null
+cd "$tmp/demo.worktrees/PROJ-93"
+git add -A && git commit -q -m "spec"
+if FAKE_CLAUDE_MODE=blocked FAKE_BLOCKER_FIX="$image_fix" chalk run > "$tmp/run93.log" 2>&1; then
+  fail "a blocked run must end in detention"
+fi
+detention93="$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-93-*')"
+git switch -q "$detention93"
+FAKE_PENDING_EVIDENCE="$(jq -cn --argjson fix "$image_fix" --arg p "$needs_probe" \
+  '{id: 93, fix: $fix, fix_kind: "image", probe: $p, before_outcome: "failed"}')"
+export FAKE_PENDING_EVIDENCE
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+if chalk office-hours -m "the image lacks gcc" > "$tmp/oh93a.log" 2>&1; then
+  fail "office hours must stop while the probe still fails"
+fi
+check "office hours: a probe that still fails stops it, recording nothing, with what to do" \
+  sh -c "grep -q 'the probe still fails after your fix (exit 1)' '$tmp/oh93a.log' &&
+    grep -q 'or add --unproved to resume anyway' '$tmp/oh93a.log' &&
+    ! tail -n +$((db_lines + 1)) '$FAKE_STATE/db.log' | grep -q 'SET resolution' &&
+    test \"\$(git rev-parse --abbrev-ref HEAD)\" = '$detention93'"
+# The fix: a repository image, set in the repository's config.
+sed -i.bak 's/^CHALK_IMAGE=.*/CHALK_IMAGE=repo-image/' .chalk/config && rm .chalk/config.bak
+git commit -q -am "use the repository image, which has gcc"
+db_lines="$(wc -l < "$FAKE_STATE/db.log")"
+chalk office-hours -m "the default image has no gcc; added a repository image" > "$tmp/oh93b.log" 2>&1 ||
+  { cat "$tmp/oh93b.log"; fail "office hours after the fix"; }
+tail -n +"$((db_lines + 1))" "$FAKE_STATE/db.log" > "$tmp/db93.log"
+check "office hours: the probe passes in a fresh sandbox, after failing at detention: proved" \
+  sh -c "grep -q 'the probe passes now, and failed at detention: the fix is proved' '$tmp/oh93b.log' &&
+    grep -Eq -e '-v id=[0-9]+ -v after=passed .*-v evidence=proved' '$tmp/db93.log'"
+check "office hours: the proved probe is saved as a need and committed" \
+  sh -c "git log --format=%s | grep -qx 'chalk: save the need PROJ-93 proved' &&
+    grep -Eqx -e '$(printf '%s' "$needs_probe" | sed 's/[]$.*[\^]/\\&/g')  # image PROJ-93 lesson=[0-9]+' .chalk/needs &&
+    test -z \"\$(git status --porcelain)\""
+check "office hours: distillation is given the proposed fix and what the probe showed" \
+  sh -c "sed -n '/^<proposed_fix>$/,/^<\/proposed_fix>$/p' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-93/distill/distill.prompt.md' |
+    grep -q 'probe at detention: failed; after your fix: passed'"
+check "the resumed run checks the saved need before its first loop" grep -q 'pre-flight: 1 saved need(s) hold' "$tmp/oh93b.log"
+unset FAKE_PENDING_EVIDENCE
+cd "$tmp/demo"
+
+# 2c'. A saved need that fails detains the run in pre-flight, before any
+# loop; chalk needs checks every need with and without its fix, retires
+# one the environment no longer needs, and fails when one fails.
+chalk new PROJ-94 Pre-flight >/dev/null
+cd "$tmp/demo.worktrees/PROJ-94"
+mkdir -p .chalk
+printf '# Needs of earlier tickets.\n%s  # image PROJ-93 lesson=93\ntrue  # config PROJ-1 lesson=\n' "$needs_probe" > .chalk/needs
+git add -A && git commit -q -m "spec, and the needs of earlier tickets"
+if chalk run > "$tmp/run94.log" 2>&1; then fail "a run whose saved need fails must be detained"; fi
+check "pre-flight: a saved need that fails detains the run before any loop" \
+  sh -c "grep -qF 'DETENTION: pre-flight: a saved need fails: $needs_probe' '$tmp/run94.log' && ! grep -q 'loop 1' '$tmp/run94.log'"
+check "next step in pre-flight: restore what the earlier ticket needed" \
+  next_step "$tmp/run94.log" "the environment lacks what an earlier ticket needed (.$needs_probe., saved by PROJ-93)"
+if chalk needs > "$tmp/needs1.log" 2>&1; then fail "chalk needs must fail while a need fails"; fi
+check "chalk needs: a need that fails, and one the environment no longer needs" \
+  sh -c "grep -qF 'FAILS (exit 1)  $needs_probe  (image, from PROJ-93)' '$tmp/needs1.log' &&
+    grep -qF 'retired: passes without the fix too  true  (config, from PROJ-1)' '$tmp/needs1.log'"
+CHALK_IMAGE=repo-image chalk needs > "$tmp/needs2.log" 2>&1 || { cat "$tmp/needs2.log"; fail "chalk needs with the fix"; }
+check "chalk needs: on the repository image the need holds, since the default image still lacks it" \
+  grep -qF "holds  $needs_probe  (image, from PROJ-93)" "$tmp/needs2.log"
+CHALK_IMAGE=repo-image chalk needs --prune > "$tmp/needs3.log" 2>&1 || { cat "$tmp/needs3.log"; fail "chalk needs --prune"; }
+check "chalk needs --prune: drops the retired need, keeps the others and the comments" \
+  test "$(cat .chalk/needs)" = "$(printf '# Needs of earlier tickets.\n%s  # image PROJ-93 lesson=93' "$needs_probe")"
+git checkout -q -- .chalk/needs
+# Office hours with --unproved resumes past a need that still fails: the
+# resumed run's pre-flight skips it, rather than detaining the run again.
+git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-94-*')"
+FAKE_PENDING_EVIDENCE="$(jq -cn --arg p "$needs_probe" '{id: 94, fix_kind: "image", probe: $p, before_outcome: "failed"}')" \
+  chalk office-hours --unproved -m "no gcc yet; going on without it" > "$tmp/oh94.log" 2>&1 || true
+check "office hours --unproved: the resumed run's pre-flight skips the need that still fails" \
+  sh -c "grep -qF 'pre-flight: skipping the saved need' '$tmp/oh94.log' && ! grep -q 'DETENTION: pre-flight' '$tmp/oh94.log' &&
+    grep -q 'loop 1' '$tmp/oh94.log'"
 cd "$tmp/demo"
 
 # 2b'''. An agent call that cannot run is reported with the CLI's own words.
@@ -1756,6 +1864,22 @@ SQL
   recall_run PROJ-41
   check "recall: a lesson with a similar first error is recalled after a failure" \
     test "$(recalled PROJ-41):$(counted PROJ-41)" = "LEXICAL-FIX:0 1"
+
+  # 2'. Evidence (evidence.sh): a lesson with a probe is recalled only once
+  # proved, and then says what proved it; unproved and retired ones are not.
+  rpg -c 'TRUNCATE lessons, runs, decisions'
+  seed other fp-1 "$error in the working tree" "rubric failed" PROVED-FIX
+  seed other fp-2 "$error in the working tree" "rubric failed" UNPROVED-FIX
+  seed other fp-3 "$error in the working tree" "rubric failed" RETIRED-FIX
+  rpg -c "UPDATE lessons SET probe = 'gcc --version', evidence = 'proved' WHERE lesson = 'PROVED-FIX'" \
+      -c "UPDATE lessons SET probe = 'gcc --version', evidence = 'unproved' WHERE lesson = 'UNPROVED-FIX'" \
+      -c "UPDATE lessons SET probe = 'gcc --version', evidence = 'retired' WHERE lesson = 'RETIRED-FIX'"
+  recall_run PROJ-47
+  check "recall: of lessons with probes, only the proved one is recalled" \
+    test "$(recalled PROJ-47):$(counted PROJ-47)" = "PROVED-FIX:0 1"
+  check "recall: a proved lesson says what proved it" \
+    grep -qF '  Verified: `gcc --version` failed before this fix and passed after it' \
+      "$XDG_STATE_HOME/chalk/demo/runs/PROJ-47/io/prompt.md"
 
   # 3. Legacy: a lesson from before fingerprints has no first_error, and is
   # matched on its signature. An unresolved one is never recalled.

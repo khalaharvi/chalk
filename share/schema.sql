@@ -110,6 +110,33 @@ CREATE INDEX IF NOT EXISTS lessons_fingerprint_idx ON lessons (repo, fingerprint
 -- NULL, for lessons from before scopes and when nothing was distilled, is
 -- recalled anywhere, as general.
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS scope TEXT;
+-- Evidence (lib/evidence.sh): what the agent proposed when it reported a
+-- blocker, and the probe that proves it. All nullable: a lesson without a
+-- probe is a text lesson, recalled as before.
+--   fix             the agent's proposed fix (kind, why, probe, image,
+--                   config, patch), as evidence_fix kept it
+--   fix_kind        image | config | spec | credential | decision
+--   probe           a command that fails before the fix and passes after
+--   before_outcome  passed | failed | inconclusive, at detention or
+--                   pre-flight; before_exit and before_output with it
+--   before_image    the CHALK_IMAGE ID it ran in
+--   after_outcome   the same, in a fresh sandbox after the engineer's fix
+--   after_image     the CHALK_IMAGE ID that check ran in
+--   evidence        proved (failed before, passed after), unproved (did
+--                   not), retired (passes in an environment without the
+--                   fix, so it is moot: chalk needs); NULL without a
+--                   probe. Only NULL and proved lessons are recalled.
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fix JSONB;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS fix_kind TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS probe TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS before_outcome TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS before_exit INT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS before_output TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS before_image TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS after_outcome TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS after_image TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS evidence TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS retired_at TIMESTAMPTZ;
 
 -- The decider's answers (lib/decider.sh, docs/decider-protocol.md): one row
 -- per question asked, or per call that got no answer.

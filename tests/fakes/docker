@@ -101,9 +101,11 @@ case "$cmd" in
       case "$1" in
         --name) name="$2"; shift ;;
         -v) mounts+=("$2"); shift ;;
-        -e|--restart) shift ;;
+        -e|-p|--restart|--label|--user|--tmpfs|--security-opt|--cap-drop|--memory|--cpus|--network) shift ;;
         -*) ;;
-        *) image="$1" ;;
+        # The first argument that is not an option is the image; the rest
+        # are the command.
+        *) [ -n "$image" ] || image="$1" ;;
       esac
       shift
     done
@@ -124,6 +126,9 @@ case "$cmd" in
     fi
     root="$FAKE_STATE/$name"
     mkdir -p "$root/work" "$root/home"
+    # Commands run in the container see its image as FAKE_CONTAINER_IMAGE,
+    # so that a test can tell images apart.
+    printf '%s\n' "$image" > "$root/image"
     for mount in "${mounts[@]}"; do
       host="${mount%%:*}"; rest="${mount#*:}"
       ln -sfn "$host" "$root${rest%%:*}"
@@ -213,6 +218,9 @@ case "$cmd" in
         # FAKE_CERTIFY=JSON: what db_certify_verdicts answers (certify.sh);
         # unset, nothing, as when there is no evidence to read.
         *"-- chalk certify: verdicts"*) printf '%s\n' "${FAKE_CERTIFY:-}" ;;
+        # FAKE_PENDING_EVIDENCE=JSON: what db_pending_evidence answers; {}
+        # by default, as for a lesson with no probe.
+        *"'before_outcome', before_outcome"*) printf '%s\n' "${FAKE_PENDING_EVIDENCE:-{\}}" ;;
         # FAKE_OPEN_MATCH=TICKET: an open lesson of TICKET has the same fingerprint.
         *"SELECT ticket FROM lessons"*) echo "${FAKE_OPEN_MATCH:-}" ;;
         # db_decider_gate: no resolved lessons, and no embedding column.
@@ -226,6 +234,8 @@ case "$cmd" in
       exit 0
     fi
     root="$FAKE_STATE/$name"
+    FAKE_CONTAINER_IMAGE="$(cat "$root/image" 2>/dev/null || true)"
+    export FAKE_CONTAINER_IMAGE
     args=()
     for arg in "$@"; do args+=("$(rewrite "$arg")"); done
     if [ -n "$workdir" ]; then cd "$(rewrite "$workdir")"; fi

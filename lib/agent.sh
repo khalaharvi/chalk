@@ -6,7 +6,7 @@ declare -ga CHALK_PROMPTS=(system continue retry fix-review spec-check review di
 
 # The JSON shape each kind of call must answer in.
 declare -gA CHALK_SCHEMA=(
-  [loop]='{"type":"object","required":["status","summary"],"properties":{"status":{"enum":["done","blocked"]},"checkpoint":{"type":"string"},"summary":{"type":"string"},"blocker":{"type":"string"}}}'
+  [loop]='{"type":"object","required":["status","summary"],"properties":{"status":{"enum":["done","blocked"]},"checkpoint":{"type":"string"},"summary":{"type":"string"},"blocker":{"type":"string"},"fix":{"type":"object","required":["kind","why"],"properties":{"kind":{"enum":["image","config","spec","credential","decision"]},"why":{"type":"string"},"probe":{"type":"string"},"image":{"type":"string"},"config":{"type":"object","additionalProperties":{"type":"string"}},"patch":{"type":"string"}}}}}'
   [spec]='{"type":"object","required":["verdict","problems"],"properties":{"verdict":{"enum":["pass","fail"]},"problems":{"type":"array","items":{"type":"object","required":["checkpoint","problem"],"properties":{"checkpoint":{"type":"string"},"problem":{"type":"string"},"suggestion":{"type":"string"}}}}}}'
   [review]='{"type":"object","required":["verdict","summary","findings"],"properties":{"verdict":{"enum":["pass","fail"]},"summary":{"type":"string"},"findings":{"type":"array","items":{"type":"object","required":["severity","issue"],"properties":{"severity":{"enum":["blocker","minor"]},"file":{"type":"string"},"issue":{"type":"string"}}}}}}'
   [lesson]='{"type":"object","required":["lesson","scope"],"properties":{"lesson":{"type":"string"},"scope":{"enum":["general","repo","none"]}}}'

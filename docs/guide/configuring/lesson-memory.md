@@ -42,6 +42,25 @@ fix:
 </lessons>
 ```
 
+## Evidence
+
+A lesson from a blocker that came with a probe (see
+[Blockers with a fix](../running/failures.md#blockers-with-a-fix)) carries
+its evidence: the probe, what it showed at detention, and what it showed
+in a fresh sandbox after your fix. Such a lesson is recalled only once it
+is **proved**, failing before the fix and passing after it, and its
+recalled text says so:
+
+```text
+- Seen before: agent reported a blocker
+  Fix: When go test -race reports gcc not found, this repository's image needs gcc and libc6-dev.
+  Verified: `gcc --version` failed before this fix and passed after it
+```
+
+An unproved lesson, and one `chalk needs` retired because the environment
+no longer needs its fix, is never recalled. A lesson without a probe is
+recalled as before.
+
 ## With a decider
 
 With a [decider](decider.md) (`CHALK_DECIDER=shadow` or `on`), and once

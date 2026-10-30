@@ -1,6 +1,7 @@
 An agent got stuck, and an engineer fixed the problem. Above are the failure
 the agent hit, the engineer's note and the engineer's fix to this
-repository.
+repository, and, when the agent proposed one, its fix and what its probe
+showed.
 
 Write the lesson a future agent should apply when it meets a similar
 failure. Do not modify any files.
@@ -16,6 +17,9 @@ more than none, because later agents act on it.
 
 - State it as a rule with its trigger: "When <situation>, <do this>, because
   <reason>." Use only facts the failure, the note or the diff shows.
+- When the note, the diff or the proposed fix describes a fix, the lesson
+  states the fix, not the act of reporting a blocker: "this repository's
+  sandbox image needs gcc", not "report that gcc is missing".
 - Keep the specifics that make the rule usable: the tool, the error text,
   the setting. Leave out ticket keys.
 - Two or three sentences.
@@ -45,10 +49,12 @@ at the sandbox base URL from the test config instead of the default
 production host, because the container has no route to production."
 Scope: repo
 
-Note: "the registry token had expired; rotated it in the runner settings"
+Note: "go test -race needs cgo; added gcc and libc6-dev to our sandbox image"
 Fix diff: none
-Lesson: "When installing dependencies fails with 401 from the package
-registry, report a blocker asking for the registry token to be rotated,
-because the token is set outside the repository."
+Proposed fix: kind image, probe `gcc --version`, failed before the fix and
+passed after it
+Lesson: "When `go test -race` reports `cgo: C compiler "gcc" not found`,
+this repository's sandbox image needs gcc and libc6-dev, because the race
+detector builds with cgo."
 Scope: repo
 </examples>

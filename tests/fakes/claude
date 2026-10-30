@@ -3,7 +3,8 @@
 # and returns the structured answer that prompt asks for.
 #   FAKE_CLAUDE_MODE=break     loop leaves the tree in a state the rubric rejects
 #   FAKE_CLAUDE_MODE=churn     like break, but changes another file each loop
-#   FAKE_CLAUDE_MODE=blocked   loop reports a blocker
+#   FAKE_CLAUDE_MODE=blocked   loop reports a blocker; with FAKE_BLOCKER_FIX=JSON it
+#                              proposes that fix, and FAKE_BLOCKER=TEXT is the blocker
 #   FAKE_CLAUDE_MODE=slow      loop writes slow.txt, then takes a few seconds, so a test can stop the run
 #   FAKE_CLAUDE_MODE=vanish    loop writes a file, then its sandbox disappears
 #   FAKE_CLAUDE_MODE=idle      loop changes nothing and ticks nothing
@@ -73,7 +74,12 @@ case "$prompt" in
       break)   touch BROKEN; answer '{"status":"done","summary":"did the thing"}' ;;
       churn)   touch BROKEN; echo "attempt $(wc -l < churn.txt 2>/dev/null || echo 0)" >> churn.txt
                answer '{"status":"done","summary":"tried another way"}' ;;
-      blocked) answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}' ;;
+      blocked)
+        if [ -n "${FAKE_BLOCKER_FIX:-}" ]; then
+          answer "{\"status\":\"blocked\",\"summary\":\"stuck\",\"blocker\":\"${FAKE_BLOCKER:-the sandbox lacks a tool}\",\"fix\":$FAKE_BLOCKER_FIX}"
+        else
+          answer '{"status":"blocked","summary":"stuck","blocker":"needs the staging API key"}'
+        fi ;;
       slow)    echo slow >> slow.txt; touch "$FAKE_STATE/slow-started"; sleep 3; answer '{"status":"done","summary":"slow"}' ;;
       vanish)  echo lost >> lost.txt; rm -rf "${PWD%/work/repo}"; answer '{"status":"done","summary":"gone"}' ;;
       idle)    answer '{"status":"done","summary":"nothing to do"}' ;;

@@ -184,12 +184,55 @@ db_dashboard() {
 # db_open_lesson REPO TICKET SIGNATURE RUN_ID [FINGERPRINT] [FIRST_ERROR]
 # Records a detention as an open lesson. FINGERPRINT and FIRST_ERROR come
 # from the loop that detained the run, and only when its rubric failed.
+# EVIDENCE, when given, is a JSON object of the fix the agent proposed
+# (fix) and its probe's run at detention (outcome, exit, output, image).
 db_open_lesson() {
   db_sql -v repo="$1" -v ticket="$2" -v signature="$3" -v run_id="$4" \
-    -v fingerprint="${5:-}" -v first_error="${6:-}" <<'SQL'
-INSERT INTO lessons (repo, ticket, signature, run_id, fingerprint, first_error)
-VALUES (:'repo', :'ticket', :'signature', nullif(:'run_id', ''),
-        nullif(:'fingerprint', ''), nullif(:'first_error', ''));
+    -v fingerprint="${5:-}" -v first_error="${6:-}" -v evidence="${7:-}" <<'SQL'
+INSERT INTO lessons (repo, ticket, signature, run_id, fingerprint, first_error,
+                     fix, fix_kind, probe, before_outcome, before_exit, before_output, before_image)
+SELECT :'repo', :'ticket', :'signature', nullif(:'run_id', ''),
+       nullif(:'fingerprint', ''), nullif(:'first_error', ''),
+       e -> 'fix', e -> 'fix' ->> 'kind', nullif(e -> 'fix' ->> 'probe', ''),
+       nullif(e ->> 'outcome', ''), nullif(e ->> 'exit', '')::int, nullif(e ->> 'output', ''),
+       nullif(e ->> 'image', '')
+  FROM (SELECT nullif(:'evidence', '')::jsonb AS e) x;
+SQL
+}
+
+# db_pending_evidence TICKET: prints, as one JSON object, the evidence of
+# the newest unresolved lesson for TICKET: id, fix, fix_kind, probe and
+# before_outcome; {} when there is none.
+db_pending_evidence() {
+  db_sql -v repo="${| repo_name; }" -v ticket="$1" <<'SQL'
+SELECT coalesce((SELECT json_build_object('id', id, 'fix', fix, 'fix_kind', fix_kind, 'probe', probe,
+                                          'before_outcome', before_outcome)
+                   FROM lessons
+                  WHERE repo = :'repo' AND ticket = :'ticket' AND resolution IS NULL
+                  ORDER BY id DESC LIMIT 1), '{}');
+SQL
+}
+
+# db_set_evidence ID AFTER_OUTCOME AFTER_IMAGE EVIDENCE: records the probe's
+# check after the engineer's fix on lesson ID, and what it proves.
+db_set_evidence() {
+  db_sql -v id="$1" -v after="$2" -v image="$3" -v evidence="$4" <<'SQL'
+UPDATE lessons SET after_outcome = nullif(:'after', ''), after_image = nullif(:'image', ''),
+                   evidence = nullif(:'evidence', '')
+ WHERE id = :'id'::bigint;
+SQL
+}
+
+# db_retire_lesson ID TICKET PROBE: marks lesson ID retired: its probe passes in an
+# environment without its fix, so it no longer applies and is not recalled.
+# The ID comes from .chalk/needs, which reaches other machines by merge,
+# where it may name another lesson: only one of this repository, TICKET and
+# PROBE is retired.
+db_retire_lesson() {
+  db_sql -v id="$1" -v ticket="$2" -v probe="$3" -v repo="${| repo_name; }" <<'SQL'
+UPDATE lessons SET evidence = 'retired', retired_at = coalesce(retired_at, now())
+ WHERE id = :'id'::bigint AND repo = :'repo' AND ticket = :'ticket' AND probe = :'probe'
+   AND evidence IS DISTINCT FROM 'retired';
 SQL
 }
 
@@ -251,11 +294,16 @@ SQL
 #              signature), QUERY): the lesson's error appears in the spec. Plain
 #              similarity of one error line to a whole spec stays near zero.
 #     text     0.1 for similarity(signature, QUERY), as recall always did.
-# A lesson whose scope is repo is recalled only in its own repository.
+# A lesson whose scope is repo is recalled only in its own repository. A
+# lesson with a probe is recalled only once proved (evidence.sh), and then
+# says so; an unproved or retired one is never recalled.
 db_recall_lessons() {
   db_sql -v repo="$1" -v mode="$2" -v query="$3" -v fingerprint="${4:-}" -v first_error="${5:-}" <<'SQL'
 WITH candidates AS (
   SELECT id, signature, coalesce(lesson, resolution) AS fix,
+         CASE WHEN evidence = 'proved'
+                THEN E'\n  Verified: `' || probe || '` failed before this fix and passed after it'
+              ELSE '' END AS verified,
          coalesce(repo = :'repo' AND fingerprint = nullif(:'fingerprint', ''), false) AS exact,
          CASE WHEN :'mode' = 'spec'
                 THEN word_similarity(coalesce(nullif(first_error, ''), signature), :'query')
@@ -270,9 +318,10 @@ WITH candidates AS (
     FROM lessons
    WHERE resolution IS NOT NULL
      AND (scope IS DISTINCT FROM 'repo' OR repo = :'repo')
+     AND (evidence IS NULL OR evidence = 'proved')
 )
 SELECT '- Seen before: ' || left(regexp_replace(signature, '\s+', ' ', 'g'), 240)
-       || E'\n  Fix: ' || fix
+       || E'\n  Fix: ' || fix || verified
   FROM candidates
  WHERE exact OR score > threshold
  ORDER BY exact DESC, score DESC NULLS LAST, id DESC
@@ -358,7 +407,7 @@ WITH candidates AS (
               ELSE 0.1
          END AS threshold
     FROM lessons
-   WHERE resolution IS NOT NULL
+   WHERE resolution IS NOT NULL AND (evidence IS NULL OR evidence = 'proved')
 )
 SELECT id, exact, CASE WHEN exact THEN 0 ELSE 1 END AS step, score AS rank_score
   FROM candidates WHERE exact OR score > threshold;
@@ -368,6 +417,7 @@ SELECT n.id, false, 2, n.similarity
   FROM (SELECT id, 1 - (embedding <=> :'qvec'::vector) AS similarity
           FROM lessons
          WHERE embedding IS NOT NULL AND resolution IS NOT NULL
+           AND (evidence IS NULL OR evidence = 'proved')
          ORDER BY embedding <=> :'qvec'::vector
          LIMIT :'size'::int) n
  WHERE n.similarity >= 0.7 AND n.id NOT IN (SELECT id FROM shortlist);
@@ -375,7 +425,10 @@ SELECT n.id, false, 2, n.similarity
 SELECT coalesce(json_agg(json_build_object(
          'id', l.id, 'exact', s.exact, 'step', s.step,
          'line', '- Seen before: ' || left(regexp_replace(l.signature, '\s+', ' ', 'g'), 240)
-                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution),
+                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution)
+                 || CASE WHEN l.evidence = 'proved'
+                           THEN E'\n  Verified: `' || l.probe || '` failed before this fix and passed after it'
+                         ELSE '' END,
          'failure', left(regexp_replace(coalesce(nullif(l.first_error, ''), l.signature), '\s+', ' ', 'g'), 400),
          'fix', left(coalesce(l.lesson, l.resolution), 400))
          ORDER BY s.step, s.rank_score DESC, l.id DESC), '[]')
