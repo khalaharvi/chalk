@@ -612,7 +612,8 @@ run_next_step() {
 # an earlier ticket paid for is caught at no loop spend. A need that fails
 # detains the run as preflight, its lesson carrying the need's probe, so
 # that office hours checks the fix. An inconclusive one (a timeout) is
-# reported, and the run goes on: it proves nothing either way.
+# reported, and the run goes on: it proves nothing either way. The need
+# office hours was told to resume past (OFFICE_SKIP_NEED) is skipped.
 run_preflight() {
   local need probe kind ticket id
   local -a needs
@@ -621,6 +622,10 @@ run_preflight() {
   (( ${#needs[@]} )) || return 0
   for need in "${needs[@]}"; do
     IFS=$'\t' read -r probe kind ticket id <<<"$need"
+    if [[ $probe == "${OFFICE_SKIP_NEED:-}" ]]; then
+      run_log "pre-flight: skipping the saved need \`$probe\`, which still fails: office hours resumed past it (--unproved)"
+      continue
+    fi
     evidence_probe "$RUN_SANDBOX" "$probe" got
     case "${got[outcome]}" in
       passed) continue ;;

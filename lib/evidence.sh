@@ -52,6 +52,9 @@ evidence_fix() {
       + (if .kind == "image" and (.image | type) == "string" then {image} else {} end)
       + (if .kind == "config" and (.config | type) == "object" then
            {config: (.config | with_entries(select(.key | IN($keys[])) | .value |= tostring))}
+           # .chalk/config is read a line at a time: a value with a line
+           # break in it would set keys the allow-list does not allow.
+           | if any(.config[]; test("[\r\n]")) then error("a config value must be one line") else . end
          else {} end)
       + (if .kind == "spec" and (.patch | type) == "string" then {patch} else {} end)' \
     "${EVIDENCE_KINDS[*]}" "${EVIDENCE_CONFIG_KEYS[*]}" <<<"$fix" 2>&1 || true)"
