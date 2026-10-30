@@ -301,12 +301,11 @@ decider_slow() {
 }
 
 # decider_hold -> REPLY: why CHALK_DECIDER=on may not act yet, and so is
-# held to shadow; empty when it may act. Three reasons, in this order: the
+# held to shadow; empty when it may act. Two reasons, in this order: the
 # local service measured slower than DECIDER_SLOW_MS on this machine
-# (maintainer's decision on #34), the decider is not calibrated
-# (decider_calibration, #36), or this run is a holdout (RUN_HOLDOUT, see
-# certify_holdout), which keeps certified stops in shadow mode so that
-# they go on being judged.
+# (maintainer's decision on #34), or the decider is not calibrated
+# (decider_calibration, #36). A holdout run holds only its stops
+# (decider_stop_mode).
 decider_hold() {
   local slow
   local -A cal
@@ -319,8 +318,6 @@ decider_hold() {
   decider_calibration cal
   if [[ ${cal[status]} != calibrated ]]; then
     REPLY="CHALK_DECIDER=on records in shadow mode only: ${| decider_calibration_note cal; } (see: chalk doctor)"
-  elif [[ ${RUN_HOLDOUT:-0} == 1 ]]; then
-    REPLY="this run is a holdout (CHALK_HOLDOUT=$CHALK_HOLDOUT): the decider's confident answers are recorded, not acted on, so that they go on being judged"
   fi
 }
 
@@ -336,6 +333,20 @@ decider_mode() {
   [[ -n $why ]] || { REPLY=on; return 0; }
   if [[ -z $DECIDER_ERROR ]]; then decider_warn_once "hold: $why" "$why"; fi
   REPLY=shadow
+}
+
+# decider_stop_mode -> REPLY: the mode a stuck decision is taken in:
+# decider_mode, except that a holdout run (RUN_HOLDOUT, see
+# certify_holdout) takes it in shadow, so that certified stops go on being
+# judged. Only the stop is held: the rest of the run, the lesson rerank
+# included, is the deployed policy, which the holdout must measure.
+decider_stop_mode() {
+  REPLY="${| decider_mode; }"
+  if [[ $REPLY == on && ${RUN_HOLDOUT:-0} == 1 ]]; then
+    decider_warn_once "hold: holdout" \
+      "this run is a holdout (CHALK_HOLDOUT=$CHALK_HOLDOUT): the decider's confident stops are recorded, not acted on, so that they go on being judged"
+    REPLY=shadow
+  fi
 }
 
 # decider_now_ms -> REPLY: wall-clock milliseconds. EPOCHREALTIME's decimal
@@ -563,10 +574,11 @@ decider_threshold_milli() {
 # no answer; DECIDER_ERROR says why. Decisions outside a run are not kept.
 decider_record() {
   [[ -n ${RUN_ID:-} && -d ${RUN_IO:-} ]] || return 0
-  local confidence=""
+  local confidence="" mode
+  if [[ $1 == stuck ]]; then mode="${| decider_stop_mode; }"; else mode="${| decider_mode; }"; fi
   if [[ -n $4 ]]; then printf -v confidence '%d.%03d' $(($4 / 1000)) $(($4 % 1000)); fi
   jq -cn --arg kind "$1" --arg question "$2" --arg answer "$3" --arg confidence "$confidence" \
-     --arg acted "$5" --arg lesson "${6:-}" --arg mode "${| decider_mode; }" \
+     --arg acted "$5" --arg lesson "${6:-}" --arg mode "$mode" \
      --arg threshold "$CHALK_DECIDER_THRESHOLD" --arg ms "$DECIDER_MS" \
      --arg model "$DECIDER_ANSWERED_BY" --arg error "$DECIDER_ERROR" --arg url "${| decider_url; }" '
     def num: if . == "" then null else tonumber end;
@@ -795,7 +807,7 @@ decider_stuck() {
   if decider_ask "${state:0:$DECIDER_STATE_CHARS}" "$questions" answers && [[ -v answers[stuck] ]]; then
     read -r answer confidence <<<"${answers[stuck]}"
   fi
-  mode="${| decider_mode; }"
+  mode="${| decider_stop_mode; }"
   if [[ $answer == yes && $mode == on ]] && (( confidence >= ${| decider_threshold_milli; } )); then
     acted=true
     REPLY="yes $confidence"

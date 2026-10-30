@@ -286,12 +286,16 @@ UPDATE lessons SET after_outcome = nullif(:'after', ''), after_image = nullif(:'
 SQL
 }
 
-# db_retire_lesson ID: marks lesson ID retired: its probe passes in an
+# db_retire_lesson ID TICKET PROBE: marks lesson ID retired: its probe passes in an
 # environment without its fix, so it no longer applies and is not recalled.
+# The ID comes from .chalk/needs, which reaches other machines by merge,
+# where it may name another lesson: only one of this repository, TICKET and
+# PROBE is retired.
 db_retire_lesson() {
-  db_sql -v id="$1" <<'SQL'
+  db_sql -v id="$1" -v ticket="$2" -v probe="$3" -v repo="${| repo_name; }" <<'SQL'
 UPDATE lessons SET evidence = 'retired', retired_at = coalesce(retired_at, now())
- WHERE id = :'id'::bigint AND evidence IS DISTINCT FROM 'retired';
+ WHERE id = :'id'::bigint AND repo = :'repo' AND ticket = :'ticket' AND probe = :'probe'
+   AND evidence IS DISTINCT FROM 'retired';
 SQL
 }
 
@@ -484,7 +488,10 @@ SELECT n.id, false, 2, n.similarity
 SELECT coalesce(json_agg(json_build_object(
          'id', l.id, 'exact', s.exact, 'step', s.step,
          'line', '- Seen before: ' || left(regexp_replace(l.signature, '\s+', ' ', 'g'), 240)
-                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution),
+                 || E'\n  Fix: ' || coalesce(l.lesson, l.resolution)
+                 || CASE WHEN l.evidence = 'proved'
+                           THEN E'\n  Verified: `' || l.probe || '` failed before this fix and passed after it'
+                         ELSE '' END,
          'failure', left(regexp_replace(coalesce(nullif(l.first_error, ''), l.signature), '\s+', ' ', 'g'), 400),
          'fix', left(coalesce(l.lesson, l.resolution), 400))
          ORDER BY s.step, s.rank_score DESC, l.id DESC), '[]')
@@ -529,7 +536,9 @@ SQL
 #   waiting  neither yet: no progress since, and no detention
 # The numbers at any threshold are those of the lowest level at or above it.
 # Answers taken under on are left out: one that acted stopped its run, so
-# nothing after it could show whether it was right. Judged runs are also
+# nothing after it could show whether it was right. So are answers on a
+# run's last loop: the run ended there anyway, so stopping it saved nothing
+# and could not be wrong, and counting them would only pad the right ones. Judged runs are also
 # taken in blocks of CERTIFY_BLOCK, in the order they were judged (by their
 # first progressing loop after the answer, or their detention): blocks is
 # how many are complete, block_wrong the false stops in the latest one, and
@@ -546,6 +555,8 @@ WITH a AS (
     FROM decisions d JOIN runs c ON c.id = d.call_id
    WHERE d.kind = 'stuck' AND d.answer = 'yes' AND d.mode = 'shadow'
      AND d.run_id IS NOT NULL AND d.confidence IS NOT NULL
+     AND EXISTS (SELECT 1 FROM runs l WHERE l.run_id = d.run_id AND l.loop > c.loop
+                   AND l.kind IN ('continue', 'retry', 'fix-review'))
 ), providers AS (
   SELECT coalesce(url, '') AS url, coalesce(model, '') AS model, max(created_at) AS last
     FROM decisions WHERE answer IS NOT NULL GROUP BY 1, 2
@@ -594,7 +605,9 @@ SQL
 # agent model, plus verdict "any" for the first stopping verdict of any
 # kind. A verdict fires on the first loop of a run that got it in shadow
 # mode (a call records fp_rules on only when its verdict detained the run:
-# nothing after that loop could show whether it was right). A firing is
+# nothing after that loop could show whether it was right), and that a
+# later loop followed: on the run's last loop, stopping would have saved
+# nothing and could not be wrong. A firing is
 # judged once the run shows which it was: wrong when a later loop
 # progressed, correct when it made no progress after it and was detained;
 # waiting until then. Judged firings are taken in blocks of CERTIFY_BLOCK,
@@ -611,6 +624,7 @@ WITH l AS (
   SELECT DISTINCT ON (x.verdict, l.run_id) x.verdict, l.run_id, l.loop, l.model, l.created_at
     FROM l CROSS JOIN LATERAL (VALUES (l.verdict), ('any')) AS x(verdict)
    WHERE l.verdict IN ('deja_vu', 'repeat', 'no_change') AND l.fp_rules IS DISTINCT FROM 'on'
+     AND EXISTS (SELECT 1 FROM l a WHERE a.run_id = l.run_id AND a.loop > l.loop)
    ORDER BY x.verdict, l.run_id, l.loop
 ), j AS (
   SELECT f.*,

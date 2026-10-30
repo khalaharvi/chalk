@@ -30,8 +30,16 @@ reviewer, not as a verdict.
    commit, with enough history to reach its merge base, and run:
 
     ```sh
-    chalk attest verify --rerun
+    chalk attest verify --rerun --base "origin/$BASE_BRANCH"
     ```
+
+    where `$BASE_BRANCH` is the branch the request targets (in GitHub
+    Actions, `$GITHUB_BASE_REF`). Verify checks the records the branch
+    added since its merge base with it, and trusts the signers committed
+    there, never the branch's own copy of `.chalk/allowed_signers`: whoever
+    pushes the branch could add a key to that. Without `--base`, the base
+    is `origin/CHALK_BASE_BRANCH`, a setting the branch can change, so name
+    it in CI.
 
 It needs `git`, `jq`, `openssl` and `ssh-keygen` (OpenSSH 8.1 or newer).
 `--rerun` also needs Docker, to run the rubric and the saved needs in a
@@ -41,11 +49,11 @@ fresh sandbox.
 
 | Check | Passes when |
 | :-- | :-- |
-| `signature` | The record's DSSE signature verifies against `.chalk/allowed_signers` (or `CHALK_ATTEST_SIGNERS`) for the principal it names. |
+| `signature` | The record's DSSE signature verifies for the principal it names against `.chalk/allowed_signers` as committed at the branch's merge base (or against `CHALK_ATTEST_SIGNERS`, set outside the repository). |
 | `subject` | The record names this branch's git tree, not counting `.chalk/evidence/`. Any commit after the record fails this. |
-| `tests` | The existing test files the branch changed or deleted are those the record lists. They are printed for the reviewer: an agent that edits a test until it passes is what this check is for. |
+| `tests` | The existing test files the branch changed, deleted or renamed are those the record lists. They are printed for the reviewer: an agent that edits a test until it passes is what this check is for. |
 | `cost` | The recorded calls add up to the recorded total. |
-| `rubric` | With `--rerun`: `CHALK_TEST_CMD` passes in a fresh sandbox on `CHALK_IMAGE`, after `CHALK_SETUP_CMD`. |
+| `rubric` | With `--rerun`: the rubric command the record names passes in a fresh sandbox on the image it names, after the setup command it names. The branch's `.chalk/config` is not used, since the branch could change it. When the local image's ID differs from the recorded one, the check says so. |
 | `needs` | With `--rerun`: every need saved in `.chalk/needs` passes in that sandbox. |
 
 Verify exits non-zero when any check fails.
@@ -70,7 +78,7 @@ Its payload is an [in-toto](https://in-toto.io) Statement v1:
     "base": { "branch": "main", "commit": "…", "tree": "…" },
     "harness": { "chalk": "0.8.0", "prompts": "…", "fp_rules": "shadow", "decider": "off" },
     "sandbox": { "image": "chalk-sandbox:local", "image_id": "sha256:…", "needs": [] },
-    "rubric": { "command": "npm test" },
+    "rubric": { "command": "npm test", "setup": "npm ci" },
     "review": { "ran": true, "summary": "…" },
     "tests_changed": [],
     "ledger": {
