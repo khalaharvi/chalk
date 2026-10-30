@@ -127,6 +127,18 @@ Certified
     certified stop acts. See `chalk certify` and
     [May the verdicts act yet?](../guide/operating/dashboard.md#may-the-verdicts-act-yet).
 
+Probe
+:   One command that fails while an environment blocker stands and passes
+    once it is fixed, such as `gcc --version`. The agent proposes it with
+    its fix; Chalk runs it at detention, after your fix at office hours,
+    and before every later run as a need. See
+    [Blockers with a fix](../guide/running/failures.md#blockers-with-a-fix).
+
+Need
+:   A proved probe saved in `.chalk/needs`, checked before every run's
+    first loop (pre-flight) and by `chalk needs`. See
+    [Saved needs](../guide/running/failures.md#saved-needs).
+
 Holdout
 :   A run, a tenth by default (`CHALK_HOLDOUT`), that keeps certified
     stops in shadow mode, so that they go on being judged after they act.

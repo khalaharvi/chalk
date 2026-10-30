@@ -28,7 +28,7 @@ for module in log runtime jobs system; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
-for module in repo forge state config db certify decider memory sandbox fingerprint agent \
+for module in repo forge state config db certify decider memory sandbox evidence fingerprint agent \
               run fleet lifecycle dashboard setup share; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib" "$module.sh"
@@ -62,8 +62,9 @@ Work
                                Print an anonymised report card to post if you choose; sends nothing
 
 Failure lifecycle
-  chalk office-hours -m NOTE [--detach]
+  chalk office-hours -m NOTE [--detach] [--unproved]
                                Record your fix on a detention branch and resume
+  chalk needs [--prune]        Check the environment needs earlier tickets saved
   chalk submit                 Push the current branch and open the pull/merge request
   chalk cleanup [--all]        Stop runs, remove sandboxes, worktrees, merged branches
 USAGE
@@ -90,6 +91,7 @@ main() {
     certify)       cmd_certify "$@" ;;
     share)         cmd_share "$@" ;;
     office-hours)  cmd_office_hours "$@" ;;
+    needs)         cmd_needs "$@" ;;
     submit)        cmd_submit "$@" ;;
     cleanup)       cmd_cleanup "$@" ;;
     version|--version|-v) echo "$CHALK_VERSION" ;;

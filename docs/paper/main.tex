@@ -301,6 +301,16 @@ A failing need on a later run is a regression of the environment, caught before 
 
 Fixes to the spec, credentials or decisions have no probe. A spec change proves itself when the agent meets the new spec, and the sandbox holds no credentials to check. These lessons stay text-only and are labelled as such.
 
+\paragraph{Implementation.}
+Chalk implements this lifecycle in \texttt{lib/evidence.sh}. A blocked answer may carry a structured fix. A fix that breaks a rule is dropped and logged, so the detention is as before. The rules are:
+\begin{itemize}[leftmargin=*,nosep]
+\item the kind must be one of the five above;
+\item only image and config fixes carry a probe;
+\item a config fix may name only the setup command and the rubric timeout, never the rubric, the permission mode or the budget;
+\item a probe is a single line of at most 300 characters.
+\end{itemize}
+A probe that exits 0 \emph{passed}. Any other exit \emph{failed}, a missing tool's 127 included, since that is what most environment blockers are. A 30-second timeout, a sandbox that is not running, or a setup command that failed first is \emph{inconclusive}. The probe runs after the detention commit, so nothing it writes reaches the parked work. At office hours a failing probe stops the command before anything is recorded, unless the engineer explicitly resumes, in which case the lesson is unproved. A proved image or config probe is committed to \texttt{.chalk/needs} on the detention branch, and reaches other tickets by merge. Recall excludes every lesson whose evidence is unproved or retired.
+
 \paragraph{Pre-flight needs are stop-only control.}
 A failing need stops a run before loop 1, so a need is a stop-only verdict at $t=0$ and is certified exactly as in \S\ref{sec:stop}.
 
@@ -486,7 +496,7 @@ Ledger, fingerprints $(\Tset,\Eerr,\Dtree)$, verdicts in shadow mode & shipped (
 Fingerprint, lexical and embedding recall; decider rerank & shipped (v0.7--v0.8) \\
 Local decider (its 20-run, 90\% gate replaced by the block gate) & shipped (v0.8) \\
 Block gate ($b=46$, $w^\star=1$) for verdicts and decider; holdout; \texttt{chalk certify} & implemented (this work) \\
-Probes, needs, pre-flight, evidence-based expiry & designed, not shipped \\
+Probes, needs, pre-flight, evidence-based expiry (\texttt{chalk needs}) & implemented (this work) \\
 Per-repository tuning (\texttt{chalk tune}) & designed, not shipped \\
 Evidence bundle and CI re-verification & proposed here \\
 \bottomrule

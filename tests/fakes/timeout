@@ -4,5 +4,10 @@
 # FAKE_AGENT_TIMEOUT=1 makes every agent call (timeout N claude ...) run
 # out of time.
 if [ -n "${FAKE_AGENT_TIMEOUT:-}" ] && [ "${2:-}" = claude ]; then cat > /dev/null; exit 124; fi
+# FAKE_PROBE_TIMEOUT=TEXT makes a `timeout N bash -c CMD` whose CMD holds
+# TEXT run out of time, as a probe that hangs would.
+if [ -n "${FAKE_PROBE_TIMEOUT:-}" ] && [ "${2:-}" = bash ] && [[ "${4:-}" == *"$FAKE_PROBE_TIMEOUT"* ]]; then
+  echo "probe still running"; exit 124
+fi
 shift
 exec "$@"

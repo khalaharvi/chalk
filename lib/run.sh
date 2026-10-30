@@ -42,6 +42,12 @@ run_context() {
   # The verdicts' mode for the call being recorded (run_fp_mode); empty
   # records CHALK_FP_RULES.
   RUN_FP_MODE=""
+  # The fix a blocker proposes (evidence_fix), and its probe's run when the
+  # run is detained or fails pre-flight, as JSON; empty when there is none.
+  RUN_FIX=""
+  RUN_EVIDENCE=""
+  # The need pre-flight found failing, for its next step.
+  RUN_PREFLIGHT_NEED=""
   RUN_FP_BASE=()
   # Set once the run has said how it ended (run_detain), so that
   # run_teardown parks the sandbox's work only after an unexpected exit.
@@ -584,7 +590,8 @@ run_next_step() {
     return 0
   fi
   case "$1" in
-    blocked)     REPLY="provide what the agent asked for above, such as a credential, access or a decision" ;;
+    blocked)     run_fix_step ;;
+    preflight)   REPLY="the environment lacks what an earlier ticket needed (${RUN_PREFLIGHT_NEED:-a saved need}); restore it in CHALK_IMAGE or CHALK_SETUP_CMD, check with: chalk needs" ;;
     loop_limit)  REPLY="split the open checkpoints into smaller ones, or raise CHALK_MAX_LOOPS (now $CHALK_MAX_LOOPS)" ;;
     review)      REPLY="fix the review findings above, or raise CHALK_REVIEW_ROUNDS (now $CHALK_REVIEW_ROUNDS)" ;;
     failed)      REPLY="the rubric still fails after $CHALK_MAX_RETRIES retries; fix the failure in $RUN_IO/rubric.log, or make the checkpoint smaller" ;;
@@ -598,6 +605,61 @@ run_next_step() {
     stuck)       REPLY="the decider judged the agent stuck on the same root cause as the loop before (confidence $RUN_STUCK_CONFIDENCE); fix that cause yourself, a retry would likely fail the same way" ;;
     *)           REPLY="fix what stopped the run" ;;
   esac
+}
+
+# run_preflight: before the first loop, runs every need saved in
+# .chalk/needs (evidence_needs) in the sandbox, so that an environment gap
+# an earlier ticket paid for is caught at no loop spend. A need that fails
+# detains the run as preflight, its lesson carrying the need's probe, so
+# that office hours checks the fix. An inconclusive one (a timeout) is
+# reported, and the run goes on: it proves nothing either way.
+run_preflight() {
+  local need probe kind ticket id
+  local -a needs
+  local -A got
+  evidence_needs "$RUN_WT" needs
+  (( ${#needs[@]} )) || return 0
+  for need in "${needs[@]}"; do
+    IFS=$'\t' read -r probe kind ticket id <<<"$need"
+    evidence_probe "$RUN_SANDBOX" "$probe" got
+    case "${got[outcome]}" in
+      passed) continue ;;
+      inconclusive)
+        run_log "pre-flight: the saved need \`$probe\` was inconclusive (${got[output]%%$'\n'*}); going on"
+        continue ;;
+    esac
+    RUN_PREFLIGHT_NEED="\`$probe\`, saved by $ticket"
+    RUN_FIX="$(jq -cn --arg kind "$kind" --arg probe "$probe" --arg ticket "$ticket" --arg id "$id" \
+                 '{kind: $kind, why: "a need saved by \($ticket) (lesson \($id)) fails", probe: $probe}')"
+    RUN_EVIDENCE="$(jq -cn --argjson fix "$RUN_FIX" --arg o failed --arg e "${got[exit]}" --arg out "${got[output]}" \
+                      --arg image "${| evidence_image; }" '{fix: $fix, outcome: $o, exit: $e, output: $out, image: $image}')"
+    run_detain preflight "pre-flight: a saved need fails: $probe" "${got[output]}"
+    return 1
+  done
+  run_log "pre-flight: ${#needs[@]} saved need(s) hold"
+}
+
+# run_fix_step -> REPLY: the next step for a blocker, by the kind of fix
+# the agent proposed (RUN_FIX); without one, what it always was.
+run_fix_step() {
+  local kind="" image config
+  if [[ -n $RUN_FIX ]]; then kind="$(jq -r '.kind // empty' <<<"$RUN_FIX" 2>/dev/null || true)"; fi
+  case "$kind" in
+    image)
+      image="$(jq -r '.image // "what the probe needs"' <<<"$RUN_FIX")"
+      if [[ $CHALK_IMAGE == "$CHALK_DEFAULT_IMAGE" ]]; then
+        REPLY="build a repository image FROM $CHALK_DEFAULT_IMAGE that adds: $image; set CHALK_IMAGE to it in .chalk/config and commit"
+      else
+        REPLY="add to the image you build as CHALK_IMAGE ($CHALK_IMAGE): $image"
+      fi ;;
+    config)
+      config="$(jq -r '[.config // {} | to_entries[] | "\(.key)=\(.value)"] | join(", ")' <<<"$RUN_FIX")"
+      REPLY="set in .chalk/config and commit: ${config:-the setting the agent names above}" ;;
+    spec)       REPLY="change specs/$RUN_TICKET.md as the agent suggests above, and commit" ;;
+    credential) REPLY="provide the access the agent asked for above; the sandbox holds no credentials" ;;
+    *)          REPLY="provide what the agent asked for above, such as a credential, access or a decision" ;;
+  esac
+  if [[ $kind == @(image|config) ]]; then REPLY+="; the probe is checked again in a fresh sandbox at office hours"; fi
 }
 
 # run_detention_branch -> REPLY: a name for this run's detention branch that
@@ -630,6 +692,7 @@ run_detain() {
 
   run_log "DETENTION: $reason"
   if [ -n "$detail" ]; then run_log "$detail"; fi
+  if [[ -n $RUN_FIX ]]; then run_blocker_evidence; fi
   run_log "next: ${| run_next_step "$kind"; }"
   if [[ -n $branch ]]; then
     run_log "work parked on local branch $branch. To unblock:"
@@ -647,8 +710,36 @@ $detail"
     signature="$signature
 $(tail -n 40 "$RUN_IO/rubric.log")"
   fi
-  run_db db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$signature" "$RUN_ID" "$fingerprint" "$first_error"
+  run_db db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$signature" "$RUN_ID" "$fingerprint" "$first_error" \
+    "$RUN_EVIDENCE"
   run_db db_event "$RUN_TICKET" detention
+}
+
+# run_blocker_evidence: shows the fix the agent proposed (RUN_FIX) and, for
+# one with a probe, runs it, after the detention commit so that nothing it
+# writes reaches the detention branch, unless pre-flight already did
+# (RUN_EVIDENCE). Its outcome is proof, not a verdict: the run is detained
+# either way. Sets RUN_EVIDENCE for the lesson.
+run_blocker_evidence() {
+  local probe line
+  local -A got
+  run_log "the agent proposes a fix:"
+  while IFS= read -r line; do run_log "  $line"; done <<<"${| evidence_fix_text "$RUN_FIX"; }"
+  probe="$(jq -r '.probe // empty' <<<"$RUN_FIX")"
+  if [[ -z $RUN_EVIDENCE ]]; then
+    RUN_EVIDENCE="$(jq -c '{fix: .}' <<<"$RUN_FIX")"
+    [[ -n $probe ]] || return 0
+    evidence_probe "$RUN_SANDBOX" "$probe" got
+    RUN_EVIDENCE="$(jq -c --arg o "${got[outcome]}" --arg e "${got[exit]}" --arg out "${got[output]}" \
+                       --arg image "${| evidence_image; }" '. + {outcome: $o, exit: $e, output: $out, image: $image}' \
+                       <<<"$RUN_EVIDENCE")"
+  fi
+  [[ -n $probe ]] || return 0
+  case "$(jq -r '.outcome // empty' <<<"$RUN_EVIDENCE")" in
+    failed) run_log "proof: the probe fails (exit $(jq -r .exit <<<"$RUN_EVIDENCE")), so the blocker is real; it must pass once you fix it" ;;
+    passed) run_log "the probe passes, so this blocker may not be real: check it before changing anything" ;;
+    *)      run_log "the probe was inconclusive ($(jq -r '.output // "no output"' <<<"$RUN_EVIDENCE" | head -n 1)), so it proves nothing" ;;
+  esac
 }
 
 # Pushes the finished branch and opens the pull or merge request. chalk
@@ -719,6 +810,7 @@ cmd_run() {
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
       die "setup command failed in sandbox; see $RUN_IO/setup.log"
   fi
+  run_preflight || return 1
   if [ "$CHALK_SPEC_CHECK" = "true" ]; then
     run_spec_check ||
       die "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
@@ -779,6 +871,8 @@ cmd_run() {
       run_verdict fp blocked
       run_db db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
       decider_flush
+      RUN_FIX="${| evidence_fix "$result"; }"
+      if [[ -n $EVIDENCE_FIX_PROBLEM ]]; then run_log "the agent's proposed fix was not kept: $EVIDENCE_FIX_PROBLEM"; fi
       run_detain blocked "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
       return 1
     fi

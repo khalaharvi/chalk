@@ -21,3 +21,23 @@ Finish with status "done", the checkpoint text and a one-sentence summary.
 If the cause is outside your control, finish with status "blocked" and say
 precisely what is missing in "blocker". Reporting a real blocker now is
 better than a third failed attempt.
+
+When you finish "blocked", also propose the fix in "fix", so that the
+engineer can act on it at once:
+
+- "kind": "image" when the sandbox lacks a tool or system package,
+  "config" when the setup command or the rubric timeout is wrong, "spec"
+  when the spec contradicts itself or the code or asks for the impossible,
+  "credential" for missing access, "decision" for a choice only a person
+  can make.
+- "why": one or two sentences with the evidence: the error line, or the
+  measurement.
+- For "image": "image", the packages or Dockerfile lines it needs, such as
+  `apt-get install -y gcc libc6-dev`.
+- For "config": "config", the settings to change. Only CHALK_SETUP_CMD and
+  CHALK_RUBRIC_TIMEOUT may be proposed.
+- For "image" and "config": "probe", one shell command that fails now and
+  will pass once the environment is fixed, such as `gcc --version` or
+  `python3 -c 'import yaml'`. It runs again before later runs to check the
+  environment, so it must only read, never change anything.
+- For "spec": "patch", a unified diff of the spec file and nothing else.

@@ -110,10 +110,19 @@ decide whether to post it. See [Privacy](../privacy.md#chalk-share).
 
 ## Failure lifecycle
 
-**`chalk office-hours -m NOTE [--detach | -d]`**, run from a `detention/…`
-branch after you have committed a fix, records the note, distils it into a
-lesson, moves to a `tutoring/…` branch and resumes the run. See
-[Detention and office hours](../guide/running/failures.md).
+**`chalk office-hours -m NOTE [--detach | -d] [--unproved]`**, run from a
+`detention/…` branch after you have committed a fix, checks the fix with
+the blocker's probe when it has one, records the note, distils it into a
+lesson, saves a proved environment probe as a need, moves to a
+`tutoring/…` branch and resumes the run. While the probe still fails it
+stops, unless `--unproved` resumes anyway with the lesson kept out of
+recall. See [Detention and office hours](../guide/running/failures.md).
+
+**`chalk needs [--prune]`** checks every need saved in `.chalk/needs`, in
+fresh sandboxes, with and without its fix: `holds`, `FAILS`, or
+`retired` when it passes without the fix too. `--prune` removes retired
+needs from the file. Exits non-zero when a need fails. See
+[Saved needs](../guide/running/failures.md#saved-needs).
 
 **`chalk submit`** pushes the current branch and opens the pull or merge
 request, for when `CHALK_AUTO_MR` is off. Every checkpoint must be ticked.

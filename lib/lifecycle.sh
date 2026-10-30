@@ -46,7 +46,9 @@ office_hours_distill() {
   {
     printf '<failure>\n%s\n</failure>\n' "$signature"
     printf '<engineer_note>\n%s\n</engineer_note>\n' "$note"
-    printf '<fix_diff>\n%s\n</fix_diff>\n\n' "$fix"
+    printf '<fix_diff>\n%s\n</fix_diff>\n' "$fix"
+    if [[ -n $OFFICE_FIX_TEXT ]]; then printf '<proposed_fix>\n%s\n</proposed_fix>\n' "$OFFICE_FIX_TEXT"; fi
+    printf '\n'
     cat "${| prompt_file "$RUN_WT" distill; }"
   } > "$io/distill.prompt.md"
   agent_call "$sandbox" "$io" distill "$CHALK_CHEAP_MODEL" "${CHALK_SCHEMA[lesson]}" read < "$io/distill.prompt.md" || true
@@ -67,13 +69,89 @@ office_hours_distill() {
   printf '%s\t%s\n' "$scope" "$lesson"
 }
 
+# What office_hours_check found, for distillation and saving a need: the
+# fix the agent proposed and its probe's results in words, the lesson's id,
+# its probe and kind, and what the probe proves (proved, unproved or empty).
+OFFICE_FIX_TEXT="" OFFICE_LESSON_ID="" OFFICE_PROBE="" OFFICE_KIND="" OFFICE_EVIDENCE=""
+
+# office_hours_check UNPROVED: when the detention's lesson carries a probe
+# (evidence.sh), runs it in a fresh sandbox on this branch, with the
+# setup command, as the resumed run will see the environment. Passing,
+# after failing at detention, proves the lesson. Still failing stops office
+# hours before anything is recorded, so it can be run again once fixed,
+# unless UNPROVED is 1: then the run resumes and the lesson is kept out of
+# recall. An inconclusive check proves nothing, and does not stop.
+office_hours_check() {
+  local unproved="$1" pending before first
+  local -A after
+  OFFICE_FIX_TEXT="" OFFICE_LESSON_ID="" OFFICE_PROBE="" OFFICE_KIND="" OFFICE_EVIDENCE=""
+  pending="$(db_pending_evidence "$RUN_TICKET" 2>/dev/null || true)"
+  jq -e 'type == "object"' >/dev/null 2>&1 <<<"$pending" || return 0
+  OFFICE_LESSON_ID="$(jq -r '.id // empty' <<<"$pending")"
+  if jq -e '.fix | type == "object"' >/dev/null <<<"$pending"; then
+    OFFICE_FIX_TEXT="${| evidence_fix_text "$(jq -c .fix <<<"$pending")"; }"
+  fi
+  OFFICE_PROBE="$(jq -r '.probe // empty' <<<"$pending")"
+  OFFICE_KIND="$(jq -r '.fix_kind // empty' <<<"$pending")"
+  before="$(jq -r '.before_outcome // empty' <<<"$pending")"
+  [[ -n $OFFICE_PROBE ]] || return 0
+
+  info "checking your fix: running the probe in a fresh sandbox on $RUN_BRANCH: $OFFICE_PROBE"
+  evidence_check "$RUN_BRANCH" "$OFFICE_PROBE" after "$CHALK_SETUP_CMD"
+  first="${after[output]%%$'\n'*}"
+  case "${after[outcome]}" in
+    passed)
+      if [[ $before == failed ]]; then
+        OFFICE_EVIDENCE=proved
+        info "the probe passes now, and failed at detention: the fix is proved"
+      else
+        OFFICE_EVIDENCE=unproved
+        warn "the probe passes, but did not fail at detention (${before:-not run}), so it proves nothing; the lesson is kept out of recall"
+      fi ;;
+    failed)
+      if (( ! unproved )); then
+        die "the probe still fails after your fix (exit ${after[exit]}${first:+: $first})." \
+          "Fix the environment, commit, and run office hours again; or add --unproved to resume anyway, with the lesson kept out of recall"
+      fi
+      OFFICE_EVIDENCE=unproved
+      warn "the probe still fails (exit ${after[exit]}); resuming as asked, with the lesson kept out of recall" ;;
+    *)
+      OFFICE_EVIDENCE=unproved
+      warn "the probe's check was inconclusive (${first:-no output}); the lesson is kept out of recall until a probe proves it" ;;
+  esac
+  OFFICE_FIX_TEXT+=$'\n'"probe at detention: ${before:-not run}; after your fix: ${after[outcome]}"
+  db_set_evidence "$OFFICE_LESSON_ID" "${after[outcome]}" "${after[image]-}" "$OFFICE_EVIDENCE"
+}
+
+# office_hours_save_need: when the fix is proved and about the environment
+# (an image or config fix), saves its probe as a need in .chalk/needs and
+# commits it on the detention branch, so that the resumed run, and every
+# branch this one merges into, checks it before its first loop.
+office_hours_save_need() {
+  local file line
+  [[ $OFFICE_EVIDENCE == proved && $OFFICE_KIND == @(image|config) ]] || return 0
+  line="${| evidence_need_line "$OFFICE_PROBE" "$OFFICE_KIND" "$RUN_TICKET" "$OFFICE_LESSON_ID"; }"
+  if [[ -z $line ]]; then
+    warn "the probe could not be saved as a need: one line in $EVIDENCE_NEEDS_FILE cannot hold it"
+    return 0
+  fi
+  file="$RUN_WT/$EVIDENCE_NEEDS_FILE"
+  if [[ -f $file ]] && grep -qF -- "$OFFICE_PROBE$EVIDENCE_NEEDS_SEP" "$file"; then return 0; fi
+  mkdir -p "${file%/*}"
+  printf '%s\n' "$line" >> "$file"
+  git -C "$RUN_WT" add "$EVIDENCE_NEEDS_FILE"
+  git -C "$RUN_WT" commit -q -m "chalk: save the need $RUN_TICKET proved" -m "$line"
+  info "saved as a need in $EVIDENCE_NEEDS_FILE, checked before every run's first loop: $OFFICE_PROBE"
+}
+
 cmd_office_hours() {
-  local note="" run_args=()
+  local note="" unproved=0 run_args=()
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) note="${2:-}"; shift ;;
       --detach|-d) run_args=(--detach) ;;
-      *) die "usage: chalk office-hours -m \"what was wrong and how you fixed it\" [--detach]" ;;
+      --unproved) unproved=1 ;;
+      *) die "usage: chalk office-hours -m \"what was wrong and how you fixed it\" [--detach] [--unproved]" ;;
     esac
     shift
   done
@@ -88,6 +166,7 @@ cmd_office_hours() {
 
   db_up
   local distilled scope lesson stored
+  office_hours_check "$unproved"
   distilled="$(office_hours_distill "$note" || true)"
   scope="${distilled%%$'\t'*}" lesson="${distilled#*$'\t'}"
   # The scope says where the lesson is recalled. A repo lesson is recalled
@@ -109,6 +188,7 @@ cmd_office_hours() {
     decider_embed_lessons 16
   fi
 
+  office_hours_save_need
   RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
   info "lesson recorded; continuing on $RUN_BRANCH"
@@ -118,6 +198,71 @@ cmd_office_hours() {
   else
     run_graduate --force
   fi
+}
+
+# needs_without KIND BRANCH PROBE VAR: runs PROBE as evidence_check does,
+# in the environment without the fix a need of KIND records: the default
+# image with no setup command for an image fix, CHALK_IMAGE with no setup
+# command for a config fix.
+needs_without() {
+  local CHALK_IMAGE="$CHALK_IMAGE"
+  if [[ $1 == image ]]; then CHALK_IMAGE="$CHALK_DEFAULT_IMAGE"; fi
+  evidence_check "$2" "$3" "$4" ""
+}
+
+# chalk needs [--prune]: checks every need saved in .chalk/needs, each in a
+# fresh sandbox: with the fix (CHALK_IMAGE and CHALK_SETUP_CMD, as a run
+# sees them) it must pass; without it (needs_without), a pass means the
+# environment no longer needs the fix, so the need and its lesson retire.
+# Exits non-zero when a need fails, so CI can run it. --prune removes
+# retired needs from the file, to commit.
+cmd_needs() {
+  local prune=0 root branch need probe kind ticket id status failed=0 retired=0
+  local -a needs keep=()
+  local -A with without
+  case "${1:-}" in
+    --prune) prune=1 ;;
+    '') ;;
+    *) die "usage: chalk needs [--prune]" ;;
+  esac
+  need git docker jq
+  root="${| repo_root; }"
+  load_config "$root"
+  evidence_needs "$root" needs
+  if (( ! ${#needs[@]} )); then
+    info "no saved needs in $EVIDENCE_NEEDS_FILE"
+    return 0
+  fi
+  branch="${| current_branch; }"
+  local RUN_TICKET=needs RUN_WT="$root"
+  db_up >/dev/null 2>&1 || true
+  for need in "${needs[@]}"; do
+    IFS=$'\t' read -r probe kind ticket id <<<"$need"
+    evidence_check "$branch" "$probe" with "$CHALK_SETUP_CMD"
+    status="${with[outcome]}"
+    case "$status" in
+      failed) status="FAILS (exit ${with[exit]})"; failed=1 ;;
+      passed)
+        needs_without "$kind" "$branch" "$probe" without
+        if [[ ${without[outcome]} == passed ]]; then
+          status="retired: passes without the fix too"
+          retired=$((retired + 1))
+          if [[ -n $id ]]; then db_retire_lesson "$id" >/dev/null 2>&1 || true; fi
+          (( prune )) && continue
+        else
+          status="holds"
+        fi ;;
+    esac
+    keep+=("${| evidence_need_line "$probe" "$kind" "$ticket" "$id"; }")
+    info "  $status  $probe  ($kind, from $ticket)"
+  done
+  if (( prune && retired )); then
+    printf '%s\n' "${keep[@]}" > "$root/$EVIDENCE_NEEDS_FILE"
+    info "removed $retired retired need(s) from $EVIDENCE_NEEDS_FILE; commit it"
+  elif (( retired )); then
+    info "$retired need(s) retired; remove them with: chalk needs --prune"
+  fi
+  (( ! failed )) || die "a saved need fails: the environment lacks what an earlier ticket needed"
 }
 
 cmd_submit() {
