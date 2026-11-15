@@ -33,8 +33,8 @@ run under any bash. Then it loads three layers, in this order:
    system (host profile, locks).
 2. **Chalk domain** (`lib/`): repo, forge, state, config, db, memory,
    sandbox, integrity, fingerprint, agent.
-3. **Commands** (`lib/`, the `cmd_*` functions): run, fleet, lifecycle,
-   dashboard, setup, share.
+3. **Commands** (`lib/`, the `cmd_*` functions): run, fleet, a2a,
+   lifecycle, dashboard, setup, share.
 
 A file uses what is loaded before it, never after. Function names start
 with their module's name, such as `repo_`, `db_` or `jobs_`. `bin/chalk` loads each

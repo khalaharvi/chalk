@@ -39,6 +39,10 @@ every column.
   output, the decider's answers (`decisions.jsonl`) and the git bundle of
   the sandbox's commits.
 - `dashboard.html`: the report card, when you build it.
+- `<repo>/a2a/`, only if you run `chalk a2a up`: the server's token, log
+  and process ID, and one file per task with the messages a calling agent
+  sent, which hold the specs, notes and patches it gave. The server
+  listens on 127.0.0.1 only and sends nothing anywhere.
 - `decider/`: the local decider's process IDs, logs, and the model
   revisions it installed.
 - `db-upgrade/`: during `chalk db upgrade`, a full dump of the old database,

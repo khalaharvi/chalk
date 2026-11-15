@@ -75,6 +75,10 @@ declare -gA CHALK_ENV_DEFAULTS=(
   # Seconds a run's start of the local decider waits for it; auto adapts
   # to the machine.
   [CHALK_DECIDER_TIMEOUT]=auto
+  # The port the A2A server listens on, on 127.0.0.1 only (`chalk a2a up`).
+  # One server serves one repository, so a second repository needs another
+  # port.
+  [CHALK_A2A_PORT]=8473
   # An absolute path to a PEM file of extra CA certificates, for a network
   # that intercepts TLS, such as a corporate proxy. The sandbox image build
   # and every sandbox trust it, as well as the CAs the image already has.
@@ -197,6 +201,9 @@ load_config() {
   esac
   config_check_egress
   config_check_ca
+  if [[ ! $CHALK_A2A_PORT =~ ^[1-9][0-9]{1,4}$ ]] || (( CHALK_A2A_PORT > 65535 )); then
+    die_unready "CHALK_A2A_PORT must be a port number (got '$CHALK_A2A_PORT')"
+  fi
   [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die_unready "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"
   case "$CHALK_DECIDER" in

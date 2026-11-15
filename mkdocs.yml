@@ -117,6 +117,7 @@ nav:
       - Operating:
           - Verdicts and the report card: guide/operating/dashboard.md
           - Pull and merge request gates: guide/operating/merge-request-gates.md
+          - Operating from another agent (A2A): guide/operating/a2a.md
           - Troubleshooting: guide/operating/troubleshooting.md
   - Reference:
       - Commands: reference/commands.md

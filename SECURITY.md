@@ -40,6 +40,11 @@ and contains no details. Fixes go into the latest release.
   to the text of its spec, is never committed, and CI reads the rubric
   from the base branch. The CI gate's own file is not protected from a
   person who pushes to the branch: require a code owner's review for it.
+- **The A2A server** (`chalk a2a up`, optional): listens on 127.0.0.1
+  only and asks for a bearer token on every call. Whoever holds the token
+  can start runs, which spend money and execute code in sandboxes, and can
+  commit a patch to a detained run's branch, as you can at office hours.
+  Treat it as you would a login to your machine.
 - **Local services:** the telemetry and lessons database publishes no
   port and is reached only through `docker exec`.
 - **Not a defence against a malicious repository:** setup and test commands

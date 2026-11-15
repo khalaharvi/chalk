@@ -54,6 +54,12 @@ this too.
 overridden in this repository, or copies one into `.chalk/prompts/` to
 edit. See [Prompts](../guide/configuring/prompts.md).
 
+**`chalk a2a up | down | status | token`** runs an optional server that
+lets another agent operate this repository's Chalk over the Agent2Agent
+protocol: start a ticket, watch it, answer a detention, cancel. It
+listens on this machine only and asks every caller for the token that
+`token` prints. See [Operating Chalk from another agent](../guide/operating/a2a.md).
+
 ## Work
 
 **`chalk new TICKET [title]`** creates branch `chalk/TICKET` in a new

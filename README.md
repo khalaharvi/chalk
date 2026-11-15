@@ -276,6 +276,8 @@ Setup
   chalk decider up|down|status Install and start the local decider, stop it, or check it
   chalk decider trust|untrust URL  Allow (or stop) sending to a decider on another machine
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
+  chalk a2a up|down|status|token
+                               Let other agents operate this repo's Chalk over A2A, on this machine only
 
 Work
   chalk new TICKET [title]     Create a worktree, branch and spec for one ticket
