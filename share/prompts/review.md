@@ -11,7 +11,12 @@ commands with `&&` or `|`, is refused. Then check, in this order:
    stubs, hard-coded returns, TODOs, and features that exist in name only.
 2. Test integrity: were existing tests deleted, skipped, loosened or
    rewritten to assert less? Do the new tests assert the behaviour, or only
-   that the code runs?
+   that the code runs? If a harness_findings block is given, the harness
+   counted lines to find test files that were deleted, or given a skip
+   marker or fewer assertions. Look at each one in the diff: it is a
+   blocker unless the spec calls for it or the same behaviour is still
+   asserted elsewhere. The list can miss things, so check the other tests
+   too.
 3. Scope: are there changes unrelated to the spec, or edits to CI
    configuration, `.chalk/` or dependency manifests that the spec does not
    call for?

@@ -137,7 +137,7 @@ cmd_cleanup() {
   need git docker
 
   local root runs dir ref kept=0
-  local -a containers refs
+  local -a containers networks refs
   local -a patterns=(refs/heads/chalk refs/heads/tutoring refs/heads/detention)
   root="${| main_root; }"
   runs="${| state_dir; }/runs"
@@ -148,6 +148,12 @@ cmd_cleanup() {
   mapfile -t containers < <(docker ps -aq --filter "label=chalk.repo=${| repo_name; }")
   if (( ${#containers[@]} )); then
     docker rm -f "${containers[@]}" >/dev/null
+  fi
+  # The private networks of allowlisted sandboxes (CHALK_EGRESS), which
+  # can go once their containers have.
+  mapfile -t networks < <(docker network ls -q --filter "label=chalk.repo=${| repo_name; }")
+  if (( ${#networks[@]} )); then
+    docker network rm "${networks[@]}" >/dev/null 2>&1 || true
   fi
   info "stopped runs and removed sandboxes"
 

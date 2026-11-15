@@ -92,16 +92,37 @@ check "init scaffolds config, textbook, CI and CLAUDE.md" \
 check "init says where to set the CI rubric's image for a stack other than Node" \
   grep -q 'not Node 22?.*CHALK_CI_IMAGE in .gitlab/chalk.gitlab-ci.yml.*/guide/configuring/your-stack/' "$tmp/init1.log"
 
-# ci_rubric FILE REPO TEST_CMD: runs the rubric job's script from a CI file
-# that init wrote, with sh as a runner might, in a copy of REPO whose
-# CHALK_TEST_CMD is TEST_CMD.
+# ci_rubric FILE REPO TEST_CMD [BASE_CMD]: runs the rubric job's script from
+# a CI file that init wrote, with sh as a runner might, in a clone of a
+# repository made for it: the branch under test sets CHALK_TEST_CMD to
+# TEST_CMD, and the target branch, main, sets it to BASE_CMD (TEST_CMD when
+# not given, and no .chalk/config at all when "-").
 ci_rubric() {
-  local file="$1" repo="$2" test_cmd="$3" dir script
+  local file="$1" repo="$2" test_cmd="$3" base_cmd="${4:-$3}" dir script
   dir="$(mktemp -d "$tmp/ci.XXXXXX")"
-  mkdir -p "$dir/.chalk"
-  printf 'CHALK_SETUP_CMD=\nCHALK_TEST_CMD=%s\n' "$test_cmd" > "$dir/.chalk/config"
+  git init -q --bare "$dir/origin.git"
+  git init -q -b main "$dir/work"
+  (
+    cd "$dir/work"
+    git remote add origin "$dir/origin.git"
+    echo ci > README
+    if [ "$base_cmd" != - ]; then
+      mkdir .chalk
+      printf 'CHALK_SETUP_CMD=\nCHALK_TEST_CMD=%s\n' "$base_cmd" > .chalk/config
+    fi
+    git add -A && git commit -q -m base && git push -q origin main
+    git switch -q -c chalk/CI-1
+    mkdir -p .chalk
+    printf 'CHALK_SETUP_CMD=\nCHALK_TEST_CMD=%s\n' "$test_cmd" > .chalk/config
+    git add -A && git commit -q --allow-empty -m branch
+  )
   case "$file" in
     *.github/workflows/*)
+      # What the workflow's second checkout leaves: the base branch's .chalk.
+      if [ "$base_cmd" != - ]; then
+        mkdir -p "$dir/work/.chalk-base/.chalk"
+        git -C "$dir/work" show main:.chalk/config > "$dir/work/.chalk-base/.chalk/config"
+      fi
       script="$(awk '/- name: Run the rubric/ { found = 1; next }
         found && /run: [|]/ { body = 1; next }
         body && /^          / { print substr($0, 11); next }
@@ -114,7 +135,7 @@ ci_rubric() {
         job && /^$/ { exit }' "$repo/$file")" ;;
   esac
   [ -n "$script" ] || return 2
-  (cd "$dir" && sh -ec "$script")
+  (cd "$dir/work" && CI_MERGE_REQUEST_TARGET_BRANCH_NAME=main sh -ec "$script")
 }
 
 # ci_rubric_fails FILE REPO TEST_CMD: the job ran and failed with TEST_CMD's
@@ -137,6 +158,16 @@ check "GitLab CI rubric job passes a rubric that needs bash" \
   ci_rubric .gitlab/chalk.gitlab-ci.yml "$PWD" 'set -o pipefail; [[ -n $BASH_VERSION ]]'
 check "GitLab CI rubric job fails when the rubric fails" \
   ci_rubric_fails .gitlab/chalk.gitlab-ci.yml "$PWD" 'exit 3'
+# The rubric is the target branch's, so a merge request cannot pass by
+# rewriting it.
+check "GitLab CI rubric job runs the target branch's rubric, not the merge request's" \
+  ci_rubric_fails .gitlab/chalk.gitlab-ci.yml "$PWD" 'true' 'exit 3'
+check "GitLab CI rubric job passes the target branch's rubric when the merge request broke its own" \
+  ci_rubric .gitlab/chalk.gitlab-ci.yml "$PWD" 'exit 3' 'true'
+check "GitLab CI rubric job reads the branch's rubric when the target branch has none yet" \
+  ci_rubric_fails .gitlab/chalk.gitlab-ci.yml "$PWD" 'exit 3' -
+check "GitLab CI rubric job stops, saying why, in an image without git" \
+  grep -q "command -v git >/dev/null || { echo \"CHALK_CI_IMAGE needs git" .gitlab/chalk.gitlab-ci.yml
 
 # 0. chalk doctor asks the CLI in the sandbox image which permission mode a
 # loop on CHALK_MODEL starts in. It sends the SDK's initialize request and
@@ -218,6 +249,8 @@ check "loop prompt tags its context" \
 check "spec check ran on the cheap model and passed" \
   sh -c "grep -q -e '--model haiku' '$FAKE_STATE/claude.log' && test -s '$XDG_STATE_HOME/chalk/demo/runs/PROJ-1/spec-check.ok'"
 check "final review ran before the merge request" grep -q "final review: pass" "$tmp/run1.log"
+check "a run that finished does not also report an unexpected stop" \
+  sh -c "! grep -q 'stopped unexpectedly' '$tmp/run1.log'"
 check "the run summary counts loops, not the spec check or review" \
   grep -q "all checkpoints complete (2 loops" "$tmp/run1.log"
 check "review summary lands in the merge request" grep -q "Agent review before submission: Looks complete" "$FAKE_STATE/glab.log"
@@ -1795,6 +1828,119 @@ SQL
   export PGOPTIONS="$e2e_pgoptions"
 fi
 
+# 4d. Exam integrity: an agent may not change protected files or the
+# spec's text, tests it removed or weakened are listed, and a sandbox can
+# be held to an allowlist of hosts.
+mkdir -p test
+printf 'it("adds", () => { expect(add(1, 2)).toBe(3); });\n' > test/old.test.js
+printf 'it("keeps", () => {\n  expect(keep()).toBe(true);\n  expect(keep(1)).toBe(true);\n});\n' > test/kept.test.js
+git add -A && git commit -q -m "tests"
+
+chalk new PROJ-110 Tamper with the rubric >/dev/null
+cd "$tmp/demo.worktrees/PROJ-110"
+git add -A && git commit -q -m "spec"
+if FAKE_CLAUDE_MODE=tamper chalk run > "$tmp/run110.log" 2>&1; then fail "a run that rewrites the rubric must stop"; fi
+io="$XDG_STATE_HOME/chalk/demo/runs/PROJ-110/io"
+check "a loop that rewrites the rubric's configuration is not committed" \
+  test "$(git rev-list --count main..chalk/PROJ-110)" -eq 1
+check "the branch still holds the rubric the engineer wrote" grep -qx 'CHALK_TEST_CMD=test ! -e BROKEN' .chalk/config
+check "a run that keeps changing protected files is detained, naming the file" \
+  sh -c "grep -q 'DETENTION: the agent changed protected files' '$tmp/run110.log' && grep -qx '\[PROJ-110\] .chalk/config' '$tmp/run110.log'"
+check "next step: protected files" next_step "$tmp/run110.log" 'the agent keeps changing files it may not change'
+check "the retry is told which file to put back, not the passing rubric's output" \
+  sh -c "grep -q 'this session changed files the harness protects' '$io/prompt.md' && grep -qx '.chalk/config' '$io/prompt.md'"
+check "the loop prompt lists the protected paths" \
+  test "$(sed -n '/<protected_paths>/,/<\/protected_paths>/p' "$io/prompt.md" | paste -sd ' ' -)" \
+    = '<protected_paths> .chalk .github/workflows .gitlab-ci.yml .gitlab/chalk.gitlab-ci.yml </protected_paths>'
+check "the detention warns that the parked work changes protected files" \
+  grep -q 'the parked work changes protected files: check or revert them first' "$tmp/run110.log"
+check "the parked work keeps what the agent did, for the engineer to see" \
+  test "$(git show "$(git for-each-ref --format='%(refname)' 'refs/heads/detention/PROJ-110-*')":.chalk/config)" = 'CHALK_TEST_CMD=true'
+cd "$tmp/demo"
+
+chalk new PROJ-111 Put it back >/dev/null
+cd "$tmp/demo.worktrees/PROJ-111"
+git add -A && git commit -q -m "spec"
+rm -f "$FAKE_STATE/tampered"
+FAKE_CLAUDE_MODE=tamper-once chalk run > "$tmp/run111.log" 2>&1 || { cat "$tmp/run111.log"; fail "a run that puts a protected file back"; }
+check "a loop that changed a protected file is refused and retried" \
+  grep -q 'loop 1 (continue): agent ok .*rubric exit 0' "$tmp/run111.log"
+check "once the file is back, the work is committed and the run finishes" \
+  sh -c "grep -q 'all checkpoints complete' '$tmp/run111.log' && git diff --quiet main chalk/PROJ-111 -- .chalk"
+cd "$tmp/demo"
+
+chalk new PROJ-112 Rewrite the spec >/dev/null
+cd "$tmp/demo.worktrees/PROJ-112"
+git add -A && git commit -q -m "spec"
+if FAKE_CLAUDE_MODE=respec chalk run > "$tmp/run112.log" 2>&1; then fail "a run that rewrites its spec must stop"; fi
+check "an agent that rewrites a checkpoint's text is detained: a spec may only be ticked" \
+  grep -qx '\[PROJ-112\] specs/PROJ-112.md (only ticking a checkpoint is allowed)' "$tmp/run112.log"
+check "nothing of a rewritten spec reaches the branch" test "$(git rev-list --count main..chalk/PROJ-112)" -eq 1
+cd "$tmp/demo"
+
+chalk new PROJ-113 Nothing protected >/dev/null
+cd "$tmp/demo.worktrees/PROJ-113"
+git add -A && git commit -q -m "spec"
+CHALK_PROTECTED=none FAKE_CLAUDE_MODE=tamper chalk run > "$tmp/run113.log" 2>&1 || { cat "$tmp/run113.log"; fail "CHALK_PROTECTED=none run"; }
+check "CHALK_PROTECTED=none protects nothing and tells the agent of no protected paths" \
+  sh -c "grep -q 'all checkpoints complete' '$tmp/run113.log' &&
+    ! grep -q '<protected_paths>' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-113/io/prompt.md'"
+cd "$tmp/demo"
+
+chalk new PROJ-114 Weaken the tests >/dev/null
+cd "$tmp/demo.worktrees/PROJ-114"
+git add -A && git commit -q -m "spec"
+FAKE_CLAUDE_MODE=weaken chalk run > "$tmp/run114.log" 2>&1 || { cat "$tmp/run114.log"; fail "test guard run"; }
+io="$XDG_STATE_HOME/chalk/demo/runs/PROJ-114/io"
+check "the test guard lists a deleted test file and a skipped test in the run log" \
+  sh -c "grep -q 'test guard: 2 place(s) where this branch removes or weakens tests since main' '$tmp/run114.log' &&
+    grep -qx '\[PROJ-114\]   - deleted test file: test/old.test.js' '$tmp/run114.log' &&
+    grep -qx '\[PROJ-114\]   - skip or only marker added: test/kept.test.js (1)' '$tmp/run114.log'"
+check "the reviewer is given the test guard's findings" \
+  test "$(sed -n '/<harness_findings>/,/<\/harness_findings>/p' "$io/review.prompt.md" | paste -sd '|' -)" \
+    = '<harness_findings>|deleted test file: test/old.test.js|skip or only marker added: test/kept.test.js (1)|</harness_findings>'
+check "the merge request lists the test guard's findings" \
+  sh -c "grep -q 'Test guard: this branch removes or weakens tests since \`main\`' '$FAKE_STATE/glab.log' &&
+    grep -q '^  - deleted test file: test/old.test.js' '$FAKE_STATE/glab.log'"
+check "a merge request whose tests were left alone says so" \
+  grep -q 'Test guard: no test file was deleted, or given a skip marker or fewer assertions, since `main`' "$FAKE_STATE/glab.log"
+check "a review of unweakened tests is given no findings" \
+  sh -c "! grep -q '<harness_findings>' '$XDG_STATE_HOME/chalk/demo/runs/PROJ-111/io/review.prompt.md'"
+cd "$tmp/demo"
+
+chalk new PROJ-115 Allowlisted network >/dev/null
+cd "$tmp/demo.worktrees/PROJ-115"
+git add -A && git commit -q -m "spec"
+printf '%s\n' '2026-01-01T00:00:00.000Z listening, 4 rule(s)' '2026-01-01T00:00:01.000Z allow api.anthropic.com:443' \
+  '2026-01-01T00:00:02.000Z deny registry.npmjs.org:443' '2026-01-01T00:00:03.000Z deny evil.example.com:443' \
+  '2026-01-01T00:00:04.000Z deny registry.npmjs.org:443' > "$tmp/egress.log"
+CHALK_EGRESS=allowlist CHALK_EGRESS_ALLOW='pypi.org .pythonhosted.org' FAKE_EGRESS_LOG="$tmp/egress.log" \
+  chalk run > "$tmp/run115.log" 2>&1 || { cat "$tmp/run115.log"; fail "allowlisted run"; }
+net=chalk-sandbox-demo-PROJ-115-net
+check "an allowlisted sandbox gets a network with no route out" \
+  grep -qx "network create --internal --label chalk.repo=demo $net" "$FAKE_STATE/docker.log"
+check "its egress proxy is told the API host, the token host and CHALK_EGRESS_ALLOW, and holds no privileges" \
+  sh -c "grep -F 'run -d --name chalk-sandbox-demo-PROJ-115-egress ' '$FAKE_STATE/docker.log' |
+    grep -F 'CHALK_EGRESS_HOSTS=api.anthropic.com platform.claude.com pypi.org .pythonhosted.org' |
+    grep -F -- '--cap-drop ALL --security-opt no-new-privileges --read-only' | grep -qF -- '--entrypoint node chalk-sandbox:local -e <egress-proxy.js>'"
+check "the proxy joins the sandbox's network under the name the sandbox is given" \
+  grep -qx "network connect --alias egress $net chalk-sandbox-demo-PROJ-115-egress" "$FAKE_STATE/docker.log"
+check "the sandbox is on that network only, with its programs pointed at the proxy" \
+  sh -c "grep -F -- '--name chalk-sandbox-demo-PROJ-115 ' '$FAKE_STATE/docker.log' | grep -F -- '--network $net' |
+    grep -qF -- '-e HTTPS_PROXY=http://egress:3128 -e HTTP_PROXY=http://egress:3128'"
+check "the proxy is given no credentials" \
+  sh -c "! grep -F 'run -d --name chalk-sandbox-demo-PROJ-115-egress ' '$FAKE_STATE/docker.log' | grep -q ANTHROPIC_API_KEY"
+check "the run names the hosts the sandbox was refused, once each" \
+  grep -q 'the sandbox was refused connections to: evil.example.com:443 registry.npmjs.org:443 (CHALK_EGRESS=allowlist)' "$tmp/run115.log"
+check "the network goes when the sandbox does" grep -qx "network rm $net" "$FAKE_STATE/docker.log"
+check "a sandbox with CHALK_EGRESS=open is on no network of its own" \
+  sh -c "! grep -F -- '--name chalk-sandbox-demo-PROJ-114 ' '$FAKE_STATE/docker.log' | grep -q -e '--network' -e HTTPS_PROXY"
+if CHALK_EGRESS=sometimes chalk run > "$tmp/run115b.log" 2>&1; then fail "an unknown CHALK_EGRESS must be refused"; fi
+check "an unknown CHALK_EGRESS is refused" grep -q "CHALK_EGRESS must be 'open' or 'allowlist'" "$tmp/run115b.log"
+if CHALK_EGRESS_ALLOW='https://pypi.org/simple' chalk run > "$tmp/run115c.log" 2>&1; then fail "a URL in CHALK_EGRESS_ALLOW must be refused"; fi
+check "CHALK_EGRESS_ALLOW takes host names, not URLs" grep -q "CHALK_EGRESS_ALLOW takes host names" "$tmp/run115c.log"
+cd "$tmp/demo"
+
 # 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
 # pull request through gh.
 git init -q --bare "$tmp/hub-origin.git"
@@ -1816,6 +1962,16 @@ check "the Actions rubric job passes a rubric that needs bash" \
   ci_rubric .github/workflows/chalk.yml "$PWD" 'set -o pipefail; [[ -n $BASH_VERSION ]]'
 check "the Actions rubric job fails when the rubric fails" \
   ci_rubric_fails .github/workflows/chalk.yml "$PWD" 'exit 3'
+check "the Actions rubric job runs the base branch's rubric, not the pull request's" \
+  ci_rubric_fails .github/workflows/chalk.yml "$PWD" 'true' 'exit 3'
+check "the Actions rubric job passes the base branch's rubric when the pull request broke its own" \
+  ci_rubric .github/workflows/chalk.yml "$PWD" 'exit 3' 'true'
+check "the Actions rubric job reads the branch's rubric when the base branch has none yet" \
+  ci_rubric_fails .github/workflows/chalk.yml "$PWD" 'exit 3' -
+check "the Actions rubric job removes its copy of the base branch before the rubric runs" \
+  ci_rubric .github/workflows/chalk.yml "$PWD" 'test ! -e .chalk-base'
+check "the Actions workflow checks out the base branch's .chalk beside the pull request" \
+  sh -c "grep -q 'ref: \${{ github.base_ref }}' .github/workflows/chalk.yml && grep -q 'path: .chalk-base' .github/workflows/chalk.yml"
 sed -i.bak 's/^CHALK_TEST_CMD=.*/CHALK_TEST_CMD=test ! -e BROKEN/' .chalk/config && rm .chalk/config.bak
 git add -A && git commit -q -m "init"
 chalk new PROJ-20 Hub feature >/dev/null

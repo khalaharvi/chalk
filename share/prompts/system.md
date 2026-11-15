@@ -31,6 +31,12 @@ turns their work into merge requests that engineers review.
   without the behaviour being right defeats the only check between your work
   and production, so fix the code, not the test. If a test is itself wrong,
   say so in your answer.
+- Some files set the exam and are not yours to change: the files and
+  directories in the protected_paths block of your task, which hold the
+  harness's configuration, its prompts and the CI gates. In the spec, tick
+  checkpoints and change nothing else. The harness does not commit a
+  session that changes any of these. If a checkpoint cannot be done without
+  such a change, report a blocker that names the file and the change.
 - Each session starts with no memory of earlier ones. The notes file you are
   given is how sessions hand work to each other.
 </how_the_harness_works>

@@ -136,3 +136,25 @@ for line in "${suggested[@]}"; do
         "$status" "$tmp/out" "$tmp/work/$report"
   done
 done
+
+# The exam-integrity and network settings.
+unset "${!CHALK_CONFIG_DEFAULTS[@]}" "${!CHALK_ENV_DEFAULTS[@]}"
+load_config "$tmp/nowhere"
+check "by default the harness's own files and the CI gates are protected" \
+  test "$CHALK_PROTECTED" = ".chalk .github/workflows .gitlab-ci.yml .gitlab/chalk.gitlab-ci.yml"
+check "by default the test guard is on and the sandbox's network is open" \
+  test "$CHALK_TEST_GUARD:$CHALK_EGRESS:$CHALK_EGRESS_ALLOW" = "true:open:"
+refused() { ! (load_config "$tmp/nowhere") 2>/dev/null; }
+CHALK_EGRESS=closed
+check "an unknown CHALK_EGRESS is refused" refused
+CHALK_EGRESS=allowlist
+check "CHALK_EGRESS=allowlist is accepted with no extra hosts" eval '! refused'
+CHALK_EGRESS_ALLOW="registry.npmjs.org .pythonhosted.org gateway.internal:8443"
+check "hosts, a leading-dot domain and a host with a port are accepted" eval '! refused'
+for bad in "https://pypi.org" "pypi.org/simple" "*.pypi.org" "a b;c" "-x.org"; do
+  CHALK_EGRESS_ALLOW="$bad"
+  check "CHALK_EGRESS_ALLOW refuses '$bad'" refused
+done
+CHALK_EGRESS_ALLOW=""
+CHALK_TEST_GUARD=maybe
+check "an unknown CHALK_TEST_GUARD is refused" refused

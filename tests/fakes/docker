@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fake docker for tests: "containers" are directories under $FAKE_STATE and
 # container paths (/src.git, /work, /chalk) are rewritten into them.
+# Networks and egress proxies exist only as lines in docker.log.
 set -euo pipefail
 cmd="$1"; shift
 
@@ -73,7 +74,19 @@ case "$cmd" in
     else
       rm -rf "${FAKE_STATE:?}/$name"
     fi ;;
+  # A sandbox's private network (CHALK_EGRESS=allowlist): logged only.
+  network)
+    printf 'network %s\n' "$*" >> "$FAKE_STATE/docker.log" ;;
+  # What an egress proxy logged: the file FAKE_EGRESS_LOG names, if any.
+  logs)
+    if [ -n "${FAKE_EGRESS_LOG:-}" ] && [[ "${*: -1}" == *-egress ]]; then cat "$FAKE_EGRESS_LOG"; fi ;;
   run)
+    # An egress proxy: logged without its script, the last argument.
+    if [[ " $* " =~ \ --name\ [^\ ]*-egress\  ]]; then
+      printf 'run %s <egress-proxy.js>\n' "${*:1:$#-1}" >> "$FAKE_STATE/docker.log"
+      echo "fake-egress"
+      exit 0
+    fi
     printf '%s\n' "$*" >> "$FAKE_STATE/docker.log"
     # A one-off command (--entrypoint) runs on the host with the arguments
     # after the image, and with stdin passed through.

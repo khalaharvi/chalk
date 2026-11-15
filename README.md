@@ -68,6 +68,11 @@ the bash 5.3 Chalk runs under. Without Homebrew, see
   nothing. A checkpoint counts only when your test command, the
   [rubric](#rubric), passes in a run the harness starts itself. CI runs it
   again on the pull request.
+- **The agent cannot rewrite its own exam.** A loop that changes the
+  rubric's configuration, the prompts, the CI gates or the wording of its
+  spec is not committed, CI reads the rubric from the base branch, and
+  tests that were deleted, skipped or weakened are listed on the request.
+  [What an agent may not change](https://khalaharvi.github.io/chalk/guide/operating/merge-request-gates/#what-an-agent-may-not-change).
 - **Spend has a ceiling.** Every agent call has its own cap, and a run has a
   loop limit, so a runaway agent cannot spend without bound. The
   [report card](#report-card) shows where the money went and how much of it
@@ -137,7 +142,8 @@ chalk run                 # or: chalk run --detach, then chalk logs API-7 -f
 
 1. **Sandbox.** A container starts with your repository cloned onto a RAM
    disk. Your repository is mounted read-only, and the container has no GitHub
-   or GitLab credentials.
+   or GitLab credentials. With `CHALK_EGRESS=allowlist` it also reaches only
+   the model provider and the hosts you list.
 2. **Spec check.** A cheap model confirms each checkpoint is small, testable
    and unambiguous, and leaves the rubric passing on its own. If one is not,
    the run stops before any money goes on loops.

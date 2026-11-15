@@ -36,8 +36,58 @@ docker run -d --name chalk-sandbox-<repo>-<TICKET> \
   `ANTHROPIC_AUTH_TOKEN`), `ANTHROPIC_BASE_URL` and the OpenTelemetry
   settings are passed in, by name, so their values never show in `ps`.
   Pushing and opening requests happen on the host.
-- **Labels.** `chalk cleanup` finds a repository's containers by the
-  `chalk.repo` label.
+- **Labels.** `chalk cleanup` finds a repository's containers and
+  networks by the `chalk.repo` label.
+- **Network.** Open by default: the container can reach anything your
+  machine can. `CHALK_EGRESS=allowlist` changes that; see
+  [Limiting the network](#limiting-the-network).
+
+## Limiting the network
+
+With `CHALK_EGRESS=open`, an agent that reads something hostile in a
+dependency, a web page or an issue could be talked into sending your code,
+or the model credential the sandbox holds, anywhere. With
+`CHALK_EGRESS=allowlist`, `sandbox_egress_start` gives each sandbox:
+
+- **A network with no route out** (`docker network create --internal`),
+  named `<sandbox>-net`. The sandbox is on that network and no other, so a
+  direct connection fails and outside names do not resolve.
+- **An egress proxy**, a second container named `<sandbox>-egress` from
+  the same image, on that network and on Docker's default one. It runs
+  `share/sandbox/egress-proxy.js` with node, as your user, with every
+  capability dropped, a read-only file system and no credentials.
+- **Proxy settings** (`HTTPS_PROXY`, `HTTP_PROXY` and their lower-case
+  forms) pointing at the proxy, which Claude Code, npm, pip, curl, git and
+  Go follow. A program that ignores them reaches nothing.
+
+The proxy forwards only to the host of the API the agent calls
+(`ANTHROPIC_BASE_URL`, or `api.anthropic.com`), to `platform.claude.com`,
+where Claude Code renews a subscription's token, and to the hosts in
+`CHALK_EGRESS_ALLOW`. HTTPS is tunnelled, never decrypted. A rule is a
+host (ports 80 and 443), `HOST:PORT`, or `.DOMAIN` for a domain and every
+name under it. A setup command usually needs your package registry:
+
+```ini
+CHALK_EGRESS=allowlist
+CHALK_EGRESS_ALLOW=registry.npmjs.org
+```
+
+When a run ends, it names the hosts the sandbox asked for and was
+refused, so a setup command or a loop that failed for want of one says
+which to add. `sandbox_stop` removes the proxy and the network with the
+sandbox.
+
+What this does not do:
+
+- It limits where the sandbox can send data, not what an allowed host
+  receives. Anything the agent can read can still reach the model
+  provider, and a registry that accepts uploads is a way out.
+- A network that itself needs an HTTP proxy to reach the internet is not
+  supported yet: the egress proxy connects directly.
+- OpenTelemetry export from the sandbox (`CHALK_OTEL_ENDPOINT`) to a
+  collector on your machine does not get out of an allowlisted sandbox.
+- The image needs node, which the default image and any image built
+  `FROM` it have.
 
 ## Why a RAM disk
 
@@ -50,7 +100,7 @@ checkout: the only thing that leaves is a git bundle.
 
 ## What leaves the sandbox
 
-Four short scripts, run with `docker exec … bash -c`, do the git work:
+Five short scripts, run with `docker exec … bash -c`, do the git work:
 
 | Script | Does |
 | :-- | :-- |
@@ -58,8 +108,10 @@ Four short scripts, run with `docker exec … bash -c`, do the git work:
 | `commit.sh MESSAGE [--allow-empty]` | Commits everything in the tree |
 | `export.sh BASE` | Writes the commits since BASE to `/chalk/out.bundle` |
 | `reset.sh` | Discards whatever a read-only call left in the tree |
+| `protected.sh BASE SPEC [PATH...]` | Lists the protected files the tree changes since BASE, and SPEC when more than its ticks changed |
 
-After a passing loop, `run_sync` fetches the bundle on the host and
+After a passing loop that left the [protected files](../guide/operating/merge-request-gates.md#what-an-agent-may-not-change)
+alone, `run_sync` fetches the bundle on the host and
 fast-forwards the branch; it never merges. A detention fetches it into a
 new `detention/…` branch instead.
 

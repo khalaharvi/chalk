@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/sandbox.sh: container names and OpenTelemetry flags.
+# lib/sandbox.sh: container names, OpenTelemetry flags and egress rules.
 set -euo pipefail
 # shellcheck source=tests/unit/testlib.sh
 . "$(dirname "$0")/testlib.sh"
@@ -35,3 +35,26 @@ sandbox_otel_args args PROJ-1
 check "a requested signal gets an upper-case exporter flag (metrics)" has OTEL_METRICS_EXPORTER=otlp
 check "a requested signal gets an upper-case exporter flag (logs)" has OTEL_LOGS_EXPORTER=otlp
 check "signals that were not requested get no flag" eval '! has OTEL_TRACES_EXPORTER=otlp'
+
+# What an allowlisted sandbox's proxy forwards to.
+declare -a hosts
+unset ANTHROPIC_BASE_URL
+CHALK_EGRESS_ALLOW=""
+sandbox_egress_hosts hosts
+check "an allowlisted sandbox reaches the API and the token host, and nothing else" \
+  test "${hosts[*]}" = "api.anthropic.com platform.claude.com"
+CHALK_EGRESS_ALLOW="registry.npmjs.org .pythonhosted.org"
+sandbox_egress_hosts hosts
+check "CHALK_EGRESS_ALLOW adds its hosts" \
+  test "${hosts[*]}" = "api.anthropic.com platform.claude.com registry.npmjs.org .pythonhosted.org"
+ANTHROPIC_BASE_URL="https://user:secret@gateway.example.com:8443/v1/anthropic"
+CHALK_EGRESS_ALLOW=""
+sandbox_egress_hosts hosts
+check "a gateway in ANTHROPIC_BASE_URL takes the API's place, as host and port without credentials or path" \
+  test "${hosts[0]}" = "gateway.example.com:8443"
+unset ANTHROPIC_BASE_URL
+
+CHALK_EGRESS=open
+declare -a flags=(stale)
+sandbox_egress_start chalk-sandbox-x flags
+check "with CHALK_EGRESS=open no proxy is started and the sandbox gets no network flags" test "${#flags[@]}" -eq 0

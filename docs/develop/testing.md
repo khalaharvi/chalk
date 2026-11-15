@@ -55,8 +55,8 @@ this test only. CI runs it as the `db-upgrade` job.
 
 | Fake | Stands in for | Knobs |
 | :-- | :-- | :-- |
-| `docker` | Containers are directories under `$FAKE_STATE`; `exec` runs the command on the host with container paths rewritten. `chalk-db` answers canned SQL results, or runs the SQL against `FAKE_PG_URL` | `FAKE_DB_MODEL=1` models database containers and volumes, for `chalk db upgrade`; `FAKE_DB_BROKEN`, `FAKE_DB_RESTORE_FAIL`, `FAKE_SANDBOX_BASH="5 1"` |
-| `claude` | Reads the prompt, works out which Chalk prompt it is from its tags, and answers in that prompt's JSON shape. A loop ticks the next checkpoint and appends to `work.txt` | `FAKE_CLAUDE_MODE=break`, `churn` (fails the same way on a changing tree), `blocked` or `slow`; `FAKE_SPEC=fail`; `FAKE_REVIEW=fail-once` or `fail` |
+| `docker` | Containers are directories under `$FAKE_STATE`; `exec` runs the command on the host with container paths rewritten. Networks and egress proxies are only logged; `logs` of a proxy prints the file `FAKE_EGRESS_LOG` names. `chalk-db` answers canned SQL results, or runs the SQL against `FAKE_PG_URL` | `FAKE_DB_MODEL=1` models database containers and volumes, for `chalk db upgrade`; `FAKE_DB_BROKEN`, `FAKE_DB_RESTORE_FAIL`, `FAKE_SANDBOX_BASH="5 1"` |
+| `claude` | Reads the prompt, works out which Chalk prompt it is from its tags, and answers in that prompt's JSON shape. A loop ticks the next checkpoint and appends to `work.txt` | `FAKE_CLAUDE_MODE=break`, `churn` (fails the same way on a changing tree), `blocked`, `slow`, `tamper` and `tamper-once` (rewrite `.chalk/config`), `respec` (rewrites the spec's text) or `weaken` (deletes and skips tests); `FAKE_SPEC=fail`; `FAKE_REVIEW=fail-once` or `fail` |
 | `gh`, `glab` | Log their arguments | |
 | `curl` | No test reaches the network. A fake [decider](../decider-protocol.md) at `/v1/systemone`, which checks each request against the protocol and answers from a script, and a fake chalk-embed at `/v1/embeddings` with fixed vectors. Anything else is logged and answered `{}` | `FAKE_DECIDER_ANSWERS`, `FAKE_DECIDER_DELAY`, `FAKE_DECIDER_DOWN`, `FAKE_DECIDER_STATUS`, `FAKE_DECIDER_PROTOCOL`, `FAKE_DECIDER_TOKEN`, `FAKE_EMBED_INDEX` |
 | `timeout` | Drops the time limit, since stock macOS has no `timeout` | |
@@ -64,6 +64,11 @@ this test only. CI runs it as the `db-upgrade` job.
 The fakes cannot catch a wrong CLI flag. Say in a pull request what you
 tested against real Docker and the real `claude` CLI, and what you did
 not.
+
+`tests/unit/egress_test.sh` runs the real `share/sandbox/egress-proxy.js`
+with this machine's node against a server on localhost, and is skipped
+where there is no node. The private network that makes the proxy the only
+way out exists only in real Docker, so it is tested by hand.
 
 `tests/unit/decider_test.sh` also runs the real `share/decider/chalk-embed.py`
 with a stand-in model (`CHALK_EMBED_FAKE=1`, plain `python3`, no download)

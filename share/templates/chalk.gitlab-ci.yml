@@ -11,7 +11,8 @@
 
 variables:
   # Image the rubric runs in. For a stack other than Node, set it to a
-  # registry image with your toolchain and bash, here or as a CI/CD variable.
+  # registry image with your toolchain, bash and git, here or as a CI/CD
+  # variable.
   CHALK_CI_IMAGE: node:22
 
 .chalk:
@@ -36,15 +37,21 @@ chalk:spec:
       fi
 
 # Re-runs the rubric outside the agent's sandbox, with bash -c as the
-# sandbox does.
+# sandbox does. The rubric is read from the target branch, so that a merge
+# request cannot rewrite the test it has to pass. This file is part of the
+# merge request, so it cannot protect itself: make a code owner's approval
+# required for it and for .chalk/ (see "Pull and merge request gates").
 chalk:rubric:
   extends: .chalk
   stage: test
   image: $CHALK_CI_IMAGE
   script:
     - 'command -v bash >/dev/null || { echo "CHALK_CI_IMAGE needs bash: the rubric runs with bash -c, as in the sandbox"; exit 1; }'
-    - SETUP_CMD=$(sed -n 's/^CHALK_SETUP_CMD=//p' .chalk/config)
-    - TEST_CMD=$(sed -n 's/^CHALK_TEST_CMD=//p' .chalk/config)
+    - 'command -v git >/dev/null || { echo "CHALK_CI_IMAGE needs git: the rubric is read from the target branch, so that a merge request cannot rewrite it"; exit 1; }'
+    - git fetch -q --depth=1 origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - 'CONFIG=$(git show FETCH_HEAD:.chalk/config 2>/dev/null || { echo "the target branch has no .chalk/config, so the rubric is read from this branch" >&2; cat .chalk/config; })'
+    - SETUP_CMD=$(printf '%s\n' "$CONFIG" | sed -n 's/^CHALK_SETUP_CMD=//p')
+    - TEST_CMD=$(printf '%s\n' "$CONFIG" | sed -n 's/^CHALK_TEST_CMD=//p')
     - test -n "$TEST_CMD"
     - if [ -n "$SETUP_CMD" ]; then bash -c "$SETUP_CMD"; fi
     - bash -c "$TEST_CMD"

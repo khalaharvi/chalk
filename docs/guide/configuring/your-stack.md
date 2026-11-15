@@ -199,6 +199,9 @@ The image needs bash: CI runs both commands with `bash -c`, as the sandbox
 does, so a rubric that relies on bash (`set -o pipefail`, `[[ ]]`)
 behaves the same in both. Debian and Ubuntu based images have it; Alpine
 images do not, and the job stops with "CHALK_CI_IMAGE needs bash".
+On GitLab the image also needs git, because the job reads the rubric from
+the target branch; the full `golang`, `python` and `node` images have it,
+their `-slim` variants do not.
 
 On **GitHub**, `CHALK_CI_IMAGE` is a repository variable (Settings,
 Secrets and variables, Actions, Variables):

@@ -34,7 +34,10 @@ jobs:
           fi
 
   # Re-runs the rubric outside the agent's sandbox, with bash -c as the
-  # sandbox does. For a stack other than Node, set the repository variable
+  # sandbox does. This file is part of the pull request, so it cannot
+  # protect itself: make a code owner's review required for .github/ and
+  # .chalk/ (see "Pull and merge request gates" in the docs). For a stack
+  # other than Node, set the repository variable
   # CHALK_CI_IMAGE to a registry image with your toolchain and bash.
   rubric:
     if: startsWith(github.head_ref, 'chalk/') || startsWith(github.head_ref, 'tutoring/')
@@ -42,11 +45,20 @@ jobs:
     container: ${{ vars.CHALK_CI_IMAGE || 'node:22' }}
     steps:
       - uses: actions/checkout@v4
+      # The rubric is read from the base branch, so that a pull request
+      # cannot rewrite the test it has to pass.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: .chalk-base
+          sparse-checkout: .chalk
       - name: Run the rubric
         run: |
           command -v bash >/dev/null || { echo "CHALK_CI_IMAGE needs bash: the rubric runs with bash -c, as in the sandbox"; exit 1; }
-          SETUP_CMD=$(sed -n 's/^CHALK_SETUP_CMD=//p' .chalk/config)
-          TEST_CMD=$(sed -n 's/^CHALK_TEST_CMD=//p' .chalk/config)
+          CONFIG=$(cat .chalk-base/.chalk/config 2>/dev/null || { echo "the base branch has no .chalk/config, so the rubric is read from this branch" >&2; cat .chalk/config; })
+          rm -rf .chalk-base
+          SETUP_CMD=$(printf '%s\n' "$CONFIG" | sed -n 's/^CHALK_SETUP_CMD=//p')
+          TEST_CMD=$(printf '%s\n' "$CONFIG" | sed -n 's/^CHALK_TEST_CMD=//p')
           test -n "$TEST_CMD"
           if [ -n "$SETUP_CMD" ]; then bash -c "$SETUP_CMD"; fi
           bash -c "$TEST_CMD"

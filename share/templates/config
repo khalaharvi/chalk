@@ -83,6 +83,20 @@ CHALK_DECIDER_MIN_LESSONS=30
 CHALK_IMAGE=chalk-sandbox:local
 # RAM disk size for the working copy and its dependencies.
 CHALK_TMPFS_SIZE=4g
+# What a sandbox may reach on the network:
+#   open       anything, as before. An agent that reads something hostile
+#              could send your code or the model credential anywhere.
+#   allowlist  only the model provider and the hosts in CHALK_EGRESS_ALLOW,
+#              through a proxy Chalk starts beside the sandbox. Everything
+#              else is refused, and the run says which hosts were.
+CHALK_EGRESS=open
+# Hosts an allowlisted sandbox may also reach, separated by spaces: your
+# package registry, at least. A leading dot allows a domain and every name
+# under it; HOST:PORT allows another port than 80 and 443. For example:
+#   registry.npmjs.org
+#   pypi.org files.pythonhosted.org
+#   proxy.golang.org sum.golang.org
+CHALK_EGRESS_ALLOW=
 
 # Global engineering rules appended to the agent's system prompt.
 CHALK_TEXTBOOK=.chalk/textbook.md
@@ -100,6 +114,17 @@ CHALK_REVIEW_ROUNDS=1
 # work goes to detention (true), or the request opens and says the review
 # did not run (false).
 CHALK_REVIEW_REQUIRED=true
+# Files and directories no agent may change, separated by spaces: the
+# rubric's configuration and prompts (.chalk) and the CI gates. A loop that
+# changes one, or changes the spec other than by ticking a checkpoint, is
+# not committed, and the agent is told to put it back. Add what else
+# defines "done" here, such as an acceptance test directory. To change a
+# protected file, commit the change yourself. "none" protects nothing.
+CHALK_PROTECTED=.chalk .github/workflows .gitlab-ci.yml .gitlab/chalk.gitlab-ci.yml
+# Without a model, list the test files this branch deleted, or gave a skip
+# marker or fewer assertions, for the reviewing agent and on the pull or
+# merge request. A list of places to look, not a verdict.
+CHALK_TEST_GUARD=true
 # Model for the review (empty: same as the loop).
 CHALK_REVIEW_MODEL=
 # Model for the spec check and lesson distillation.

@@ -9,6 +9,10 @@
 #   FAKE_CLAUDE_MODE=idle      loop changes nothing and ticks nothing
 #   FAKE_CLAUDE_MODE=refused   like idle, with four actions refused by permission checks
 #   FAKE_CLAUDE_MODE=error     loop stops early on its turn limit
+#   FAKE_CLAUDE_MODE=tamper    loop ticks a checkpoint and rewrites the rubric in .chalk/config
+#   FAKE_CLAUDE_MODE=tamper-once  like tamper on its first loop; later loops put the file back
+#   FAKE_CLAUDE_MODE=respec    loop ticks a checkpoint and rewrites the spec's text
+#   FAKE_CLAUDE_MODE=weaken    loop ticks a checkpoint, deletes one test file and skips a test in another
 #   FAKE_HOST_COMMIT=DIR       a loop also commits to the worktree DIR on the host
 #   FAKE_SUMMARY=TEXT          a loop that ticks a checkpoint summarizes it as TEXT
 #   FAKE_SPEC=fail             spec check fails
@@ -33,6 +37,17 @@ if [ -n "${FAKE_API_ERROR:-}" ] && [[ $prompt != *'"subtype":"initialize"'* ]]; 
   printf '{"type":"result","subtype":"success","is_error":true,"api_error_status":%s,"duration_ms":412,"num_turns":1,"result":"Invalid API key · Fix external API key","stop_reason":"stop_sequence","terminal_reason":"api_error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0},"modelUsage":{},"permission_denials":[]}\n' "$FAKE_API_ERROR"
   exit 1
 fi
+
+# tick: a loop that does its work: ticks the next checkpoint of $spec, if
+# one is open, appends to work.txt and answers "done".
+tick() {
+  local line
+  line="$(grep -n -m 1 -e '- \[ \]' "$spec" | cut -d: -f1)" || line=""
+  if [ -n "$line" ]; then sed -i.bak "${line}s/- \[ \]/- [x]/" "$spec" && rm -f "$spec.bak"; fi
+  echo "work for line $line" >> work.txt
+  answer "$(jq -cn --arg summary "${FAKE_SUMMARY:-implemented a checkpoint}" \
+    '{status: "done", checkpoint: "next", summary: $summary}')"
+}
 
 case "$prompt" in
   *'"subtype":"initialize"'*)
@@ -81,12 +96,23 @@ case "$prompt" in
         denials='[{"tool_name":"Edit"},{"tool_name":"Write"},{"tool_name":"Bash"},{"tool_name":"Edit"}]'
         answer '{"status":"done","summary":"could not edit any file"}' ;;
       error)   is_error=true subtype=error_max_turns; answer 'null' ;;
-      *)
-        line="$(grep -n -m 1 -e '- \[ \]' "$spec" | cut -d: -f1)"
-        sed -i.bak "${line}s/- \[ \]/- [x]/" "$spec" && rm -f "$spec.bak"
-        echo "work for line $line" >> work.txt
-        answer "$(jq -cn --arg summary "${FAKE_SUMMARY:-implemented a checkpoint}" \
-          '{status: "done", checkpoint: "next", summary: $summary}')" ;;
+      tamper)  echo 'CHALK_TEST_CMD=true' > .chalk/config; tick ;;
+      tamper-once)
+        if [ -e "$FAKE_STATE/tampered" ]; then
+          git checkout -q -- .chalk/config
+        else
+          touch "$FAKE_STATE/tampered"
+          echo 'CHALK_TEST_CMD=true' > .chalk/config
+        fi
+        tick ;;
+      respec)  sed -i.bak 's/^- \[ \] \(.*\)$/- [ ] \1, or nothing at all/' "$spec" && rm -f "$spec.bak"; tick ;;
+      weaken)
+        rm -f test/old.test.js
+        if [ -f test/kept.test.js ] && ! grep -q 'it.skip' test/kept.test.js; then
+          sed -i.bak 's/^it(/it.skip(/' test/kept.test.js && rm -f test/kept.test.js.bak
+        fi
+        tick ;;
+      *)       tick ;;
     esac ;;
   *)
     if [ "${FAKE_SPEC:-}" = "fail" ]; then
