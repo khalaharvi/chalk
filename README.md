@@ -287,6 +287,7 @@ Work
   chalk status [TICKET] [--json]
                                Show runs, cost and detentions for this repo
   chalk logs TICKET [-f]       Show a run log
+  chalk stop TICKET            Stop a run; its unfinished work is parked on a detention branch
   chalk dashboard [--days N]   Open the report card: spend, waste and what to tune
   chalk share [--days N] [--output FILE] [--json]
                                Print an anonymised report card to post if you choose; sends nothing

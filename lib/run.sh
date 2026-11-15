@@ -1169,6 +1169,35 @@ cmd_status() {
   fi
 }
 
+# Seconds `chalk stop` waits for a run to park its work and end.
+RUN_STOP_TIMEOUT=120
+
+# cmd_stop TICKET: stops the run of TICKET that is alive in this
+# repository, and waits until it has ended. The run ends as one stopped by
+# a signal does (run_park_crash): it parks what the agent did since the
+# last checkpoint on a detention branch, removes its sandbox, and records
+# the outcome "stopped".
+cmd_stop() {
+  local ticket="${1:-}" dir pid waited=0
+  if [[ $# -ne 1 ]] || ! is_ticket "$ticket"; then die_usage "usage: chalk stop TICKET"; fi
+  need git
+  dir="${| run_dir "$ticket"; }"
+  run_is_alive "$dir" || die_unready "no run of $ticket is alive here (see: chalk status $ticket)"
+  pid="${| run_pid "$dir"; }"
+  # The run is told first, then the commands it is waiting on: bash acts
+  # on a signal only once the command in the foreground has ended, and an
+  # agent call can take half an hour.
+  kill -TERM "$pid" 2>/dev/null || true
+  if command -v pkill >/dev/null 2>&1; then pkill -TERM -P "$pid" 2>/dev/null || true; fi
+  while run_is_alive "$dir"; do
+    (( waited < RUN_STOP_TIMEOUT * 2 )) ||
+      die "the run of $ticket (pid $pid) has not ended after ${RUN_STOP_TIMEOUT}s; it may still be parking its work (see: chalk logs $ticket)"
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  info "$ticket stopped. What it left, and what to do next: chalk status $ticket --json"
+}
+
 cmd_logs() {
   local ticket="${1:-}" log
   [ -n "$ticket" ] || die_usage "usage: chalk logs TICKET [-f]"
