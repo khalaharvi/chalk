@@ -1995,6 +1995,93 @@ for _ in $(seq 1 100); do
   sleep 0.2
 done
 
+# 4f. Machine-readable outcomes (docs/reference/json-output.md): how a run
+# ended, as one line of JSON on stdout and a record chalk status --json
+# returns, so that a caller never has to read the log.
+# field FILE FILTER: the value jq FILTER gives for the JSON in FILE.
+field() { jq -r "$2" "$1"; }
+chalk new PROJ-130 Outcome as JSON >/dev/null
+cd "$tmp/demo.worktrees/PROJ-130"
+check "before the spec is committed, --json reports 'unready' with the reason, and exits 4" \
+  sh -c "chalk run --json > '$tmp/json130a.out' 2>/dev/null; test \$? -eq 4 &&
+    test \"\$(jq -r '.outcome + \" \" + (.exit_code | tostring) + \" \" + .ticket' '$tmp/json130a.out')\" = 'unready 4 PROJ-130' &&
+    jq -e '.reason | test(\"uncommitted changes\")' '$tmp/json130a.out'"
+git add -A && git commit -q -m "spec"
+check "a wrong flag beside --json is reported as 'usage', and exits 2" \
+  sh -c "chalk run --json --bogus > '$tmp/json130b.out' 2>/dev/null; test \$? -eq 2 &&
+    test \"\$(jq -r '.outcome' '$tmp/json130b.out')\" = usage"
+status=0
+FAKE_REQUEST_URL=https://gitlab.example.com/acme/demo/-/merge_requests/130 \
+  chalk run --json > "$tmp/json130.out" 2> "$tmp/json130.err" || status=$?
+check "a finished run with --json exits 0" test "$status" -eq 0
+check "--json prints exactly one line on stdout, and it is JSON" \
+  sh -c "test \"\$(wc -l < '$tmp/json130.out')\" -eq 1 && jq -e . '$tmp/json130.out'"
+check "with --json the log a person reads goes to stderr" grep -q 'all checkpoints complete' "$tmp/json130.err"
+check "a finished run's record: submitted, exit 0, the ticket, branch and request address" \
+  test "$(field "$tmp/json130.out" '[.schema, .outcome, .exit_code, .ticket, .branch, .request_url] | join(" ")')" \
+    = "1 submitted 0 PROJ-130 chalk/PROJ-130 https://gitlab.example.com/acme/demo/-/merge_requests/130"
+check "the record carries the loops and cost as numbers, and when it ended" \
+  jq -e '(.loops | type) == "number" and (.cost_usd | type) == "number" and (.ended_at | test("^[0-9-]+T[0-9:]+Z$"))' "$tmp/json130.out"
+check "the same record is kept in the run's directory" \
+  test "$(jq -c . "$XDG_STATE_HOME/chalk/demo/runs/PROJ-130/outcome.json")" = "$(<"$tmp/json130.out")"
+cd "$tmp/demo"
+
+chalk new PROJ-131 Detained as JSON >/dev/null
+cd "$tmp/demo.worktrees/PROJ-131"
+git add -A && git commit -q -m "spec"
+status=0
+FAKE_SPEC=fail chalk run --json > "$tmp/json131a.out" 2>/dev/null || status=$?
+check "a refused spec's record: spec_blocked, exit 4, the objections and what to do" \
+  sh -c "test $status -eq 4 && jq -e '.outcome == \"spec_blocked\" and .exit_code == 4 and (.detail | test(\"not testable\")) and
+    (.next | test(\"rewrite the checkpoints\")) and .detention_branch == null' '$tmp/json131a.out'"
+status=0
+FAKE_CLAUDE_MODE=blocked chalk run --json > "$tmp/json131.out" 2>/dev/null || status=$?
+check "a detained run with --json exits 3" test "$status" -eq 3
+check "a detention's record: the kind, the agent's own blocker and the next step" \
+  jq -e '.outcome == "detained" and .exit_code == 3 and .kind == "blocked" and .reason == "agent reported a blocker" and
+    .detail == "needs the staging API key" and (.next | test("^provide what the agent asked for"))' "$tmp/json131.out"
+check "the record names the detention branch, and the branch exists" \
+  git show-ref --verify --quiet "refs/heads/$(field "$tmp/json131.out" .detention_branch)"
+chalk status PROJ-131 --json > "$tmp/status131.json"
+check "chalk status TICKET --json is an array of that one ticket, with the same record" \
+  jq -e 'length == 1 and .[0].ticket == "PROJ-131" and .[0].running == false and .[0].pid == null and
+    .[0].outcome.outcome == "detained" and (.[0].detentions | length) == 1 and
+    .[0].detentions[0] == .[0].outcome.detention_branch' "$tmp/status131.json"
+git switch -q "$(field "$tmp/json131.out" .detention_branch)"
+status=0
+chalk office-hours -m "gave it the key" --json > "$tmp/json131b.out" 2>/dev/null || status=$?
+check "office hours with --json ends with the resumed run's record" \
+  sh -c "test $status -eq 0 && test \"\$(wc -l < '$tmp/json131b.out')\" -eq 1 &&
+    jq -e '.outcome == \"submitted\" and .ticket == \"PROJ-131\" and (.branch | startswith(\"tutoring/PROJ-131-\"))' '$tmp/json131b.out'"
+cd "$tmp/demo"
+
+chalk new PROJ-132 Detached as JSON >/dev/null
+cd "$tmp/demo.worktrees/PROJ-132"
+git add -A && git commit -q -m "spec"
+rm -f "$FAKE_STATE/slow-started"
+FAKE_CLAUDE_MODE=slow chalk run --detach --json > "$tmp/json132.out" 2>/dev/null
+check "a detached start's record: started, the pid and the log" \
+  jq -e '.outcome == "started" and .exit_code == 0 and (.pid | type) == "number" and (.log | endswith("/PROJ-132/run.log"))' "$tmp/json132.out"
+check "while it runs, status --json says running, with the pid and no outcome yet" \
+  sh -c "chalk status PROJ-132 --json | jq -e --argjson pid \"\$(jq .pid '$tmp/json132.out')\" \
+    '.[0].running == true and .[0].state == \"running\" and .[0].pid == \$pid and .[0].outcome == null'"
+for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
+kill -TERM "$(jq .pid "$tmp/json132.out")"
+for _ in $(seq 1 100); do kill -0 "$(jq .pid "$tmp/json132.out")" 2>/dev/null || break; sleep 0.2; done
+chalk status PROJ-132 --json > "$tmp/status132.json"
+check "a run stopped by a signal leaves a record: stopped, 143, and the branch its work is parked on" \
+  jq -e '.[0].running == false and .[0].outcome.outcome == "stopped" and .[0].outcome.exit_code == 143 and
+    (.[0].outcome.detention_branch | startswith("detention/PROJ-132-")) and
+    (.[0].outcome.next | test("chalk office-hours"))' "$tmp/status132.json"
+cd "$tmp/demo"
+check "chalk status --json lists every ticket as an array of objects with the same fields" \
+  sh -c "chalk status --json | jq -e 'length > 3 and all(.[]; has(\"ticket\") and has(\"state\") and has(\"running\") and
+    has(\"loops\") and has(\"cost_usd\") and has(\"detentions\") and has(\"outcome\") and .schema == 1)'"
+check "chalk status --json of a ticket with no run is an empty array" test "$(chalk status NOPE-1 --json)" = "[]"
+check "chalk status without --json is the table, as before" \
+  sh -c "chalk status PROJ-131 | sed -n 1p | grep -q '^TICKET *STATE *LOOPS' && chalk status PROJ-131 | sed -n 2p | grep -q '^PROJ-131 '"
+check "an unknown flag to chalk status is a usage error" exits 2 chalk status --bogus
+
 # 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
 # pull request through gh.
 git init -q --bare "$tmp/hub-origin.git"

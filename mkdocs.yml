@@ -121,6 +121,7 @@ nav:
   - Reference:
       - Commands: reference/commands.md
       - Exit codes: reference/exit-codes.md
+      - JSON output: reference/json-output.md
       - Privacy: privacy.md
       - Decider protocol: decider-protocol.md
       - Glossary: reference/glossary.md

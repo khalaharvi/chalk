@@ -49,6 +49,14 @@ run_context() {
   # check did not run. Empty until it has been asked.
   RUN_TEST_FINDINGS=""
   RUN_TEST_GUARD=""
+  # Set once this run has recorded how it ended (run_outcome), the branch
+  # a crashed or stopped run parked its work on (run_park_crash), what the
+  # spec check objected to (run_spec_check), and whether this process owns
+  # the run's pid file (run_open_sandbox).
+  RUN_OUTCOME_WRITTEN=""
+  RUN_CRASH_BRANCH=""
+  RUN_SPEC_PROBLEMS=""
+  RUN_CLAIMED=""
   load_config "$RUN_WT"
   RUN_PROMPTS="$(run_prompts_version)"
 
@@ -129,7 +137,103 @@ run_teardown() {
     run_egress_report
     if [[ $RUN_PARKED != kept ]]; then sandbox_stop "$RUN_SANDBOX"; fi
   fi
-  rm -f "$RUN_DIR/pid"
+  # A run that ended without saying how, by a failure or a signal, is
+  # recorded from its exit status.
+  if [[ -n ${RUN_ID:-} && -z ${RUN_OUTCOME_WRITTEN:-} ]]; then run_outcome_exit "$status"; fi
+  if [[ -n ${RUN_CLAIMED:-} ]]; then rm -f "$RUN_DIR/pid"; fi
+  if [[ -n ${RUN_JSON_FD:-} ]]; then run_json_end "$status"; fi
+}
+
+# The version of the records run_outcome and `chalk status --json` write
+# (docs/reference/json-output.md). It goes up when a field is renamed or
+# removed, never when one is added.
+RUN_JSON_SCHEMA=1
+
+# run_outcome OUTCOME EXIT [KIND] [REASON] [DETAIL] [NEXT] [DETENTION] [URL]:
+# records how this run ended in $RUN_DIR/outcome.json, for `chalk status
+# --json`, `chalk run --json` and whatever operates Chalk without reading
+# its log. OUTCOME is submitted, ready, detained, spec_blocked, unready,
+# stopped or failed; EXIT the status the command ends with; KIND the kind
+# of a detention (run_detain); DETENTION the branch its work is parked on;
+# URL the request that was opened. Called from the EXIT trap too, so it
+# never fails: a record that cannot be written is only missing.
+run_outcome() {
+  local -A summary
+  local file="$RUN_DIR/outcome.json"
+  RUN_OUTCOME_WRITTEN=1
+  db_ticket_summary "$RUN_TICKET" summary - || true
+  if jq -n --argjson schema "$RUN_JSON_SCHEMA" --arg ticket "$RUN_TICKET" --arg run_id "$RUN_ID" \
+    --arg outcome "$1" --arg exit_code "$2" --arg kind "${3:-}" --arg reason "${4:-}" \
+    --arg detail "${5:-}" --arg next "${6:-}" --arg detention "${7:-}" --arg url "${8:-}" \
+    --arg branch "$RUN_BRANCH" --arg loops "${summary[loops]-}" --arg cost "${summary[cost]-}" \
+    --arg fixes "${summary[fixes]-}" --arg ended "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
+    def text: if . == "" then null else . end;
+    def number: tonumber? // null;
+    {schema: $schema, ticket: $ticket, run_id: ($run_id | text), outcome: $outcome,
+     exit_code: ($exit_code | number), kind: ($kind | text), reason: ($reason | text),
+     detail: ($detail | text), next: ($next | text), branch: $branch,
+     detention_branch: ($detention | text), request_url: ($url | text),
+     loops: ($loops | number), cost_usd: ($cost | number), fixes: ($fixes | number),
+     ended_at: $ended}' > "$file.tmp" 2>/dev/null; then
+    mv "$file.tmp" "$file" || true
+  else
+    rm -f "$file.tmp"
+  fi
+}
+
+# run_outcome_exit STATUS: the record of a run that ended with STATUS
+# without saying how: a precondition that failed once the run had started
+# (unready), a signal (stopped), or a failure of Chalk (failed).
+run_outcome_exit() {
+  local status="$1" outcome=failed reason="${CHALK_LAST_ERROR:-}" next
+  if (( status == CHALK_EXIT_UNREADY )); then
+    outcome=unready
+  elif (( status > 128 )); then
+    outcome=stopped
+    reason="run stopped by a signal (exit $status)"
+  fi
+  reason="${reason:-Chalk stopped unexpectedly (exit $status)}"
+  if [[ -n ${RUN_CRASH_BRANCH:-} ]]; then
+    next="the work since the last checkpoint is parked on $RUN_CRASH_BRANCH; fix what stopped the run, then run chalk office-hours from that branch"
+  elif [[ $outcome == unready ]]; then
+    next="fix what the reason names, then run chalk run again"
+  else
+    next="$RUN_BRANCH holds every checkpoint so far; run chalk run again"
+  fi
+  run_outcome "$outcome" "$status" "" "$reason" "" "$next" "${RUN_CRASH_BRANCH:-}"
+}
+
+# run_json_begin: for --json. From here on everything Chalk prints goes to
+# stderr, and stdout carries exactly one line, when the command ends: how
+# it ended, as JSON (run_json_end, from the EXIT trap).
+run_json_begin() {
+  [[ -z ${RUN_JSON_FD:-} ]] || return 0
+  need jq
+  RUN_JSON_RECORD=""
+  exec {RUN_JSON_FD}>&1 1>&2
+  trap run_teardown EXIT
+}
+
+# run_json_end STATUS: prints the one line of --json. It is the run's
+# outcome record when there is one; RUN_JSON_RECORD when the command set
+# one, as a detached start does; otherwise a record of a command that
+# ended with STATUS before any run started.
+run_json_end() {
+  local status="$1" record="${RUN_JSON_RECORD:-}" outcome=failed
+  if [[ -z $record && -n ${RUN_OUTCOME_WRITTEN:-} && -f $RUN_DIR/outcome.json ]]; then
+    record="$(jq -c . "$RUN_DIR/outcome.json" 2>/dev/null)" || record=""
+  fi
+  if [[ -z $record ]]; then
+    case "$status" in
+      "$CHALK_EXIT_USAGE")   outcome=usage ;;
+      "$CHALK_EXIT_UNREADY") outcome=unready ;;
+    esac
+    record="$(jq -cn --argjson schema "$RUN_JSON_SCHEMA" --arg ticket "${RUN_TICKET:-}" --arg outcome "$outcome" \
+      --argjson exit_code "$status" --arg reason "${CHALK_LAST_ERROR:-}" '
+      {schema: $schema, ticket: (if $ticket == "" then null else $ticket end), outcome: $outcome,
+       exit_code: $exit_code, reason: (if $reason == "" then null else $reason end)}')" || record=""
+  fi
+  [[ -z $record ]] || printf '%s\n' "$record" >&"$RUN_JSON_FD"
 }
 
 # run_egress_report: with CHALK_EGRESS=allowlist, says which hosts the
@@ -203,6 +307,7 @@ run_park_crash() {
   else reason="Chalk stopped unexpectedly (exit $status)"
   fi
   branch="${| run_park_work "detention($RUN_TICKET): $reason"; }"
+  RUN_CRASH_BRANCH="$branch"
   if [[ -n $branch ]]; then
     run_db db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$reason" "$RUN_ID"
     run_db db_event "$RUN_TICKET" detention
@@ -274,6 +379,7 @@ run_start_decider() {
 # with the branch cloned inside it.
 run_open_sandbox() {
   echo $$ > "$RUN_DIR/pid"
+  RUN_CLAIMED=1
   trap run_teardown EXIT
 
   run_log "starting the database and the sandbox image"
@@ -513,9 +619,10 @@ run_spec_check() {
       run_log "spec check passed (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s)" ;;
     fail)
       run_db db_event "$RUN_TICKET" spec_blocked
-      run_log "spec check found checkpoints that are not ready:"
-      run_log "$(agent_field "$result" '.problems[] | "  - \(.checkpoint)\n    problem: \(.problem)"
+      RUN_SPEC_PROBLEMS="$(agent_field "$result" '.problems[] | "  - \(.checkpoint)\n    problem: \(.problem)"
         + (if .suggestion then "\n    suggestion: \(.suggestion)" else "" end)')"
+      run_log "spec check found checkpoints that are not ready:"
+      run_log "$RUN_SPEC_PROBLEMS"
       return 1 ;;
     *) warn "spec check returned no verdict${RUN_CALL_FAILURE:+ ($RUN_CALL_FAILURE)}; continuing without it" ;;
   esac
@@ -680,6 +787,7 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
   fi
   run_db db_open_lesson "${| repo_name; }" "$RUN_TICKET" "$signature" "$RUN_ID" "$fingerprint" "$first_error"
   run_db db_event "$RUN_TICKET" detention
+  run_outcome detained "$CHALK_EXIT_DETAINED" "$kind" "$reason" "$detail" "${| run_next_step "$kind"; }" "$branch"
 }
 
 # Pushes the finished branch and opens the pull or merge request. chalk
@@ -687,7 +795,7 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
 # shellcheck disable=SC2120
 run_graduate() {
   local -A summary
-  local review="" tests="" request
+  local review="" tests="" request out status=0 url
   request="${| forge_request; }"
   db_ticket_summary "$RUN_TICKET" summary
   run_log "all checkpoints complete (${summary[loops]} loops, ${| agent_usd "${summary[cost]}"; }, ${summary[fixes]} human interventions)"
@@ -695,6 +803,8 @@ run_graduate() {
   if [ "$CHALK_AUTO_MR" != "true" ] && [ "${1:-}" != "--force" ]; then
     db_event "$RUN_TICKET" ready 2>/dev/null || true
     run_log "CHALK_AUTO_MR is off; open the $request with: chalk submit"
+    run_outcome ready 0 "" "all checkpoints complete; the $request is not open yet (CHALK_AUTO_MR is off)" "" \
+      "open the $request with: chalk submit"
     return 0
   fi
   [[ -n $RUN_TEST_GUARD ]] || run_test_guard
@@ -717,7 +827,7 @@ run_graduate() {
 
   need "${| forge_cli; }"
   forge_push "$RUN_WT" "$RUN_BRANCH"
-  forge_open_request "$RUN_WT" "$RUN_BRANCH" "$CHALK_BASE_BRANCH" "$(spec_title "$RUN_SPEC")" \
+  out="$(forge_open_request "$RUN_WT" "$RUN_BRANCH" "$CHALK_BASE_BRANCH" "$(spec_title "$RUN_SPEC")" \
     "## Chalk execution summary
 
 - Spec: \`specs/$RUN_TICKET.md\`, all checkpoints complete
@@ -726,16 +836,27 @@ run_graduate() {
 - Human interventions (office hours): ${summary[fixes]}
 - Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$tests$review
 
-This change was written by an agent. Review the diff as you would any other."
+This change was written by an agent. Review the diff as you would any other.")" || status=$?
+  # What the forge's CLI printed, which ends with the request's address.
+  if [[ -n $out ]]; then printf '%s\n' "$out"; fi
+  (( status == 0 )) || return "$status"
+  url="$(grep -oE 'https?://[^[:space:]]+' <<<"$out" | tail -n 1 || true)"
   db_event "$RUN_TICKET" submitted 2>/dev/null || true
+  run_outcome submitted 0 "" "all checkpoints complete; the $request is open" "" "review the $request" "" "$url"
 }
 
 cmd_run() {
-  local detach=0
+  local detach=0 json=0 arg
+  # --json takes effect before any other argument is judged, so that a
+  # wrong one is reported in JSON too.
+  for arg in "$@"; do
+    if [[ $arg == --json ]]; then run_json_begin; fi
+  done
   while [ $# -gt 0 ]; do
     case "$1" in
       --detach|-d) detach=1 ;;
-      *) die_usage "usage: chalk run [--detach]" ;;
+      --json) json=1 ;;
+      *) die_usage "usage: chalk run [--detach] [--json]" ;;
     esac
     shift
   done
@@ -745,23 +866,31 @@ cmd_run() {
   run_claim
 
   if [ "$detach" -eq 1 ]; then
+    rm -f "$RUN_DIR/outcome.json"
     nohup "$BASH" "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1 &
     # Recorded here as well as by the run itself, so `chalk status` sees it at once.
     echo $! > "$RUN_DIR/pid"
     info "$RUN_TICKET running in background (pid $!). Follow with: chalk logs $RUN_TICKET -f"
+    if (( json )); then
+      RUN_JSON_RECORD="$(jq -cn --argjson schema "$RUN_JSON_SCHEMA" --arg ticket "$RUN_TICKET" --argjson pid "$!" \
+        --arg branch "$RUN_BRANCH" --arg log "$RUN_DIR/run.log" \
+        '{schema: $schema, ticket: $ticket, outcome: "started", exit_code: 0, pid: $pid, branch: $branch, log: $log}')"
+    fi
     return 0
   fi
 
   RUN_ID="$RUN_TICKET-$EPOCHSECONDS"
+  rm -f "$RUN_DIR/outcome.json"
   run_open_sandbox
   if [ -n "$CHALK_SETUP_CMD" ]; then
     run_log "running the setup command: $CHALK_SETUP_CMD"
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
       die_unready "setup command failed in sandbox; see $RUN_IO/setup.log"
   fi
-  if [ "$CHALK_SPEC_CHECK" = "true" ]; then
-    run_spec_check ||
-      die_unready "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
+  if [ "$CHALK_SPEC_CHECK" = "true" ] && ! run_spec_check; then
+    run_outcome spec_blocked "$CHALK_EXIT_UNREADY" "" "the spec check found checkpoints that are not ready for an agent" \
+      "$RUN_SPEC_PROBLEMS" "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, then run chalk run again"
+    die_unready "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke="" reviewed
@@ -976,23 +1105,63 @@ declare -gA RUN_STATE_NAMES=(
   [ready]="done" [stopped]=stopped [new]=new
 )
 
+# cmd_status [TICKET] [--json]: this repository's tickets, or TICKET alone.
+# With --json, an array of one object per ticket (docs/reference/
+# json-output.md): what the table shows, the detention branches by name,
+# whether a run is alive and under which pid, and the record of how the
+# latest run ended (run_outcome), or null while one runs or before any has.
 cmd_status() {
-  need git
-  local runs dir ticket state
+  local json=0 only="" runs dir ticket state alive pid outcome log
   local -A summary
-  local -a detentions
+  local -a detentions rows=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1 ;;
+      -*) die_usage "usage: chalk status [TICKET] [--json]" ;;
+      *) [[ -z $only ]] || die_usage "usage: chalk status [TICKET] [--json]"
+         only="$1" ;;
+    esac
+    shift
+  done
+  need git
+  if (( json )); then need jq; fi
   # The most recently active runs first.
   local GLOBSORT=-mtime
   runs="${| state_dir; }/runs"
-  printf '%-14s %-12s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
+  if (( !json )); then
+    printf '%-14s %-12s %-6s %-9s %-6s %s\n' TICKET STATE LOOPS COST FIXES DETENTIONS
+  fi
   for dir in "$runs"/*/; do
     ticket="$(basename "$dir")"
+    [[ -z $only || $ticket == "$only" ]] || continue
     db_ticket_summary "$ticket" summary -
     state="${RUN_STATE_NAMES[${summary[state]}]-${summary[state]}}"
-    if run_is_alive "${dir%/}"; then state="running"; fi
+    alive=false pid=""
+    if run_is_alive "${dir%/}"; then
+      state="running" alive=true
+      pid="${| run_pid "${dir%/}"; }"
+    fi
     mapfile -t detentions < <(git for-each-ref --format='%(refname:short)' "refs/heads/detention/$ticket-*")
-    printf '%-14s %-12s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${| agent_usd "${summary[cost]}"; }" "${summary[fixes]}" "${#detentions[@]}"
+    if (( !json )); then
+      printf '%-14s %-12s %-6s %-9s %-6s %s\n' "$ticket" "$state" "${summary[loops]}" "${| agent_usd "${summary[cost]}"; }" "${summary[fixes]}" "${#detentions[@]}"
+      continue
+    fi
+    outcome=null log=""
+    if [[ $alive == false && -f ${dir}outcome.json ]]; then
+      outcome="$(jq -c . "${dir}outcome.json" 2>/dev/null)" || outcome=null
+    fi
+    if [[ -f ${dir}run.log ]]; then log="${dir}run.log"; fi
+    rows+=("$(jq -cn --argjson schema "$RUN_JSON_SCHEMA" --arg ticket "$ticket" --arg state "$state" \
+      --argjson running "$alive" --arg pid "$pid" --arg loops "${summary[loops]}" --arg cost "${summary[cost]}" \
+      --arg fixes "${summary[fixes]}" --arg log "$log" --argjson outcome "${outcome:-null}" \
+      '{schema: $schema, ticket: $ticket, state: $state, running: $running, pid: ($pid | tonumber? // null),
+        loops: ($loops | tonumber? // null), cost_usd: ($cost | tonumber? // null),
+        fixes: ($fixes | tonumber? // null), detentions: $ARGS.positional,
+        log: (if $log == "" then null else $log end), outcome: $outcome}' --args "${detentions[@]}")")
   done
+  if (( json )); then
+    if (( ${#rows[@]} )); then printf '%s\n' "${rows[@]}" | jq -cs .; else printf '[]\n'; fi
+  fi
 }
 
 cmd_logs() {

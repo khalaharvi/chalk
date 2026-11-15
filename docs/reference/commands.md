@@ -63,18 +63,24 @@ spec template at `specs/TICKET.md`.
 **`chalk check`** runs only the spec check for the current worktree, in a
 sandbox, so a spec can be fixed before any loop is paid for.
 
-**`chalk run [--detach | -d]`** runs the loop for the current worktree.
-`--detach` runs it in the background and logs to `run.log`. A run that
-is detained exits non-zero and prints the reason, a `next:` line saying
-what to do, and how to switch to the detention branch. See
+**`chalk run [--detach | -d] [--json]`** runs the loop for the current
+worktree. `--detach` runs it in the background and logs to `run.log`. A
+run that is detained exits with status 3 and prints the reason, a `next:`
+line saying what to do, and how to switch to the detention branch.
+`--json` sends all of that to stderr and prints one line of
+[JSON](json-output.md) on stdout when the command ends: how the run
+ended, why, and what to do next. See
 [The workflow](../guide/running/workflow.md).
 
 **`chalk fleet EPIC [--plan FILE] [--yes | -y]`** plans an epic as
 workstreams, from Jira or from FILE, and launches them in the background,
 `CHALK_MAX_PARALLEL` at a time. See [Fleet runs](../guide/running/fleet.md).
 
-**`chalk status`** lists this repository's tickets, most recently active
-first: state, loops, cost, office-hours fixes and detention branches. The
+**`chalk status [TICKET] [--json]`** lists this repository's tickets, or
+TICKET alone, most recently active
+first: state, loops, cost, office-hours fixes and detention branches.
+`--json` prints the same as an [array of objects](json-output.md#chalk-status-ticket-json),
+each with the record of how the ticket's latest run ended. The
 state is `running`, or what the ticket was left in:
 
 | State | Meaning |
@@ -102,9 +108,10 @@ decide whether to post it. See [Privacy](../privacy.md#chalk-share).
 
 ## Failure lifecycle
 
-**`chalk office-hours -m NOTE [--detach | -d]`**, run from a `detention/…`
+**`chalk office-hours -m NOTE [--detach | -d] [--json]`**, run from a `detention/…`
 branch after you have committed a fix, records the note, distils it into a
-lesson, moves to a `tutoring/…` branch and resumes the run. See
+lesson, moves to a `tutoring/…` branch and resumes the run. `--json`
+works as it does for `chalk run`. See
 [Detention and office hours](../guide/running/failures.md).
 
 **`chalk submit`** pushes the current branch and opens the pull or merge

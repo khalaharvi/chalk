@@ -68,12 +68,16 @@ office_hours_distill() {
 }
 
 cmd_office_hours() {
-  local note="" run_args=()
+  local note="" run_args=() arg
+  for arg in "$@"; do
+    if [[ $arg == --json ]]; then run_json_begin; fi
+  done
   while [ $# -gt 0 ]; do
     case "$1" in
       -m) note="${2:-}"; shift ;;
-      --detach|-d) run_args=(--detach) ;;
-      *) die_usage "usage: chalk office-hours -m \"what was wrong and how you fixed it\" [--detach]" ;;
+      --detach|-d) run_args+=(--detach) ;;
+      --json) run_args+=(--json) ;;
+      *) die_usage "usage: chalk office-hours -m \"what was wrong and how you fixed it\" [--detach] [--json]" ;;
     esac
     shift
   done
