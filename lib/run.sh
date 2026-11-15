@@ -1189,7 +1189,9 @@ cmd_stop() {
   # agent call can take half an hour.
   kill -TERM "$pid" 2>/dev/null || true
   if command -v pkill >/dev/null 2>&1; then pkill -TERM -P "$pid" 2>/dev/null || true; fi
-  while run_is_alive "$dir"; do
+  # The process itself is watched, not its pid file, which the run removes
+  # a moment before it has ended.
+  while kill -0 "$pid" 2>/dev/null; do
     (( waited < RUN_STOP_TIMEOUT * 2 )) ||
       die "the run of $ticket (pid $pid) has not ended after ${RUN_STOP_TIMEOUT}s; it may still be parking its work (see: chalk logs $ticket)"
     sleep 0.5
