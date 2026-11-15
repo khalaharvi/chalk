@@ -83,6 +83,7 @@ Modules load in layers; a file uses only what is loaded before it
 | | `lib/dashboard.sh` | `chalk dashboard` |
 | | `lib/setup.sh` | `chalk doctor` and `chalk init` |
 | | `lib/share.sh` | `chalk share`: the anonymised report card |
+| | `lib/a2a.sh` | `chalk a2a`: starts and stops the optional A2A server, and keeps its token |
 
 Outside `lib/`:
 
@@ -93,6 +94,7 @@ Outside `lib/`:
 | `share/templates/` | Files `chalk init` adds to a repository |
 | `share/schema.sql`, `share/dashboard.sql`, `share/dashboard.html` | The telemetry schema, the report card's query and page |
 | `share/share.sql`, `share/share.jq` | The counts `chalk share` adds to the report card's, and the allow-list that builds its summary |
+| `share/a2a/chalk-a2a.py` | The optional A2A server, a single Python file with no dependencies, run with `uv run --script`. It operates Chalk only through `chalk` and `git` commands |
 | `share/decider/chalk-embed.py` | The local embedding service for semantic recall, a single Python file run with `uv run --script` |
 | `share/ci-audit-schema.sql` | The optional central audit table |
 | `packaging/`, `scripts/release.sh`, `scripts/update-tap.sh`, `scripts/changelog.sh`, `CHANGELOG.md` | The Homebrew formula template, release scripts and the changelog |

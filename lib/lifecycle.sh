@@ -187,6 +187,10 @@ cmd_cleanup() {
   fi
 
   rm -rf "$runs"
-  if [ "$all" -eq 1 ]; then rm -rf "${| state_dir; }"; fi
+  if [ "$all" -eq 1 ]; then
+    # The A2A server keeps its tasks under the state directory.
+    a2a_stop
+    rm -rf "${| state_dir; }"
+  fi
   info "cleanup complete (telemetry database untouched)"
 }

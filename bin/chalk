@@ -29,7 +29,7 @@ for module in log runtime jobs system; do
   source -p "$CHALK_HOME/lib/core" "$module.sh"
 done
 for module in repo forge state config db decider memory sandbox integrity fingerprint agent \
-              run fleet lifecycle dashboard setup share; do
+              run fleet a2a lifecycle dashboard setup share; do
   # shellcheck source=/dev/null
   source -p "$CHALK_HOME/lib" "$module.sh"
 done
@@ -47,6 +47,8 @@ Setup
   chalk decider trust|untrust URL  Allow (or stop) sending to a decider on another machine
   chalk sandbox build          Build the default sandbox image
   chalk prompts [eject NAME]   List the prompts, or copy one into the repo to edit
+  chalk a2a up|down|status|token
+                               Let other agents operate this repo's Chalk over A2A, on this machine only
 
 Work
   chalk new TICKET [title]     Create a worktree, branch and spec for one ticket
@@ -82,6 +84,7 @@ main() {
     sandbox)       cmd_sandbox "$@" ;;
     memory)        cmd_memory "$@" ;;
     prompts)       cmd_prompts "$@" ;;
+    a2a)           cmd_a2a "$@" ;;
     new)           cmd_new "$@" ;;
     check)         cmd_check "$@" ;;
     run)           cmd_run "$@" ;;

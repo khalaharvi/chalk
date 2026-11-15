@@ -70,6 +70,14 @@ with this machine's node against a server on localhost, and is skipped
 where there is no node. The private network that makes the proxy the only
 way out exists only in real Docker, so it is tested by hand.
 
+`tests/unit/a2a_test.sh` starts the real A2A server
+(`share/a2a/chalk-a2a.py`) with `chalk a2a up`, through a stand-in `uv`
+that runs it with this machine's python3, and drives the real `chalk`
+against the fake `docker`, `claude` and `glab` over JSON-RPC: a ticket to
+completion, a detention answered with a patch, a refused spec rewritten,
+and a run cancelled. It uses the system's own `/usr/bin/curl`, and is
+skipped where that or python3 is missing.
+
 `tests/unit/decider_test.sh` also runs the real `share/decider/chalk-embed.py`
 with a stand-in model (`CHALK_EMBED_FAKE=1`, plain `python3`, no download)
 and checks that it and the fake answer in the same shape. The real
