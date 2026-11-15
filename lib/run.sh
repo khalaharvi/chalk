@@ -872,7 +872,12 @@ cmd_run() {
 
   if [ "$detach" -eq 1 ]; then
     rm -f "$RUN_DIR/outcome.json"
-    nohup "$BASH" "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1 &
+    # The background run must not hold --json's line open: a caller that
+    # reads our output would wait for the whole run to end.
+    (
+      if [[ -n ${RUN_JSON_FD:-} ]]; then exec {RUN_JSON_FD}>&-; fi
+      exec nohup "$BASH" "$CHALK_HOME/bin/chalk" run < /dev/null > "$RUN_DIR/run.log" 2>&1
+    ) &
     # Recorded here as well as by the run itself, so `chalk status` sees it at once.
     echo $! > "$RUN_DIR/pid"
     info "$RUN_TICKET running in background (pid $!). Follow with: chalk logs $RUN_TICKET -f"
