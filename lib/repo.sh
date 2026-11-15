@@ -12,7 +12,7 @@ declare -gA REPO_COMMON_DIRS=()
 
 # repo_root -> REPLY: root of the worktree we are standing in.
 repo_root() {
-  REPLY="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+  REPLY="$(git rev-parse --show-toplevel 2>/dev/null)" || die_unready "not inside a git repository"
 }
 
 # git_common_dir -> REPLY: directory holding the shared object store and

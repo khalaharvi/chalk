@@ -62,7 +62,7 @@ Modules load in layers; a file uses only what is loaded before it
 | :-- | :-- | :-- |
 | Entry | `bin/chalk` | Finds bash 5.3, loads the modules, prints usage, dispatches commands |
 | Runtime | `lib/core/guard.sh` | Bash 3.2 code that re-runs Chalk under bash 5.3 or newer |
-| | `lib/core/log.sh` | `info`, `warn`, `die` |
+| | `lib/core/log.sh` | `info`, `warn`, `die` and its variants, and the exit codes |
 | | `lib/core/runtime.sh` | Strict settings, the error and signal traps, `need`, `bash_at_least` |
 | | `lib/core/jobs.sh` | Named background jobs, each with its own log |
 | | `lib/core/system.sh` | The host profile (CPUs, memory, Docker resources), locks, adaptive timeouts |

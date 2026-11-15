@@ -227,7 +227,7 @@ decider_gate() {
 # acknowledged.
 decider_trust() {
   local url="${1:-}" file decider="" embed="" line
-  [[ -n $url ]] || die "usage: chalk decider trust URL"
+  [[ -n $url ]] || die_usage "usage: chalk decider trust URL"
   [[ $url =~ ^https?://[^[:space:]]+$ ]] || die "not an http:// or https:// URL: $url"
   url="${url%%+(/)}"
   if decider_loopback "$url"; then
@@ -254,7 +254,7 @@ decider_trust() {
 decider_untrust() {
   local url="${1:-}" file line found=0
   local -a keep=()
-  [[ -n $url ]] || die "usage: chalk decider untrust URL"
+  [[ -n $url ]] || die_usage "usage: chalk decider untrust URL"
   url="${url%%+(/)}"
   file="${| decider_trust_file; }"
   if [[ -f $file ]]; then
@@ -1486,6 +1486,6 @@ cmd_decider() {
     status) decider_status ;;
     trust)  decider_trust "${2:-}" ;;
     untrust) decider_untrust "${2:-}" ;;
-    *)      die "usage: chalk decider up|down|status|trust URL|untrust URL" ;;
+    *)      die_usage "usage: chalk decider up|down|status|trust URL|untrust URL" ;;
   esac
 }

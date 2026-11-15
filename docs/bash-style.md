@@ -150,7 +150,12 @@ root="${ cd "$dir" && pwd; }"       # wrong: moves Chalk itself into $dir
 - An unexpected failure prints the command and the call stack, then
   errexit ends Chalk. A function that returns non-zero on purpose is not
   reported.
-- `die` is the only way to end Chalk on purpose.
+- `die` is the only way to end Chalk on purpose, with its variants
+  `die_usage` for a wrong command line and `die_unready` for a
+  precondition that is not met. They set the
+  [exit status](https://khalaharvi.github.io/chalk/reference/exit-codes/)
+  a caller reads, so choose by what the caller should do next. A run that
+  goes to detention returns `CHALK_EXIT_DETAINED` from `cmd_run`.
 - INT, TERM and HUP exit with `128 + $BASH_TRAPSIG`; EXIT traps still run.
 - With `nullglob`, a loop over a glob that matches nothing runs zero
   times. Do not add `[ -e "$x" ] || continue` guards.

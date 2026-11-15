@@ -45,3 +45,23 @@ check "bash_at_least accepts a newer major" bash_at_least 5 2 6 0
 check "bash_at_least rejects an older minor" eval '! bash_at_least 5 2 5 1'
 check "bash_at_least rejects an older major" eval '! bash_at_least 5 2 4 4'
 check "bash_at_least defaults to this bash" bash_at_least 5 3
+
+# Exit codes: what each way of ending Chalk tells the caller.
+for case in "die:1" "die_usage:2" "die_unready:4"; do
+  script ending "${case%%:*} 'the reason'"
+  status=0
+  "$BASH" "$tmp/ending" 2> "$tmp/ending.err" || status=$?
+  check "${case%%:*} ends Chalk with status ${case##*:}" test "$status" -eq "${case##*:}"
+  check "${case%%:*} says why on stderr, and reports no unexpected failure" \
+    test "$(<"$tmp/ending.err")" = "error: the reason"
+done
+script detained 'run() { return "$CHALK_EXIT_DETAINED"; }
+run'
+status=0
+"$BASH" "$tmp/detained" 2> "$tmp/detained.err" || status=$?
+check "a detained run ends Chalk with status 3, and no error report" \
+  test "$status" -eq 3 -a ! -s "$tmp/detained.err"
+script missing 'need no-such-tool-anywhere'
+status=0
+"$BASH" "$tmp/missing" 2>/dev/null || status=$?
+check "a missing tool is 'not ready' (4), not a failure of Chalk" test "$status" -eq 4

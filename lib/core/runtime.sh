@@ -32,7 +32,7 @@ trap runtime_on_signal INT TERM HUP
 need() {
   local tool
   for tool in "$@"; do
-    command -v "$tool" >/dev/null 2>&1 || die "'$tool' is required but not installed (see: chalk doctor)"
+    command -v "$tool" >/dev/null 2>&1 || die_unready "'$tool' is required but not installed (see: chalk doctor)"
   done
 }
 

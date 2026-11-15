@@ -15,7 +15,7 @@ workstream_exists() {
 
 cmd_new() {
   local ticket="${1:-}" title dir
-  is_ticket "$ticket" || die "usage: chalk new TICKET [title]   (TICKET like PROJ-123)"
+  is_ticket "$ticket" || die_usage "usage: chalk new TICKET [title]   (TICKET like PROJ-123)"
   shift
   title="${*:-Describe the change}"
   need git
@@ -96,16 +96,16 @@ cmd_fleet() {
     case "$1" in
       --plan) plan_file="${2:-}"; shift ;;
       --yes|-y) yes=1 ;;
-      -*) die "usage: chalk fleet EPIC [--plan FILE] [--yes]" ;;
+      -*) die_usage "usage: chalk fleet EPIC [--plan FILE] [--yes]" ;;
       *) epic="$1" ;;
     esac
     shift
   done
-  is_ticket "$epic" || die "usage: chalk fleet EPIC [--plan FILE] [--yes]"
+  is_ticket "$epic" || die_usage "usage: chalk fleet EPIC [--plan FILE] [--yes]"
 
   need git docker jq
   load_config "${| repo_root; }"
-  agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
+  agent_auth_present || die_unready "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
 
   # The plan is saved so that re-running the command launches what is left.
   local saved
@@ -131,7 +131,7 @@ cmd_fleet() {
   fi
 
   local item ticket dir slots parallel
-  local -a items
+  local -a items waiting=() failed=()
   parallel="${| fleet_parallel; }"
   slots=$((parallel - $(fleet_running_count)))
   mapfile -t items < <(jq -c '.workstreams[]' "$saved")
@@ -143,15 +143,38 @@ cmd_fleet() {
     fi
     if [ "$slots" -le 0 ]; then
       info "$ticket: waiting ($parallel at once, CHALK_MAX_PARALLEL=$CHALK_MAX_PARALLEL); re-run 'chalk fleet $epic --yes' when a slot frees up"
+      waiting+=("$ticket")
       continue
     fi
 
-    dir="$(workstream_create "$ticket")"
-    jq -r '"# \(.ticket): \(.title)\n\n## Context\n\(.context // "")\n\n## Checkpoints\n"
-           + (.checkpoints | map("- [ ] " + .) | join("\n"))' <<<"$item" > "$dir/specs/$ticket.md"
-    git -C "$dir" add "specs/$ticket.md"
-    git -C "$dir" commit -q -m "chalk($ticket): spec"
-    (cd "$dir" && "$BASH" "$CHALK_HOME/bin/chalk" run --detach)
-    slots=$((slots - 1))
+    # One ticket that cannot be launched does not stop the others.
+    if fleet_launch "$ticket" "$item"; then
+      slots=$((slots - 1))
+    else
+      warn "$ticket: could not be launched (see above)"
+      failed+=("$ticket")
+    fi
   done
+
+  # A caller that cannot read the lines above learns from the exit status
+  # that the plan is not all under way.
+  if (( ${#waiting[@]} + ${#failed[@]} )); then
+    info "${#items[@]} ticket(s) in the plan: ${#waiting[@]} waiting for a slot, ${#failed[@]} could not be launched"
+    return "$CHALK_EXIT_PARTIAL"
+  fi
 }
+
+# fleet_launch TICKET ITEM: creates the worktree and spec for one
+# workstream of a plan, ITEM being its JSON, and starts its run in the
+# background. In a subshell, so that a failure ends this ticket's launch
+# and not the fleet.
+fleet_launch() (
+  local ticket="$1" item="$2" dir
+  dir="$(workstream_create "$ticket")"
+  jq -r '"# \(.ticket): \(.title)\n\n## Context\n\(.context // "")\n\n## Checkpoints\n"
+         + (.checkpoints | map("- [ ] " + .) | join("\n"))' <<<"$item" > "$dir/specs/$ticket.md"
+  git -C "$dir" add "specs/$ticket.md"
+  git -C "$dir" commit -q -m "chalk($ticket): spec"
+  cd "$dir" || return
+  "$BASH" "$CHALK_HOME/bin/chalk" run --detach
+)

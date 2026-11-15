@@ -1941,6 +1941,62 @@ if CHALK_EGRESS_ALLOW='https://pypi.org/simple' chalk run > "$tmp/run115c.log" 2
 check "CHALK_EGRESS_ALLOW takes host names, not URLs" grep -q "CHALK_EGRESS_ALLOW takes host names" "$tmp/run115c.log"
 cd "$tmp/demo"
 
+# 4e. Exit codes (docs/reference/exit-codes.md): the status alone says
+# what a caller should do next.
+# exits STATUS COMMAND...: COMMAND ends with exactly STATUS.
+exits() {
+  local want="$1" got=0
+  shift
+  "$@" > "$tmp/exits.log" 2>&1 || got=$?
+  [ "$got" -eq "$want" ]
+}
+chalk new PROJ-120 Exit codes >/dev/null
+cd "$tmp/demo.worktrees/PROJ-120"
+check "a wrong flag is a usage error: 2" exits 2 chalk run --bogus
+check "an unknown command is a usage error: 2" exits 2 chalk no-such-command
+check "a malformed ticket key is a usage error: 2" exits 2 chalk new lowercase
+check "office hours without a note is a usage error: 2" exits 2 chalk office-hours
+check "uncommitted changes mean nothing was attempted: 4" exits 4 chalk run
+git add -A && git commit -q -m "spec"
+check "missing credentials mean nothing was attempted: 4" exits 4 env -u ANTHROPIC_API_KEY chalk run
+check "an invalid setting means nothing was attempted: 4" exits 4 env CHALK_FP_RULES=sometimes chalk run
+check "a spec the spec check refuses means nothing was attempted: 4" exits 4 env FAKE_SPEC=fail chalk run
+check "a setup command that fails means nothing was attempted: 4" exits 4 env CHALK_SETUP_CMD=false chalk run
+check "office hours away from a detention branch is not ready: 4" exits 4 chalk office-hours -m "note"
+check "a run that goes to detention exits 3" exits 3 env FAKE_CLAUDE_MODE=blocked chalk run
+check "the detention's exit status comes with its next step, not an error report" \
+  sh -c "grep -q 'next: provide what the agent asked for' '$tmp/exits.log' && ! grep -q '^error: ' '$tmp/exits.log'"
+git switch -q "$(git for-each-ref --format='%(refname:short)' 'refs/heads/detention/PROJ-120-*' | head -n 1)"
+check "office hours whose resumed run is detained again exits 3" \
+  exits 3 env FAKE_CLAUDE_MODE=blocked chalk office-hours -m "gave it the key"
+git switch -q "$(git for-each-ref --sort=-refname --format='%(refname:short)' 'refs/heads/detention/PROJ-120-*' | head -n 1)"
+check "office hours whose resumed run finishes exits 0" exits 0 chalk office-hours -m "gave it the right key"
+check "office hours held twice within a second get a tutoring branch each" \
+  test "$(git for-each-ref --format='%(refname)' 'refs/heads/tutoring/PROJ-120-*' | sort -u | wc -l)" -eq 2
+cd "$tmp/demo"
+check "a failed required doctor check is not ready: 4" exits 4 env CHALK_MODEL=sonnet FAKE_AUTO_MODE=off chalk doctor
+check "a passing doctor exits 0" exits 0 chalk doctor
+cat > "$tmp/plan120.json" <<'PLAN'
+{"workstreams":[
+  {"ticket":"PROJ-121","title":"First","context":"c","checkpoints":["one"]},
+  {"ticket":"PROJ-122","title":"Second","context":"c","checkpoints":["one"]}
+]}
+PLAN
+check "a fleet that left a ticket waiting for a slot exits 5" \
+  exits 5 env CHALK_MAX_PARALLEL=1 FAKE_CLAUDE_MODE=slow chalk fleet PROJ-119 --plan "$tmp/plan120.json" --yes
+check "the fleet says how many tickets are not under way" \
+  grep -q '2 ticket(s) in the plan: 1 waiting for a slot, 0 could not be launched' "$tmp/exits.log"
+for _ in $(seq 1 100); do
+  grep -q "chalk/PROJ-121" "$FAKE_STATE/glab.log" && break
+  sleep 0.2
+done
+check "the same fleet command, once the slot is free, launches the rest and exits 0" \
+  exits 0 env CHALK_MAX_PARALLEL=1 chalk fleet PROJ-119 --yes
+for _ in $(seq 1 100); do
+  grep -q "chalk/PROJ-122" "$FAKE_STATE/glab.log" && break
+  sleep 0.2
+done
+
 # 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
 # pull request through gh.
 git init -q --bare "$tmp/hub-origin.git"

@@ -46,7 +46,7 @@ sandbox_build() {
     return 0
   fi
   output="$(<"$log")"
-  die "could not build the sandbox image (the whole output is in $log)${| system_docker_hint "$output"; }"
+  die_unready "could not build the sandbox image (the whole output is in $log)${| system_docker_hint "$output"; }"
 }
 
 sandbox_ensure_image() {
@@ -54,7 +54,7 @@ sandbox_ensure_image() {
     return 0
   fi
   [ "$CHALK_IMAGE" = "$CHALK_DEFAULT_IMAGE" ] ||
-    die "sandbox image '$CHALK_IMAGE' not found locally; pull or build it first"
+    die_unready "sandbox image '$CHALK_IMAGE' not found locally; pull or build it first"
   info "building default sandbox image (first run only)"
   sandbox_build
 }
@@ -185,7 +185,7 @@ sandbox_egress_start() {
   script="$(<"$CHALK_HOME/share/sandbox/egress-proxy.js")"
   sandbox_egress_stop "$name"
   if ! out="$(docker network create --internal --label "chalk.repo=$repo" "$network" 2>&1)"; then
-    die "could not create the sandbox's private network $network (CHALK_EGRESS=allowlist): $out"
+    die_unready "could not create the sandbox's private network $network (CHALK_EGRESS=allowlist): $out"
   fi
   # The script is passed as an argument, not mounted: Docker Desktop shares
   # only some host directories, and Chalk's own may not be one of them.
@@ -203,7 +203,7 @@ sandbox_egress_start() {
   fi
   if (( !started )); then
     sandbox_egress_stop "$name"
-    die "could not start the egress proxy from sandbox image '$CHALK_IMAGE', which needs node (CHALK_EGRESS=allowlist): ${out:-no output}"
+    die_unready "could not start the egress proxy from sandbox image '$CHALK_IMAGE', which needs node (CHALK_EGRESS=allowlist): ${out:-no output}"
   fi
   url="http://$CHALK_EGRESS_ALIAS:$CHALK_EGRESS_PORT"
   __egress=(--network "$network"
@@ -245,7 +245,7 @@ sandbox_start() {
   sandbox_check_bash "$name"
   if [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]]; then
     sandbox_script "$name" ca >/dev/null ||
-      die "could not add CHALK_EXTRA_CA_CERTS to the CAs in sandbox image '$CHALK_IMAGE'"
+      die_unready "could not add CHALK_EXTRA_CA_CERTS to the CAs in sandbox image '$CHALK_IMAGE'"
   fi
 }
 
@@ -266,7 +266,7 @@ sandbox_check_bash() {
     found="bash $major.$minor"
   fi
   sandbox_stop "$name"
-  die "sandbox image '$CHALK_IMAGE' has $found;" \
+  die_unready "sandbox image '$CHALK_IMAGE' has $found;" \
     "Chalk needs bash >= ${CHALK_SANDBOX_BASH_MIN[0]}.${CHALK_SANDBOX_BASH_MIN[1]} in the sandbox"
 }
 
@@ -323,6 +323,6 @@ cmd_sandbox() {
   need docker
   case "${1:-}" in
     build) sandbox_build ;;
-    *)     die "usage: chalk sandbox build" ;;
+    *)     die_usage "usage: chalk sandbox build" ;;
   esac
 }

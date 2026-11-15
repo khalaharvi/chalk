@@ -73,17 +73,17 @@ cmd_office_hours() {
     case "$1" in
       -m) note="${2:-}"; shift ;;
       --detach|-d) run_args=(--detach) ;;
-      *) die "usage: chalk office-hours -m \"what was wrong and how you fixed it\" [--detach]" ;;
+      *) die_usage "usage: chalk office-hours -m \"what was wrong and how you fixed it\" [--detach]" ;;
     esac
     shift
   done
-  [ -n "$note" ] || die "a note is required: chalk office-hours -m \"what was wrong and how you fixed it\""
+  [ -n "$note" ] || die_usage "a note is required: chalk office-hours -m \"what was wrong and how you fixed it\""
 
   need docker jq
   run_context
   case "$RUN_BRANCH" in
     detention/*) ;;
-    *) die "run this from a detention/* branch (current: $RUN_BRANCH)" ;;
+    *) die_unready "run this from a detention/* branch (current: $RUN_BRANCH)" ;;
   esac
 
   db_up
@@ -109,7 +109,9 @@ cmd_office_hours() {
     decider_embed_lessons 16
   fi
 
-  RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
+  # Office hours twice within a second, as a program may hold them, must
+  # not ask for the same branch twice.
+  RUN_BRANCH="${| run_new_branch tutoring; }"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
   info "lesson recorded; continuing on $RUN_BRANCH"
 
@@ -123,7 +125,7 @@ cmd_office_hours() {
 cmd_submit() {
   run_context
   [ "$(spec_open_count "$RUN_SPEC")" -eq 0 ] ||
-    die "specs/$RUN_TICKET.md still has open checkpoints"
+    die_unready "specs/$RUN_TICKET.md still has open checkpoints"
   run_graduate --force
 }
 
@@ -132,7 +134,7 @@ cmd_cleanup() {
   case "${1:-}" in
     --all) all=1 ;;
     '') ;;
-    *) die "usage: chalk cleanup [--all]" ;;
+    *) die_usage "usage: chalk cleanup [--all]" ;;
   esac
   need git docker
 
