@@ -95,6 +95,14 @@ state is `running`, or what the ticket was left in:
 **`chalk logs TICKET [-f]`** prints the log of a background run; `-f`
 follows it.
 
+**`chalk stop TICKET`** stops the ticket's run, wherever it was started,
+and returns once it has ended. The run ends as one stopped by a signal
+does: what the agent did since the last checkpoint is parked on a
+`detention/…` branch, the sandbox is removed, and the
+[outcome](json-output.md) is `stopped`. To go on, fix what you stopped it
+for on that branch and run `chalk office-hours`. It exits with status 4
+when no run of the ticket is alive.
+
 **`chalk dashboard [--days N] [--output FILE] [--no-open]`** writes the
 report card for the last N days (30 by default) and opens it. See
 [Verdicts and the report card](../guide/operating/dashboard.md).

@@ -116,4 +116,5 @@ chalk status API-7 --json                  # poll until .[0].running is false
 git switch "$(chalk status API-7 --json | jq -r '.[0].outcome.detention_branch')"
 # fix what .outcome.next and .outcome.detail name, commit, then:
 chalk office-hours -m "what was wrong" --detach --json
+chalk stop API-7                           # to give up on a run that is under way
 ```

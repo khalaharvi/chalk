@@ -2089,6 +2089,27 @@ check "chalk status without --json is the table, as before" \
   sh -c "chalk status PROJ-131 | sed -n 1p | grep -q '^TICKET *STATE *LOOPS' && chalk status PROJ-131 | sed -n 2p | grep -q '^PROJ-131 '"
 check "an unknown flag to chalk status is a usage error" exits 2 chalk status --bogus
 
+# 4g. chalk stop ends a run from outside it, without waiting for the
+# agent call it is in the middle of.
+chalk new PROJ-140 Stop me >/dev/null
+cd "$tmp/demo.worktrees/PROJ-140"
+git add -A && git commit -q -m "spec"
+check "stopping a ticket with no run alive is 'not ready': 4" exits 4 chalk stop PROJ-140
+check "chalk stop without a ticket is a usage error: 2" exits 2 chalk stop
+rm -f "$FAKE_STATE/slow-started"
+FAKE_CLAUDE_MODE=slow chalk run --detach > /dev/null
+for _ in $(seq 1 50); do [ -e "$FAKE_STATE/slow-started" ] && break; sleep 0.2; done
+cd "$tmp/demo"
+read -r pid < "$XDG_STATE_HOME/chalk/demo/runs/PROJ-140/pid"
+check "chalk stop, run from anywhere in the repository, ends the run and exits 0" exits 0 chalk stop PROJ-140
+check "chalk stop returns only once the run has ended" sh -c "! kill -0 $pid 2>/dev/null"
+check "a stopped run parked its unfinished work and recorded the outcome 'stopped'" \
+  sh -c "chalk status PROJ-140 --json | jq -e '.[0].running == false and .[0].outcome.outcome == \"stopped\" and
+    .[0].outcome.exit_code == 143 and (.[0].outcome.detention_branch | startswith(\"detention/PROJ-140-\"))' &&
+    git cat-file -e \"\$(chalk status PROJ-140 --json | jq -r '.[0].outcome.detention_branch'):slow.txt\""
+check "a stopped run removed its sandbox" test ! -e "$FAKE_STATE/chalk-sandbox-demo-PROJ-140"
+check "stopping it a second time finds no run: 4" exits 4 chalk stop PROJ-140
+
 # 5. GitHub: a repository with CHALK_FORGE=github gets Actions gates and a
 # pull request through gh.
 git init -q --bare "$tmp/hub-origin.git"
