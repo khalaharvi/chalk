@@ -113,7 +113,9 @@ cmd_office_hours() {
     decider_embed_lessons 16
   fi
 
-  RUN_BRANCH="tutoring/$RUN_TICKET-$EPOCHSECONDS"
+  # Office hours twice within a second, as a program may hold them, must
+  # not ask for the same branch twice.
+  RUN_BRANCH="${| run_new_branch tutoring; }"
   git -C "$RUN_WT" switch -q -c "$RUN_BRANCH"
   info "lesson recorded; continuing on $RUN_BRANCH"
 

@@ -1971,6 +1971,8 @@ check "office hours whose resumed run is detained again exits 3" \
   exits 3 env FAKE_CLAUDE_MODE=blocked chalk office-hours -m "gave it the key"
 git switch -q "$(git for-each-ref --sort=-refname --format='%(refname:short)' 'refs/heads/detention/PROJ-120-*' | head -n 1)"
 check "office hours whose resumed run finishes exits 0" exits 0 chalk office-hours -m "gave it the right key"
+check "office hours held twice within a second get a tutoring branch each" \
+  test "$(git for-each-ref --format='%(refname)' 'refs/heads/tutoring/PROJ-120-*' | sort -u | wc -l)" -eq 2
 cd "$tmp/demo"
 check "a failed required doctor check is not ready: 4" exits 4 env CHALK_MODEL=sonnet FAKE_AUTO_MODE=off chalk doctor
 check "a passing doctor exits 0" exits 0 chalk doctor

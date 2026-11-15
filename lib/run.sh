@@ -729,16 +729,21 @@ run_next_step() {
   esac
 }
 
-# run_detention_branch -> REPLY: a name for this run's detention branch that
-# is not taken yet. Two detentions of one ticket within the same second get
-# -2, -3 and so on, instead of the second one failing to fetch.
-run_detention_branch() {
-  local base="detention/$RUN_TICKET-$EPOCHSECONDS" n=1
+# run_new_branch PREFIX -> REPLY: a name PREFIX/TICKET-TIME for a branch of
+# this run's ticket that is not taken yet. Two within the same second get
+# -2, -3 and so on, instead of the second one failing.
+run_new_branch() {
+  local base="$1/$RUN_TICKET-$EPOCHSECONDS" n=1
   REPLY="$base"
   while git -C "$RUN_WT" show-ref -q --verify "refs/heads/$REPLY"; do
     n=$((n + 1))
     REPLY="$base-$n"
   done
+}
+
+# run_detention_branch -> REPLY: a name for this run's detention branch.
+run_detention_branch() {
+  run_new_branch detention
 }
 
 # run_detain KIND REASON [DETAIL] [FINGERPRINT] [FIRST_ERROR]: parks the
