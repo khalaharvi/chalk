@@ -11,11 +11,47 @@ and the approval rule records that a person reviewed it.
 | Job | GitHub | GitLab | What it checks |
 | :-- | :-- | :-- | :-- |
 | Spec | `chalk / spec` | `chalk:spec` | `specs/<TICKET>.md` has no unfinished checkpoints, and `CLAUDE.md` and `.chalk/textbook.md` exist |
-| Rubric | `chalk / rubric` | `chalk:rubric` | `CHALK_SETUP_CMD` and `CHALK_TEST_CMD` from `.chalk/config`, run in CI |
+| Rubric | `chalk / rubric` | `chalk:rubric` | `CHALK_SETUP_CMD` and `CHALK_TEST_CMD` from the base branch's `.chalk/config`, run in CI |
 | Audit | `chalk / audit` | `chalk:audit` | Optional: writes a row to a central audit table when both gates pass |
 
 The ticket is read from the branch name, so a branch must carry a key
 like `PROJ-123`.
+
+## What an agent may not change
+
+A check is only worth something if the work it checks cannot rewrite it.
+Chalk guards that in three places, none of which asks a model:
+
+- **In the run.** The files and directories in `CHALK_PROTECTED` are the
+  exam: by default `.chalk` (the rubric's configuration, the textbook and
+  any prompts you ejected) and the CI configuration
+  (`.github/workflows`, `.gitlab-ci.yml`, `.gitlab/chalk.gitlab-ci.yml`).
+  A loop that changes one of them, or changes the spec in any way but
+  ticking a checkpoint, is not committed, even when the rubric passes. The
+  agent is told which file to put back, and a run that keeps doing it goes
+  to [detention](../running/failures.md). Add whatever else defines "done"
+  in your repository, such as a directory of acceptance tests. To change a
+  protected file, commit the change yourself; `CHALK_PROTECTED=none`
+  protects nothing.
+- **In CI.** The rubric job reads `CHALK_SETUP_CMD` and `CHALK_TEST_CMD`
+  from the base branch, not from the pull or merge request. A request that
+  edits `.chalk/config` therefore still has to pass the rubric you
+  merged. To change the rubric, merge the change to the base branch first.
+- **On the request.** With `CHALK_TEST_GUARD=true`, the harness compares
+  the branch with its base and lists every test file that was deleted, or
+  given a skip marker or fewer assertion lines. The list goes to the
+  reviewing agent, which must account for each entry, and into the
+  request's description. It counts lines, so it is a list of places to
+  look: it can flag a test that was only reorganised, and it cannot see a
+  test rewritten to assert something weaker in the same number of lines.
+
+One gap is yours to close on the forge. The gate's own file
+(`.github/workflows/chalk.yml` or `.gitlab/chalk.gitlab-ci.yml`) is part
+of the request it gates, so someone who pushes to a Chalk branch by hand
+could rewrite it. Make a code owner's review required for the CI
+configuration and `.chalk/`: a `CODEOWNERS` entry with "Require review
+from Code Owners" on GitHub, or Code Owner approval on a protected branch
+on GitLab.
 
 ## The rubric's image
 
@@ -27,6 +63,9 @@ merge request, or every one fails the rubric gate with an error like
 - Come from a registry CI can pull from. The sandbox image Chalk runs
   locally is not there unless you push it.
 - Have your toolchain, and whatever `CHALK_SETUP_CMD` does not install.
+- On GitLab, have git: the job fetches the target branch to read the
+  rubric from it, and stops with "CHALK_CI_IMAGE needs git" without it. On
+  GitHub the workflow checks the base branch out itself.
 - Have bash and sed. The job runs `CHALK_SETUP_CMD` and `CHALK_TEST_CMD`
   with `bash -c`, as the sandbox does, so a rubric that relies on bash
   passes or fails the same way in both. Debian and Ubuntu based images

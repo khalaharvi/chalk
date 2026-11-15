@@ -45,6 +45,10 @@ run_context() {
   RUN_SYNC_ERROR=""
   RUN_PARK_ERROR=""
   RUN_DB_WARNED=""
+  # What run_test_guard found: the findings, and "checked", or why the
+  # check did not run. Empty until it has been asked.
+  RUN_TEST_FINDINGS=""
+  RUN_TEST_GUARD=""
   load_config "$RUN_WT"
   RUN_PROMPTS="$(run_prompts_version)"
 
@@ -122,9 +126,22 @@ run_teardown() {
     # a crash or a signal, still parks what the agent did since the last
     # checkpoint. Before the first loop there is no agent work to park.
     if [[ -z $RUN_PARKED ]] && (( RUN_LOOP > 0 )); then run_park_crash "$status"; fi
+    run_egress_report
     if [[ $RUN_PARKED != kept ]]; then sandbox_stop "$RUN_SANDBOX"; fi
   fi
   rm -f "$RUN_DIR/pid"
+}
+
+# run_egress_report: with CHALK_EGRESS=allowlist, says which hosts the
+# sandbox asked for and was refused, so that a setup command or a loop that
+# failed for want of one names it. Runs from the EXIT trap, so nothing here
+# may fail.
+run_egress_report() {
+  local denied
+  [[ $CHALK_EGRESS == allowlist ]] || return 0
+  denied="${| sandbox_egress_denied "$RUN_SANDBOX"; }"
+  [[ -n $denied ]] || return 0
+  run_log "the sandbox was refused connections to: $denied (CHALK_EGRESS=allowlist). If the work needs one, add its host to CHALK_EGRESS_ALLOW in .chalk/config"
 }
 
 # run_db FUNCTION ARGS...: a telemetry write during a run. The database is
@@ -279,9 +296,16 @@ run_build_prompt() {
   local mode="$1" feedback="$2" findings="$3" lessons
   local -A __no_recall=()
   local -n __recall="${4:-__no_recall}"
+  local -a protected
   printf '<spec_file>specs/%s.md</spec_file>\n' "$RUN_TICKET"
   printf '<notes_file>specs/%s.notes.md</notes_file>\n' "$RUN_TICKET"
   printf '<rubric_command>%s</rubric_command>\n' "$CHALK_TEST_CMD"
+  integrity_protected protected
+  if (( ${#protected[@]} )); then
+    printf '<protected_paths>\n'
+    printf '%s\n' "${protected[@]}"
+    printf '</protected_paths>\n'
+  fi
 
   if [[ -n ${__recall[mode]-} ]]; then
     lessons="${| memory_recall "${__recall[mode]}" "${__recall[query]-}" \
@@ -497,6 +521,38 @@ run_spec_check() {
   esac
 }
 
+# run_test_guard: with CHALK_TEST_GUARD, lists into RUN_TEST_FINDINGS the
+# test files this branch deleted, or gave a skip marker or fewer assertions,
+# since it left the base branch (integrity_tests), and says so in the log.
+# RUN_TEST_GUARD becomes "checked", or why nothing was checked. The
+# findings go to the reviewer and onto the request; they stop nothing.
+run_test_guard() {
+  local base count
+  RUN_TEST_FINDINGS=""
+  if [[ $CHALK_TEST_GUARD != true ]]; then
+    RUN_TEST_GUARD="CHALK_TEST_GUARD is off"
+    return 0
+  fi
+  base="${| integrity_base "$RUN_WT"; }"
+  if [[ -z $base ]]; then
+    RUN_TEST_GUARD="the base branch $CHALK_BASE_BRANCH was not found here"
+    run_log "test guard: not checked, as $RUN_TEST_GUARD"
+    return 0
+  fi
+  if ! RUN_TEST_FINDINGS="$(integrity_tests "$RUN_WT" "$base" HEAD 2>/dev/null)"; then
+    RUN_TEST_FINDINGS=""
+    RUN_TEST_GUARD="git could not compare the branch with $CHALK_BASE_BRANCH"
+    run_log "test guard: not checked, as $RUN_TEST_GUARD"
+    return 0
+  fi
+  RUN_TEST_GUARD=checked
+  if [[ -n $RUN_TEST_FINDINGS ]]; then
+    count="$(grep -c '' <<<"$RUN_TEST_FINDINGS")"
+    run_log "test guard: $count place(s) where this branch removes or weakens tests since $CHALK_BASE_BRANCH, for the review and the request:"
+    run_log "  - ${RUN_TEST_FINDINGS//$'\n'/$'\n'  - }"
+  fi
+}
+
 # Independent review of the finished work. Returns 1 on an explicit "fail"
 # verdict, leaving the findings in RUN_REVIEW_FINDINGS, and 2 when the
 # review gave no verdict and CHALK_REVIEW_REQUIRED is true, with why in
@@ -506,10 +562,15 @@ run_review() {
   [ "$CHALK_REVIEW" = "true" ] || return 0
   local result="$RUN_IO/review.json" verdict
 
+  run_test_guard
   run_log "final review started"
   {
     printf '<spec_file>specs/%s.md</spec_file>\n' "$RUN_TICKET"
-    printf '<base_ref>origin/%s</base_ref>\n\n' "$CHALK_BASE_BRANCH"
+    printf '<base_ref>origin/%s</base_ref>\n' "$CHALK_BASE_BRANCH"
+    if [[ -n $RUN_TEST_FINDINGS ]]; then
+      printf '<harness_findings>\n%s\n</harness_findings>\n' "$RUN_TEST_FINDINGS"
+    fi
+    printf '\n'
     cat "${| prompt_file "$RUN_WT" review; }"
   } > "$RUN_IO/review.prompt.md"
   run_call review "$CHALK_REVIEW_MODEL" "${CHALK_SCHEMA[review]}" read < "$RUN_IO/review.prompt.md" || true
@@ -552,6 +613,7 @@ run_next_step() {
     review_error) REPLY="the final review could not run: ${| run_failure_step "${| agent_failure_class "$RUN_CALL_FAILURE"; }"; }; or set CHALK_REVIEW_REQUIRED=false to open requests without a review" ;;
     sync)        REPLY="$RUN_BRANCH changed in $RUN_WT during the run, so the loop's commits could not be fast-forwarded onto it; merge the detention branch into $RUN_BRANCH yourself, and commit nothing to a branch while Chalk runs on it" ;;
     passed)      REPLY="the rubric passes but no checkpoint was ticked; tick it if it is done, or make it testable" ;;
+    protected)   REPLY="the agent keeps changing files it may not change (listed above); if the ticket needs that change, make it yourself on the detention branch, or take the path out of CHALK_PROTECTED" ;;
     deja_vu)     REPLY="this fails like the open detention of ${RUN_OPEN_TICKET:-another ticket}; fix that one first" ;;
     repeat)      REPLY="the agent made the same failing change twice; fix the failure yourself, a retry would repeat it" ;;
     no_change)   REPLY="the agent changed nothing; make the checkpoint clearer, or do this step yourself" ;;
@@ -578,14 +640,20 @@ run_detention_branch() {
 # loop_limit or review; how the last loop ended when the retries ran out
 # (failed, agent_error or passed); or the verdict that stopped the run
 # (deja_vu, repeat or no_change), or stuck when the decider stopped it;
-# or sync when the loop's commits could not be brought onto the branch.
+# or sync when the loop's commits could not be brought onto the branch;
+# or protected when the agent kept changing files it may not change.
 # FINGERPRINT and FIRST_ERROR are given only
 # when the loop that detained the run failed its rubric.
 # The work is parked and the next step said before anything is written to
 # the database, and a failed write does not stop either (run_db).
 run_detain() {
   local kind="$1" reason="$2" detail="${3:-}" fingerprint="${4:-}" first_error="${5:-}" branch signature
+  local tampered=""
   RUN_PARKED=1
+  # Parking commits everything in the sandbox, protected files included.
+  if [[ $kind != protected ]]; then
+    tampered="$(integrity_changed "$RUN_SANDBOX" "$RUN_BASE" "specs/$RUN_TICKET.md" 2>/dev/null)" || tampered=""
+  fi
   branch="${| run_park_work "detention($RUN_TICKET): $reason" --allow-empty; }"
 
   run_log "DETENTION: $reason"
@@ -595,6 +663,9 @@ run_detain() {
     run_log "work parked on local branch $branch. To unblock:"
     run_log "  cd ${RUN_WT@Q} && git switch ${branch@Q}"
     run_log "  fix the blocker, commit, then: chalk office-hours -m \"what was wrong\""
+    if [[ $kind == protected || -n $tampered ]]; then
+      run_log "the parked work changes protected files${tampered:+ ($(paste -sd ',' - <<<"$tampered" | sed 's/,/, /g'))}: check or revert them first, as a resumed run takes its rubric, prompts and gates from that branch"
+    fi
   else
     run_park_failed
   fi
@@ -616,7 +687,7 @@ $(tail -n 40 "$RUN_IO/rubric.log")"
 # shellcheck disable=SC2120
 run_graduate() {
   local -A summary
-  local review="" request
+  local review="" tests="" request
   request="${| forge_request; }"
   db_ticket_summary "$RUN_TICKET" summary
   run_log "all checkpoints complete (${summary[loops]} loops, ${| agent_usd "${summary[cost]}"; }, ${summary[fixes]} human interventions)"
@@ -626,6 +697,16 @@ run_graduate() {
     run_log "CHALK_AUTO_MR is off; open the $request with: chalk submit"
     return 0
   fi
+  [[ -n $RUN_TEST_GUARD ]] || run_test_guard
+  case "$RUN_TEST_GUARD:$RUN_TEST_FINDINGS" in
+    checked:)  tests="
+- Test guard: no test file was deleted, or given a skip marker or fewer assertions, since \`$CHALK_BASE_BRANCH\` (a count of lines, not a judgement)" ;;
+    checked:*) tests="
+- Test guard: this branch removes or weakens tests since \`$CHALK_BASE_BRANCH\`; check that each is meant:
+  - ${RUN_TEST_FINDINGS//$'\n'/$'\n'  - }" ;;
+    *)         tests="
+- Test guard: not checked ($RUN_TEST_GUARD)" ;;
+  esac
   if [ -n "$RUN_REVIEW_SUMMARY" ]; then
     review="
 - Agent review before submission: $RUN_REVIEW_SUMMARY"
@@ -643,7 +724,7 @@ run_graduate() {
 - Agent loops: ${summary[loops]}
 - Agent cost: ${| agent_usd "${summary[cost]}"; }
 - Human interventions (office hours): ${summary[fixes]}
-- Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$review
+- Rubric: \`$CHALK_TEST_CMD\` passed in the sandbox$tests$review
 
 This change was written by an agent. Review the diff as you would any other."
   db_event "$RUN_TICKET" submitted 2>/dev/null || true
@@ -684,7 +765,7 @@ cmd_run() {
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke="" reviewed
-  local open remaining result agent_status rubric_exit progressed output stuck key
+  local open remaining result agent_status rubric_exit progressed output stuck key tampered detail
   local -a lesson
   local -A usage fp base recall=()
   result="$RUN_IO/loop.json"
@@ -699,6 +780,8 @@ cmd_run() {
       run_review || reviewed=$?
       if (( reviewed == 0 )); then
         run_graduate
+        # The run has said how it ended, so the teardown parks nothing.
+        RUN_PARKED=1
         return 0
       fi
       if (( reviewed == 2 )); then
@@ -747,7 +830,17 @@ cmd_run() {
     fp=()
     if [ "$agent_status" = "ok" ]; then run_fingerprint fp "$rubric_exit"; fi
 
+    # A loop about to be committed must have left the exam alone: the
+    # protected files as they were, and the spec changed only by ticks. A
+    # sandbox that cannot say so counts as one that changed them.
+    tampered=""
+    if [ "$agent_status" = "ok" ] && [ "$rubric_exit" -eq 0 ] &&
+       ! tampered="$(integrity_changed "$RUN_SANDBOX" "$RUN_BASE" "specs/$RUN_TICKET.md" 2> "$RUN_IO/protected.err")"; then
+      tampered="unknown: the sandbox could not say which files changed (see $RUN_IO/protected.err)"
+    fi
+
     reason=""
+    detail=""
     progressed="false"
     if [ "$agent_status" != "ok" ]; then
       reason="agent stopped early ($RUN_CALL_FAILURE)"
@@ -755,6 +848,10 @@ cmd_run() {
     elif [ "$rubric_exit" -ne 0 ]; then
       reason="${| run_rubric_reason "$rubric_exit"; }"
       ended="failed"
+    elif [[ -n $tampered ]]; then
+      reason="the agent changed protected files, so the loop was not committed"
+      detail="$tampered"
+      ended="protected"
     else
       sandbox_commit "$RUN_SANDBOX" "chalk($RUN_TICKET): $mode, loop $RUN_LOOP"
       if ! run_sync; then
@@ -776,7 +873,9 @@ cmd_run() {
     # The baseline this loop is judged against, before run_verdict moves it on.
     base=()
     for key in "${!RUN_FP_BASE[@]}"; do base[$key]="${RUN_FP_BASE[$key]}"; done
-    run_verdict fp "$ended"
+    # To the verdicts, a loop refused for protected files is one whose
+    # rubric passed without progress.
+    run_verdict fp "${ended/#protected/passed}"
 
     # A stuck question can follow from the next loop on, so the local
     # decider starts now if it is not running (run_start_decider). Logged
@@ -802,6 +901,9 @@ cmd_run() {
     run_log "loop $RUN_LOOP ($mode): agent $agent_status (${| agent_usd "$(agent_cost "$result")"; }, ${RUN_CALL_SECONDS}s), rubric exit $rubric_exit. $(agent_field "$result" '.summary')"
     if (( usage[denials] > 0 )); then
       run_log "  ${usage[denials]} action(s) were refused by permission checks; see $result"
+    fi
+    if [[ $ended == protected ]]; then
+      run_log "  not committed: the agent changed protected files (${tampered//$'\n'/, })"
     fi
 
     if [ "$progressed" = "true" ]; then
@@ -837,7 +939,7 @@ cmd_run() {
 
     failures=$((failures + 1))
     if [ "$failures" -gt "$CHALK_MAX_RETRIES" ]; then
-      run_detain "$ended" "$reason" "" "${lesson[@]}"
+      run_detain "$ended" "$reason" "$detail" "${lesson[@]}"
       return 1
     fi
     output="$(tail -n 60 "$RUN_IO/rubric.log" 2>/dev/null || true)"
@@ -853,6 +955,9 @@ $output"
       feedback="$reason
 the rubric printed no output"
     fi
+    # The rubric passed, so its output says nothing about a loop that was
+    # refused for the files it changed.
+    if [[ $ended == protected ]]; then feedback="${| integrity_feedback "$tampered"; }"; fi
   done
 }
 

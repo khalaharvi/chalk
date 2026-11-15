@@ -34,6 +34,16 @@ declare -gA CHALK_CONFIG_DEFAULTS=(
   [CHALK_CHEAP_MODEL]=haiku
   [CHALK_DISTILL]=true
   [CHALK_PERMISSION_MODE]=auto
+  # Paths no agent may change, separated by spaces (lib/integrity.sh);
+  # "none" protects nothing.
+  [CHALK_PROTECTED]=".chalk .github/workflows .gitlab-ci.yml .gitlab/chalk.gitlab-ci.yml"
+  # List tests that were deleted, skipped or weakened for the reviewer and
+  # on the request.
+  [CHALK_TEST_GUARD]=true
+  # What a sandbox may reach: open (anything), or allowlist (the model
+  # provider and CHALK_EGRESS_ALLOW, through a proxy; lib/sandbox.sh).
+  [CHALK_EGRESS]=open
+  [CHALK_EGRESS_ALLOW]=""
   [CHALK_FP_RULES]=shadow
   [CHALK_FP_FEEDBACK]=false
   [CHALK_TEST_REPORT]=""
@@ -89,6 +99,19 @@ config_check_ca() {
   [[ -n $file ]] || return 0
   [[ $file == /* ]] || die "CHALK_EXTRA_CA_CERTS must be an absolute path (got '$file')"
   [[ -f $file && -r $file ]] || die "CHALK_EXTRA_CA_CERTS names no readable file: $file"
+}
+
+# config_check_egress: stops Chalk when CHALK_EGRESS_ALLOW holds anything
+# but host names, each optionally with a leading dot (the domain and every
+# name under it) or a :PORT.
+config_check_egress() {
+  local host
+  local -a hosts
+  read -ra hosts <<<"$CHALK_EGRESS_ALLOW"
+  for host in "${hosts[@]}"; do
+    [[ $host =~ ^\.?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$ ]] ||
+      die "CHALK_EGRESS_ALLOW takes host names separated by spaces, such as 'registry.npmjs.org .pythonhosted.org' (got '$host')"
+  done
 }
 
 # load_config ROOT: sets every CHALK_* setting for the repository at ROOT.
@@ -164,6 +187,15 @@ load_config() {
     true|false) ;;
     *) die "CHALK_REVIEW_REQUIRED must be 'true' or 'false' (got '$CHALK_REVIEW_REQUIRED')" ;;
   esac
+  case "$CHALK_TEST_GUARD" in
+    true|false) ;;
+    *) die "CHALK_TEST_GUARD must be 'true' or 'false' (got '$CHALK_TEST_GUARD')" ;;
+  esac
+  case "$CHALK_EGRESS" in
+    open|allowlist) ;;
+    *) die "CHALK_EGRESS must be 'open' or 'allowlist' (got '$CHALK_EGRESS')" ;;
+  esac
+  config_check_egress
   config_check_ca
   [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
     die "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"

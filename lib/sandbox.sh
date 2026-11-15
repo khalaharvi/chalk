@@ -1,7 +1,9 @@
 # The sandbox: one throwaway container per run. The repository is cloned into
 # a tmpfs RAM disk inside it, the agent and the tests run only there, and the
 # only thing that leaves is a git bundle of new commits. The container holds
-# no GitLab credentials and mounts the host repository read-only.
+# no GitLab credentials and mounts the host repository read-only. With
+# CHALK_EGRESS=allowlist it is also on a network of its own with no route
+# out, and reaches only the hosts its egress proxy forwards to.
 
 # share/sandbox/scripts are written for this bash, the one Debian 12 (and
 # so the default image) ships. Sandbox images must have it or newer.
@@ -137,10 +139,91 @@ sandbox_tls_probe() {
   if [[ $out == @(ok|tls: *|network: *) ]]; then REPLY="$out"; fi
 }
 
+# The name a sandbox knows its egress proxy by, and the port it listens on.
+CHALK_EGRESS_ALIAS=egress
+CHALK_EGRESS_PORT=3128
+
+# sandbox_egress_hosts VAR: fills the array VAR with the rules an
+# allowlisted sandbox's proxy forwards to (share/sandbox/egress-proxy.js):
+# the host of the API the agent calls (ANTHROPIC_BASE_URL, or
+# api.anthropic.com), platform.claude.com, where Claude Code renews a
+# subscription's token, and CHALK_EGRESS_ALLOW.
+sandbox_egress_hosts() {
+  local -n __hosts=$1
+  local api="${ANTHROPIC_BASE_URL:-https://api.anthropic.com}"
+  local -a extra
+  api="${api#*://}"
+  api="${api%%/*}"
+  api="${api##*@}"
+  read -ra extra <<<"$CHALK_EGRESS_ALLOW"
+  __hosts=("$api" platform.claude.com "${extra[@]}")
+}
+
+# sandbox_egress_stop NAME: removes the egress proxy and the private
+# network of the sandbox NAME, if it had them. The sandbox goes first: a
+# network with a container on it cannot be removed.
+sandbox_egress_stop() {
+  docker rm -f "$1-egress" >/dev/null 2>&1 || true
+  docker network rm "$1-net" >/dev/null 2>&1 || true
+}
+
+# sandbox_egress_start NAME VAR: with CHALK_EGRESS=allowlist, gives the
+# sandbox NAME a network with no route out (docker's --internal) and starts
+# its egress proxy, a container from CHALK_IMAGE on that network and on
+# docker's default one. Fills the array VAR with the docker flags that put
+# the sandbox on the network and point its programs at the proxy. A program
+# that ignores the proxy settings reaches nothing. With CHALK_EGRESS=open,
+# VAR is left empty and nothing is started.
+sandbox_egress_start() {
+  local name="$1" proxy="$1-egress" network="$1-net" repo script url out started=1
+  local -n __egress=$2
+  local -a hosts
+  __egress=()
+  [[ $CHALK_EGRESS == allowlist ]] || return 0
+  sandbox_egress_hosts hosts
+  repo="${| repo_name; }"
+  script="$(<"$CHALK_HOME/share/sandbox/egress-proxy.js")"
+  sandbox_egress_stop "$name"
+  if ! out="$(docker network create --internal --label "chalk.repo=$repo" "$network" 2>&1)"; then
+    die "could not create the sandbox's private network $network (CHALK_EGRESS=allowlist): $out"
+  fi
+  # The script is passed as an argument, not mounted: Docker Desktop shares
+  # only some host directories, and Chalk's own may not be one of them.
+  if ! out="$(docker run -d --name "$proxy" --label "chalk.repo=$repo" \
+      --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges \
+      --read-only --memory 128m \
+      -e "CHALK_EGRESS_HOSTS=${hosts[*]}" -e "CHALK_EGRESS_PORT=$CHALK_EGRESS_PORT" \
+      --entrypoint node "$CHALK_IMAGE" -e "$script" 2>&1)"; then
+    started=0
+  elif ! out="$(docker network connect --alias "$CHALK_EGRESS_ALIAS" "$network" "$proxy" 2>&1)"; then
+    started=0
+  elif [[ "$(docker inspect -f '{{.State.Running}}' "$proxy" 2>/dev/null)" != true ]]; then
+    started=0
+    out="$(docker logs "$proxy" 2>&1 | tail -n 5)" || true
+  fi
+  if (( !started )); then
+    sandbox_egress_stop "$name"
+    die "could not start the egress proxy from sandbox image '$CHALK_IMAGE', which needs node (CHALK_EGRESS=allowlist): ${out:-no output}"
+  fi
+  url="http://$CHALK_EGRESS_ALIAS:$CHALK_EGRESS_PORT"
+  __egress=(--network "$network"
+            -e "HTTPS_PROXY=$url" -e "HTTP_PROXY=$url" -e "https_proxy=$url" -e "http_proxy=$url"
+            -e "NO_PROXY=localhost,127.0.0.1" -e "no_proxy=localhost,127.0.0.1")
+}
+
+# sandbox_egress_denied NAME -> REPLY: the HOST:PORT destinations the egress
+# proxy of the sandbox NAME refused, separated by spaces, at most 20. Empty
+# when there were none, or no proxy. The names come from inside the
+# sandbox, so anything but the characters of a host name is replaced.
+sandbox_egress_denied() {
+  REPLY="$(docker logs "$1-egress" 2>/dev/null | awk '$2 == "deny" { print $3 }' | sort -u | head -n 20 | paste -sd ' ' -)" || REPLY=""
+  REPLY="${REPLY//[^A-Za-z0-9.:_ -]/?}"
+}
+
 # sandbox_start NAME TICKET IO_DIR
 sandbox_start() {
   local name="$1" ticket="$2" io_dir="$3"
-  local -a env_args auth_args otel_args ca_args
+  local -a env_args auth_args otel_args ca_args egress_args
   sandbox_auth_args auth_args
   sandbox_ca_args ca_args
   env_args=(-e HOME=/home/chalk "${auth_args[@]}" "${ca_args[@]}")
@@ -148,6 +231,7 @@ sandbox_start() {
   sandbox_otel_args otel_args "$ticket"
 
   docker rm -f "$name" >/dev/null 2>&1 || true
+  sandbox_egress_start "$name" egress_args
   docker run -d --name "$name" \
     --label "chalk.repo=${| repo_name; }" --label "chalk.ticket=$ticket" \
     --user "$(id -u):$(id -g)" \
@@ -156,7 +240,7 @@ sandbox_start() {
     --tmpfs "/home/chalk:rw,exec,mode=1777,size=1g" \
     -v "${| git_common_dir; }:/src.git:ro" \
     -v "$io_dir:/chalk" \
-    "${env_args[@]}" "${otel_args[@]}" \
+    "${env_args[@]}" "${otel_args[@]}" "${egress_args[@]}" \
     "$CHALK_IMAGE" sleep infinity >/dev/null
   sandbox_check_bash "$name"
   if [[ -n ${CHALK_EXTRA_CA_CERTS:-} ]]; then
@@ -196,6 +280,7 @@ sandbox_image_bash_ok() {
 
 sandbox_stop() {
   docker rm -f "$1" >/dev/null 2>&1 || true
+  if [[ ${CHALK_EGRESS:-open} == allowlist ]]; then sandbox_egress_stop "$1"; fi
 }
 
 # sandbox_sh NAME COMMAND [ARGS...]: runs a bash command line in the cloned repo.

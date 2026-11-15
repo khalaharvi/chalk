@@ -73,7 +73,8 @@ Modules load in layers; a file uses only what is loaded before it
 | | `lib/db.sh` | The `chalk-db` container, recording calls, lessons, the dashboard query, `chalk db upgrade` |
 | | `lib/decider.sh` | The [decider](../guide/configuring/decider.md): its protocol client and per-loop time budget, the stuck question, the lesson rerank, and the local service (`chalk decider up`, `down`, `status`) |
 | | `lib/memory.sh` | Lesson recall for prompts |
-| | `lib/sandbox.sh` | Sandbox containers, the image, the scripts run inside |
+| | `lib/sandbox.sh` | Sandbox containers, the image, the scripts run inside, and the egress proxy and private network of an allowlisted sandbox |
+| | `lib/integrity.sh` | What an agent may not change (protected files, the spec's text), and the tests a branch removed or weakened |
 | | `lib/fingerprint.sh` | Loop fingerprints and verdicts |
 | | `lib/agent.sh` | Agent calls, prompts, answer schemas, `chalk prompts` |
 | Commands | `lib/run.sh` | The loop: `chalk run`, `check`, `status`, `logs` |
@@ -87,7 +88,7 @@ Outside `lib/`:
 
 | Path | What it holds |
 | :-- | :-- |
-| `share/sandbox/` | The default sandbox image and the bash 5.2 scripts that run inside it |
+| `share/sandbox/` | The default sandbox image, the bash 5.2 scripts that run inside it, and the egress proxy (`egress-proxy.js`) |
 | `share/prompts/` | Every prompt the agents receive |
 | `share/templates/` | Files `chalk init` adds to a repository |
 | `share/schema.sql`, `share/dashboard.sql`, `share/dashboard.html` | The telemetry schema, the report card's query and page |
@@ -122,11 +123,13 @@ Outside `lib/`:
    **`memory_recall`**; **`run_call`** → **`agent_call`** runs `claude`
    in the sandbox; **`run_rubric`** runs the rubric;
    **`run_fingerprint`** → **`fp_compute`** reduces the loop to its
-   fingerprint; a passing loop is committed with **`sandbox_commit`** and
+   fingerprint; a passing loop that changed no protected file
+   (**`integrity_changed`**) is committed with **`sandbox_commit`** and
    brought home with **`run_sync`** (a bundle, fast-forward only);
    **`run_verdict`** → **`fp_verdict`** labels a loop without progress;
    **`db_record_call`** records the call.
-6. With every checkpoint ticked, **`run_review`** runs the final review,
+6. With every checkpoint ticked, **`run_test_guard`** lists the tests the
+   branch removed or weakened, **`run_review`** runs the final review,
    and **`run_graduate`** pushes and calls **`forge_open_request`**.
 7. A run that cannot progress ends in **`run_detain`**, which parks the
    work with **`sandbox_export`** and logs **`db_open_lesson`**.
