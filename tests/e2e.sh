@@ -2061,7 +2061,12 @@ chalk new PROJ-132 Detached as JSON >/dev/null
 cd "$tmp/demo.worktrees/PROJ-132"
 git add -A && git commit -q -m "spec"
 rm -f "$FAKE_STATE/slow-started"
-FAKE_CLAUDE_MODE=slow chalk run --detach --json > "$tmp/json132.out" 2>/dev/null
+# Captured through a pipe, as a program would read it: the command must
+# return with its line while the run goes on, not when the run ends.
+started="$(FAKE_CLAUDE_MODE=slow chalk run --detach --json 2>/dev/null)"
+printf '%s\n' "$started" > "$tmp/json132.out"
+check "a detached start hands back its line at once, while the run is still alive" \
+  kill -0 "$(jq .pid "$tmp/json132.out")"
 check "a detached start's record: started, the pid and the log" \
   jq -e '.outcome == "started" and .exit_code == 0 and (.pid | type) == "number" and (.log | endswith("/PROJ-132/run.log"))' "$tmp/json132.out"
 check "while it runs, status --json says running, with the pid and no outcome yet" \
