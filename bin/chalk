@@ -51,17 +51,19 @@ Setup
 Work
   chalk new TICKET [title]     Create a worktree, branch and spec for one ticket
   chalk check                  Check that the current spec is ready for an agent
-  chalk run [--detach]         Run the agent loop for the current worktree
+  chalk run [--detach] [--json]
+                               Run the agent loop for the current worktree
   chalk fleet EPIC [--plan F] [--yes]
                                Split an epic into workstreams and run them in parallel
-  chalk status                 Show runs, cost and detentions for this repo
+  chalk status [TICKET] [--json]
+                               Show runs, cost and detentions for this repo
   chalk logs TICKET [-f]       Show a run log
   chalk dashboard [--days N]   Open the report card: spend, waste and what to tune
   chalk share [--days N] [--output FILE] [--json]
                                Print an anonymised report card to post if you choose; sends nothing
 
 Failure lifecycle
-  chalk office-hours -m NOTE [--detach]
+  chalk office-hours -m NOTE [--detach] [--json]
                                Record your fix on a detention branch and resume
   chalk submit                 Push the current branch and open the pull/merge request
   chalk cleanup [--all]        Stop runs, remove sandboxes, worktrees, merged branches

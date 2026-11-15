@@ -1,2 +1,7 @@
 #!/usr/bin/env bash
+# Logs its arguments. When a request is opened, prints its address, as the
+# real CLI does: FAKE_REQUEST_URL, if set.
 printf '%s\n' "$*" >> "$FAKE_STATE/gh.log"
+if [[ " $* " == *" create "* && -n ${FAKE_REQUEST_URL:-} ]]; then
+  printf 'Creating the request...\n%s\n' "$FAKE_REQUEST_URL"
+fi

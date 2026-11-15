@@ -26,5 +26,8 @@ Notes:
   something to do. The difference is whether work was done and parked
   (`3`) or nothing was spent (`4`).
 
+The status says which of these happened; [JSON output](json-output.md)
+says the rest: the reason, the next step and the detention branch.
+
 In the code these are `CHALK_EXIT_*` in `lib/core/log.sh`, with `die`
 (`1`), `die_usage` (`2`) and `die_unready` (`4`) to end Chalk with them.
