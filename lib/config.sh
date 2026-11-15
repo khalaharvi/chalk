@@ -97,8 +97,8 @@ CHALK_REMOVED_WARNED=""
 config_check_ca() {
   local file="${CHALK_EXTRA_CA_CERTS:-}"
   [[ -n $file ]] || return 0
-  [[ $file == /* ]] || die "CHALK_EXTRA_CA_CERTS must be an absolute path (got '$file')"
-  [[ -f $file && -r $file ]] || die "CHALK_EXTRA_CA_CERTS names no readable file: $file"
+  [[ $file == /* ]] || die_unready "CHALK_EXTRA_CA_CERTS must be an absolute path (got '$file')"
+  [[ -f $file && -r $file ]] || die_unready "CHALK_EXTRA_CA_CERTS names no readable file: $file"
 }
 
 # config_check_egress: stops Chalk when CHALK_EGRESS_ALLOW holds anything
@@ -110,7 +110,7 @@ config_check_egress() {
   read -ra hosts <<<"$CHALK_EGRESS_ALLOW"
   for host in "${hosts[@]}"; do
     [[ $host =~ ^\.?[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$ ]] ||
-      die "CHALK_EGRESS_ALLOW takes host names separated by spaces, such as 'registry.npmjs.org .pythonhosted.org' (got '$host')"
+      die_unready "CHALK_EGRESS_ALLOW takes host names separated by spaces, such as 'registry.npmjs.org .pythonhosted.org' (got '$host')"
   done
 }
 
@@ -148,20 +148,20 @@ load_config() {
 
   case "$CHALK_PERMISSION_MODE" in
     auto|bypass) ;;
-    *) die "CHALK_PERMISSION_MODE must be 'auto' or 'bypass' (got '$CHALK_PERMISSION_MODE')" ;;
+    *) die_unready "CHALK_PERMISSION_MODE must be 'auto' or 'bypass' (got '$CHALK_PERMISSION_MODE')" ;;
   esac
   case "$CHALK_PERMISSION_MODE:$CHALK_MODEL" in
-    auto:*haiku*) die "auto mode does not support Haiku; choose another CHALK_MODEL" ;;
+    auto:*haiku*) die_unready "auto mode does not support Haiku; choose another CHALK_MODEL" ;;
   esac
   case "$CHALK_FORGE" in
     auto|github|gitlab) ;;
-    *) die "CHALK_FORGE must be 'auto', 'github' or 'gitlab' (got '$CHALK_FORGE')" ;;
+    *) die_unready "CHALK_FORGE must be 'auto', 'github' or 'gitlab' (got '$CHALK_FORGE')" ;;
   esac
   case "$CHALK_MEMORY" in
     builtin) ;;
     hindsight) removed=("CHALK_MEMORY=hindsight" "${removed[@]}")
                CHALK_MEMORY=builtin ;;
-    *) die "CHALK_MEMORY must be 'builtin' (got '$CHALK_MEMORY')" ;;
+    *) die_unready "CHALK_MEMORY must be 'builtin' (got '$CHALK_MEMORY')" ;;
   esac
   if (( ${#removed[@]} )) && [[ -z $CHALK_REMOVED_WARNED ]]; then
     CHALK_REMOVED_WARNED=1
@@ -171,48 +171,48 @@ load_config() {
   fi
   case "$CHALK_FP_FEEDBACK" in
     true|false) ;;
-    *) die "CHALK_FP_FEEDBACK must be 'true' or 'false' (got '$CHALK_FP_FEEDBACK')" ;;
+    *) die_unready "CHALK_FP_FEEDBACK must be 'true' or 'false' (got '$CHALK_FP_FEEDBACK')" ;;
   esac
   case "$CHALK_FP_RULES" in
     off|shadow|on) ;;
-    *) die "CHALK_FP_RULES must be 'off', 'shadow' or 'on' (got '$CHALK_FP_RULES')" ;;
+    *) die_unready "CHALK_FP_RULES must be 'off', 'shadow' or 'on' (got '$CHALK_FP_RULES')" ;;
   esac
   [[ $CHALK_MAX_PARALLEL == auto || $CHALK_MAX_PARALLEL =~ ^[1-9][0-9]*$ ]] ||
-    die "CHALK_MAX_PARALLEL must be 'auto' or a positive whole number (got '$CHALK_MAX_PARALLEL')"
+    die_unready "CHALK_MAX_PARALLEL must be 'auto' or a positive whole number (got '$CHALK_MAX_PARALLEL')"
   [[ $CHALK_SANDBOX_MEM_MB =~ ^[1-9][0-9]*$ ]] ||
-    die "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
+    die_unready "CHALK_SANDBOX_MEM_MB must be a positive whole number of MiB (got '$CHALK_SANDBOX_MEM_MB')"
   [[ $CHALK_AGENT_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
-    die "CHALK_AGENT_TIMEOUT must be a positive number of seconds (got '$CHALK_AGENT_TIMEOUT')"
+    die_unready "CHALK_AGENT_TIMEOUT must be a positive number of seconds (got '$CHALK_AGENT_TIMEOUT')"
   case "$CHALK_REVIEW_REQUIRED" in
     true|false) ;;
-    *) die "CHALK_REVIEW_REQUIRED must be 'true' or 'false' (got '$CHALK_REVIEW_REQUIRED')" ;;
+    *) die_unready "CHALK_REVIEW_REQUIRED must be 'true' or 'false' (got '$CHALK_REVIEW_REQUIRED')" ;;
   esac
   case "$CHALK_TEST_GUARD" in
     true|false) ;;
-    *) die "CHALK_TEST_GUARD must be 'true' or 'false' (got '$CHALK_TEST_GUARD')" ;;
+    *) die_unready "CHALK_TEST_GUARD must be 'true' or 'false' (got '$CHALK_TEST_GUARD')" ;;
   esac
   case "$CHALK_EGRESS" in
     open|allowlist) ;;
-    *) die "CHALK_EGRESS must be 'open' or 'allowlist' (got '$CHALK_EGRESS')" ;;
+    *) die_unready "CHALK_EGRESS must be 'open' or 'allowlist' (got '$CHALK_EGRESS')" ;;
   esac
   config_check_egress
   config_check_ca
   [[ $CHALK_DB_TIMEOUT == auto || $CHALK_DB_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
-    die "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"
+    die_unready "CHALK_DB_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DB_TIMEOUT')"
   case "$CHALK_DECIDER" in
     off|shadow|on) ;;
-    *) die "CHALK_DECIDER must be 'off', 'shadow' or 'on' (got '$CHALK_DECIDER')" ;;
+    *) die_unready "CHALK_DECIDER must be 'off', 'shadow' or 'on' (got '$CHALK_DECIDER')" ;;
   esac
   [[ $CHALK_DECIDER_THRESHOLD =~ ^(0\.[5-9][0-9]{0,2}|1(\.0{0,3})?)$ ]] ||
-    die "CHALK_DECIDER_THRESHOLD must be a confidence from 0.5 to 1, to at most three places (got '$CHALK_DECIDER_THRESHOLD')"
+    die_unready "CHALK_DECIDER_THRESHOLD must be a confidence from 0.5 to 1, to at most three places (got '$CHALK_DECIDER_THRESHOLD')"
   [[ $CHALK_DECIDER_MIN_LESSONS =~ ^[0-9]+$ ]] ||
-    die "CHALK_DECIDER_MIN_LESSONS must be a whole number (got '$CHALK_DECIDER_MIN_LESSONS')"
+    die_unready "CHALK_DECIDER_MIN_LESSONS must be a whole number (got '$CHALK_DECIDER_MIN_LESSONS')"
   [[ $CHALK_DECIDER_IDLE_MINUTES =~ ^[1-9][0-9]*$ ]] ||
-    die "CHALK_DECIDER_IDLE_MINUTES must be a positive whole number (got '$CHALK_DECIDER_IDLE_MINUTES')"
+    die_unready "CHALK_DECIDER_IDLE_MINUTES must be a positive whole number (got '$CHALK_DECIDER_IDLE_MINUTES')"
   [[ $CHALK_DECIDER_TIMEOUT == auto || $CHALK_DECIDER_TIMEOUT =~ ^[1-9][0-9]*$ ]] ||
-    die "CHALK_DECIDER_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DECIDER_TIMEOUT')"
+    die_unready "CHALK_DECIDER_TIMEOUT must be 'auto' or a positive number of seconds (got '$CHALK_DECIDER_TIMEOUT')"
   local url
   for url in CHALK_DECIDER_URL CHALK_EMBED_URL; do
-    [[ ${!url} =~ ^https?://[^[:space:]]+$ ]] || die "$url must be an http:// or https:// URL (got '${!url}')"
+    [[ ${!url} =~ ^https?://[^[:space:]]+$ ]] || die_unready "$url must be an http:// or https:// URL (got '${!url}')"
   done
 }

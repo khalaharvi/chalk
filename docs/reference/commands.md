@@ -5,14 +5,15 @@ the site is built:
 
 <!-- generated: usage -->
 
-`chalk version` prints the version.
+`chalk version` prints the version. Every command's exit status says what
+happened: see [Exit codes](exit-codes.md).
 
 ## Setup
 
 **`chalk doctor`** checks the tools, credentials, database and sandbox
 image, and whether loops on `CHALK_MODEL` get auto mode (asked of the
 `claude` CLI in the sandbox image, at no cost), and prints what Chalk
-found about the machine. It exits non-zero
+found about the machine. It exits with status 4
 when a required check fails. See
 [Troubleshooting](../guide/operating/troubleshooting.md#chalk-doctor).
 

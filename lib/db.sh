@@ -63,7 +63,7 @@ db_create() {
   if ! out="$(db_run "$CHALK_DB_CONTAINER" "$volume" "$image" 2>&1)"; then
     # Created elsewhere, e.g. by a chalk from before the lock existed.
     [[ $out == *"already in use"* ]] ||
-      die "could not create $CHALK_DB_CONTAINER: $out${| system_docker_hint "$out"; }"
+      die_unready "could not create $CHALK_DB_CONTAINER: $out${| system_docker_hint "$out"; }"
     REPLY=""
   fi
 }
@@ -77,7 +77,7 @@ db_wait_ready() {
   until docker exec "$CHALK_DB_CONTAINER" pg_isready -q -h 127.0.0.1 -U chalk -d chalk; do
     attempt=$((attempt + 1))
     [ "$attempt" -lt "$limit" ] ||
-      die "telemetry database did not become ready in ${limit}s (CHALK_DB_TIMEOUT sets the wait)"
+      die_unready "telemetry database did not become ready in ${limit}s (CHALK_DB_TIMEOUT sets the wait)"
     sleep 1
   done
 }
@@ -101,7 +101,7 @@ db_up() {
   if ! db_running; then
     # One chalk at a time starts or creates the container. The others wait,
     # then find it there. `chalk db upgrade` holds the same lock.
-    chalk_lock db 300 || die "timed out waiting for another chalk to set up $CHALK_DB_CONTAINER"
+    chalk_lock db 300 || die_unready "timed out waiting for another chalk to set up $CHALK_DB_CONTAINER"
     if db_exists; then
       docker start "$CHALK_DB_CONTAINER" >/dev/null
     else
@@ -672,6 +672,6 @@ cmd_db() {
     psql:) exec docker exec -it "$CHALK_DB_CONTAINER" psql -U chalk -d chalk ;;
     upgrade:) db_upgrade ;;
     upgrade:--cleanup) db_upgrade_cleanup ;;
-    *)     die "usage: chalk db up|down [--force]|psql|upgrade [--cleanup]" ;;
+    *)     die_usage "usage: chalk db up|down [--force]|psql|upgrade [--cleanup]" ;;
   esac
 }

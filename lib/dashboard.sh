@@ -32,11 +32,11 @@ cmd_dashboard() {
       --days) days="${2:-}"; shift ;;
       --output|-o) output="${2:-}"; shift ;;
       --no-open) open_it=0 ;;
-      *) die "usage: chalk dashboard [--days N] [--output FILE] [--no-open]" ;;
+      *) die_usage "usage: chalk dashboard [--days N] [--output FILE] [--no-open]" ;;
     esac
     shift
   done
-  case "$days" in ''|*[!0-9]*) die "--days takes a whole number" ;; esac
+  case "$days" in ''|*[!0-9]*) die_usage "--days takes a whole number" ;; esac
   # For CHALK_DECIDER_THRESHOLD, which the calibration gate is judged at.
   load_config "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 

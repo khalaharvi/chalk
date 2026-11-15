@@ -238,11 +238,11 @@ cmd_prompts() {
       done ;;
     eject)
       name="${2:-}"
-      prompt_known "$name" || die "usage: chalk prompts eject NAME   (one of: ${CHALK_PROMPTS[*]})"
+      prompt_known "$name" || die_usage "usage: chalk prompts eject NAME   (one of: ${CHALK_PROMPTS[*]})"
       [ ! -e "$root/.chalk/prompts/$name.md" ] || die ".chalk/prompts/$name.md already exists"
       mkdir -p "$root/.chalk/prompts"
       cp "$CHALK_HOME/share/prompts/$name.md" "$root/.chalk/prompts/$name.md"
       info "created .chalk/prompts/$name.md; edit and commit it to change this prompt for the repository" ;;
-    *) die "usage: chalk prompts [list | eject NAME]" ;;
+    *) die_usage "usage: chalk prompts [list | eject NAME]" ;;
   esac
 }

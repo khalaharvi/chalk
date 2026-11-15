@@ -13,7 +13,7 @@ run_context() {
   RUN_BRANCH="${| current_branch; }"
   RUN_TICKET="${| ticket_from_branch "$RUN_BRANCH"; }"
   [[ -n $RUN_TICKET ]] ||
-    die "branch '$RUN_BRANCH' has no ticket key (expected e.g. chalk/PROJ-123)"
+    die_unready "branch '$RUN_BRANCH' has no ticket key (expected e.g. chalk/PROJ-123)"
   RUN_SPEC="$RUN_WT/specs/$RUN_TICKET.md"
   RUN_DIR="${| run_dir "$RUN_TICKET"; }"
   RUN_IO="$RUN_DIR/io"
@@ -52,9 +52,9 @@ run_context() {
   load_config "$RUN_WT"
   RUN_PROMPTS="$(run_prompts_version)"
 
-  [ -f "$RUN_SPEC" ] || die "missing spec: specs/$RUN_TICKET.md (create one with: chalk new $RUN_TICKET)"
+  [ -f "$RUN_SPEC" ] || die_unready "missing spec: specs/$RUN_TICKET.md (create one with: chalk new $RUN_TICKET)"
   [ -z "$(git -C "$RUN_WT" status --porcelain)" ] ||
-    die "uncommitted changes in $RUN_WT; commit them first (the sandbox only sees commits)"
+    die_unready "uncommitted changes in $RUN_WT; commit them first (the sandbox only sees commits)"
 }
 
 # run_log TEXT...: prints TEXT with the ticket in front of every line, so
@@ -221,12 +221,12 @@ run_park_crash() {
 # then claims the run directory for this process.
 run_claim() {
   need docker jq
-  agent_auth_present || die "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
+  agent_auth_present || die_unready "no agent credentials; export one of: ${CHALK_AUTH_VARS[*]}"
   # A detached run finds its own pid already recorded by the command that started it.
   local pid
   pid="${| run_pid "$RUN_DIR"; }"
   [[ $pid == "$$" ]] || ! run_is_alive "$RUN_DIR" ||
-    die "a run for $RUN_TICKET is already active (pid $pid)"
+    die_unready "a run for $RUN_TICKET is already active (pid $pid)"
   rm -rf "$RUN_IO"
   mkdir -p "$RUN_IO"
 }
@@ -249,7 +249,7 @@ run_start_services() {
   for name in "${!started[@]}"; do
     (( started[$name] == 0 )) || failed+=" $name"
   done
-  [[ -z $failed ]] || die "could not start:$failed (see $RUN_IO/startup)"
+  [[ -z $failed ]] || die_unready "could not start:$failed (see $RUN_IO/startup)"
 }
 
 # run_start_decider: the local decider, when it is installed and wanted, is
@@ -502,7 +502,7 @@ run_spec_check() {
   class="${| agent_failure_class "$RUN_CALL_FAILURE"; }"
   if [[ -n $RUN_CALL_FAILURE ]] && ! agent_failure_retryable "$class"; then
     run_db db_record_call spec-check none 0 false "$CHALK_CHEAP_MODEL" "$RUN_CALL_SECONDS" 0 "$result"
-    die "the spec check could not run ($RUN_CALL_FAILURE); ${| run_failure_step "$class" "run chalk run again"; }"
+    die_unready "the spec check could not run ($RUN_CALL_FAILURE); ${| run_failure_step "$class" "run chalk run again"; }"
   fi
 
   verdict="$(agent_field "$result" '.verdict')"
@@ -735,13 +735,13 @@ cmd_run() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --detach|-d) detach=1 ;;
-      *) die "usage: chalk run [--detach]" ;;
+      *) die_usage "usage: chalk run [--detach]" ;;
     esac
     shift
   done
 
   run_context
-  [ -n "$CHALK_TEST_CMD" ] || die "CHALK_TEST_CMD is not set in .chalk/config (run: chalk init)"
+  [ -n "$CHALK_TEST_CMD" ] || die_unready "CHALK_TEST_CMD is not set in .chalk/config (run: chalk init)"
   run_claim
 
   if [ "$detach" -eq 1 ]; then
@@ -757,11 +757,11 @@ cmd_run() {
   if [ -n "$CHALK_SETUP_CMD" ]; then
     run_log "running the setup command: $CHALK_SETUP_CMD"
     sandbox_sh "$RUN_SANDBOX" "$CHALK_SETUP_CMD" > "$RUN_IO/setup.log" 2>&1 ||
-      die "setup command failed in sandbox; see $RUN_IO/setup.log"
+      die_unready "setup command failed in sandbox; see $RUN_IO/setup.log"
   fi
   if [ "$CHALK_SPEC_CHECK" = "true" ]; then
     run_spec_check ||
-      die "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
+      die_unready "rewrite the checkpoints in specs/$RUN_TICKET.md and commit, or set CHALK_SPEC_CHECK=false to skip this check"
   fi
 
   local failures=0 failed_reviews=0 feedback="" findings="" mode reason ended woke="" reviewed
@@ -786,12 +786,12 @@ cmd_run() {
       fi
       if (( reviewed == 2 )); then
         run_detain review_error "the final review did not run ($RUN_REVIEW_ERROR)"
-        return 1
+        return "$CHALK_EXIT_DETAINED"
       fi
       failed_reviews=$((failed_reviews + 1))
       if [ "$failed_reviews" -gt "$CHALK_REVIEW_ROUNDS" ]; then
         run_detain review "final review still finds problems after $CHALK_REVIEW_ROUNDS fix round(s)" "$RUN_REVIEW_FINDINGS"
-        return 1
+        return "$CHALK_EXIT_DETAINED"
       fi
       findings="$RUN_REVIEW_FINDINGS"
     fi
@@ -804,7 +804,7 @@ cmd_run() {
     RUN_LOOP=$((RUN_LOOP + 1))
     if [ "$RUN_LOOP" -gt "$CHALK_MAX_LOOPS" ]; then
       run_detain loop_limit "loop limit of $CHALK_MAX_LOOPS reached with $open checkpoints open"
-      return 1
+      return "$CHALK_EXIT_DETAINED"
     fi
 
     run_build_prompt "$mode" "$feedback" "$findings" recall > "$RUN_IO/prompt.md"
@@ -822,7 +822,7 @@ cmd_run() {
       run_db db_record_call "$mode" blocked 0 false "$CHALK_MODEL" "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
       decider_flush
       run_detain blocked "agent reported a blocker" "$(agent_field "$result" '.blocker // .summary')"
-      return 1
+      return "$CHALK_EXIT_DETAINED"
     fi
 
     rubric_exit=0
@@ -859,7 +859,7 @@ cmd_run() {
           "$RUN_CALL_SECONDS" "$RUN_LESSONS" "$result" fp
         decider_flush
         run_detain sync "the loop's commits could not be brought onto $RUN_BRANCH" "$RUN_SYNC_ERROR"
-        return 1
+        return "$CHALK_EXIT_DETAINED"
       fi
       remaining="$(spec_open_count "$RUN_SPEC")"
       if [ "$mode" = "fix-review" ] || [ "$remaining" -lt "$open" ]; then
@@ -918,7 +918,7 @@ cmd_run() {
     # credentials were refused, is not retried.
     if [[ $ended == agent_error ]] && ! agent_failure_retryable "$agent_status"; then
       run_detain agent_error "$reason"
-      return 1
+      return "$CHALK_EXIT_DETAINED"
     fi
     # A lesson carries the fingerprint only of a loop whose rubric failed.
     lesson=("" "")
@@ -927,20 +927,20 @@ cmd_run() {
     # fails like an open detention on another ticket is detained at once.
     if [ "$CHALK_FP_RULES" = "on" ] && fp_stops "${fp[verdict]-}"; then
       run_detain "${fp[verdict]}" "${fp[verdict]}: $reason" "" "${lesson[@]}"
-      return 1
+      return "$CHALK_EXIT_DETAINED"
     fi
     # With CHALK_DECIDER=on, a confident "stuck" detains at once. A decider
     # can only stop a run early, never give it more loops.
     if [[ -n $stuck ]]; then
       printf -v RUN_STUCK_CONFIDENCE '%d.%02d' $((${stuck#* } / 1000)) $((${stuck#* } % 1000 / 10))
       run_detain stuck "stuck: $reason" "" "${lesson[@]}"
-      return 1
+      return "$CHALK_EXIT_DETAINED"
     fi
 
     failures=$((failures + 1))
     if [ "$failures" -gt "$CHALK_MAX_RETRIES" ]; then
       run_detain "$ended" "$reason" "$detail" "${lesson[@]}"
-      return 1
+      return "$CHALK_EXIT_DETAINED"
     fi
     output="$(tail -n 60 "$RUN_IO/rubric.log" 2>/dev/null || true)"
     feedback="$reason
@@ -967,7 +967,7 @@ cmd_check() {
   run_claim
   run_open_sandbox
   rm -f "$RUN_DIR/spec-check.ok"
-  run_spec_check || die "specs/$RUN_TICKET.md is not ready for an agent"
+  run_spec_check || die_unready "specs/$RUN_TICKET.md is not ready for an agent"
 }
 
 # What `chalk status` calls each state of db_ticket_summary.
@@ -997,7 +997,7 @@ cmd_status() {
 
 cmd_logs() {
   local ticket="${1:-}" log
-  [ -n "$ticket" ] || die "usage: chalk logs TICKET [-f]"
+  [ -n "$ticket" ] || die_usage "usage: chalk logs TICKET [-f]"
   log="${| run_dir "$ticket"; }/run.log"
   [ -f "$log" ] || die "no background run log for $ticket"
   if [ "${2:-}" = "-f" ]; then exec tail -f "$log"; fi

@@ -46,11 +46,11 @@ cmd_share() {
       --days) days="${2:-}"; shift ;;
       --output|-o) output="${2:-}"; shift ;;
       --json) json_only=1 ;;
-      *) die "usage: chalk share [--days N] [--output FILE] [--json]" ;;
+      *) die_usage "usage: chalk share [--days N] [--output FILE] [--json]" ;;
     esac
     shift
   done
-  [[ $days =~ ^[1-9][0-9]*$ ]] || die "--days takes a positive whole number"
+  [[ $days =~ ^[1-9][0-9]*$ ]] || die_usage "--days takes a positive whole number"
 
   need docker jq
   db_up

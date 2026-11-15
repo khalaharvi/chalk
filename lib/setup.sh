@@ -228,7 +228,7 @@ cmd_doctor() {
   doctor_auto_mode
   doctor_decider
   doctor_check optional "repo configured"   "run 'chalk init' and set CHALK_TEST_CMD" doctor_repo_configured
-  [ "$DOCTOR_FAILED" -eq 0 ] || die "fix the FAIL items above"
+  [ "$DOCTOR_FAILED" -eq 0 ] || die_unready "fix the FAIL items above"
 }
 
 # Copies a template unless the destination already exists.
